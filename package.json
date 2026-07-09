@@ -1,0 +1,21 @@
+{
+  "name": "ai-study-workforce-ops",
+  "version": "1.0.0",
+  "description": "Self-runnable AI-SDLC case study: build the Workforce Ops project on your machine using multi-model orchestration.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "setup": "node tools/setup.mjs",
+    "report": "node tools/report.mjs"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tl-ai-labs/ai-study-workforce-ops.git"
+  },
+  "dependencies": {
+    "yaml": "^2.5.0"
+  }
+}

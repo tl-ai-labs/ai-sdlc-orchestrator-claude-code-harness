@@ -1,0 +1,94 @@
+# Methodology
+
+How the tokens and costs on the report are derived, in plain terms.
+
+## The mode determines everything
+
+Every telemetry event carries a `provenance` field: `"vendor"` or `"estimated"`. The report labels the whole run according to what's on those events. The mode is an explicit choice made in `tools/setup.mjs` and persisted to `.workforce-ops-mode` at the repo root. The orchestrator reads that file on every run — it does not infer the mode from `ANTHROPIC_API_KEY` presence, because presence alone is not a choice, and silently switching modes on env-var accident is exactly the authenticity hole this file exists to close.
+
+### Vendor-authoritative mode — `.workforce-ops-mode` = `vendor`
+
+The orchestrator (per [rule 6 in orchestrator.md](../plugin/agents/orchestrator.md)) dispatches **every** LLM call — including its own tier's calls — through the MCP server. The MCP server hits the vendor API directly, receives the vendor's own `usage` block in the response, and writes those exact numbers into the event:
+
+- `input_tokens`, `input_tokens_cached`, `output_tokens` — Anthropic-reported (or Google-reported for Gemini calls under `opus-plus-flash`)
+- `cost_usd` — (vendor tokens × the policy YAML's `pricing:` block) / 1M
+- `provenance: "vendor"`
+
+**These numbers reconcile to the Anthropic and Google dashboards for the API key and time window the run used.** That's the whole point of this mode. Independent parties who clone the repo and run under vendor-authoritative mode should see numbers within a few percent of the published figures — differences are LLM non-determinism in packet decomposition, not measurement drift.
+
+### Estimator mode — `.workforce-ops-mode` = `estimated`
+
+Claude Code handles auth via a Pro / Team / Enterprise subscription. Direct-tier calls (Opus phases, under any policy) run inside the subagent's conversation loop, which doesn't expose per-call `usage` to the subagent. The orchestrator therefore estimates tokens using a character-count heuristic:
+
+```
+tokens ≈ characters / 3.8
+```
+
+- `input_tokens`, `output_tokens` — char-count estimated
+- `cost_usd` — (estimated tokens × the policy YAML's `pricing:` block) / 1M
+- `provenance: "estimated"`
+
+MCP-dispatched calls in this mode (Gemini under `opus-plus-flash`) still carry vendor tokens; only the direct-tier events are estimated. The report labels the whole run "Mixed" in that case.
+
+The 3.8 midpoint is fine for order-of-magnitude reasoning; it will not exactly match an Anthropic bill.
+
+## Which mode were the published numbers produced in?
+
+The numbers on this repo's public README were produced under **vendor-authoritative mode** — the run used `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` (for the `opus-plus-flash` variant). Every published cost line is Anthropic- or Google-billed. Runs under the same mode that diverge materially are meaningful signal — they can be filed as issues so the drift can be investigated.
+
+## Trade-off between the modes
+
+| | Vendor-authoritative | Estimator |
+|---|---|---|
+| API key needed | Yes — Anthropic (and Gemini for opus-plus-flash) | No — Claude Code subscription handles direct-tier auth |
+| Cost per run | Higher — no free automatic prompt caching from Claude Code; caching handled via explicit `cache_control` in the MCP adapter (~10% input rate on hits) | Lower — Claude Code applies its own caching under the hood |
+| Numbers on report | Match the Anthropic and Google dashboards for the API key used | Order-of-magnitude approximation of a vendor-billed run |
+| Recommended for | Publishing, cross-checking against the bill, Google-style audit | Casual runs, exploring the tool without an API key |
+
+Both are legitimate. The choice depends on the intended use.
+
+## Cross-checking against the Anthropic dashboard
+
+To verify the report against reality:
+
+1. Note the timestamps at which the pass started and ended.
+2. Open [console.anthropic.com/settings/usage](https://console.anthropic.com/settings/usage).
+3. Filter to the API key and time window matching the run.
+4. Compare Anthropic's charge to the report's "Total session cost" line.
+
+The two should match to within a few cents. Divergences beyond that are exactly the kind of drift this repo is designed to catch and can be filed as issues for investigation.
+
+## Output-ceiling doubling
+
+Every TaskPacket carries a `budget.maxOutputTokens` — the initial output-token ceiling the adapter dispatches under. When the vendor terminates a response with the max-tokens signal (Anthropic `stop_reason: "max_tokens"` or Gemini `finishReason: "MAX_TOKENS"`), the adapter re-dispatches the identical packet with 2× the previous ceiling, up to 3 doublings or the model's absolute output limit (declared in the policy YAML as `max_output_tokens_absolute`), whichever comes first. Input caching (Anthropic ephemeral / Gemini Context Cache) is warm across the retries, so re-input is billed at the cache-read rate; only the extra output tokens accrue full cost.
+
+Every attempt emits its own TelemetryEvent with `attempt_number`, `ceiling_used`, and (on retries) `retry_reason: "output_cap"`, all sharing the packet's `task_id`. The report collapses them into one row per packet under **Packets that needed output-ceiling doublings** — the raw JSONL preserves the full attempt chain for full audit at that level.
+
+**Why doubling instead of raising the ceiling unilaterally.** Under a well-chosen initial ceiling, most packets fit first-shot and pay nothing extra; only the packets that actually need the room double. Under a uniformly-raised ceiling, every packet pays the higher rate. For SDLC codegen — where the file-size distribution is heavily skewed toward small files with a few large outliers — doubling wins in aggregate. It loses (by roughly 1.75× vs. a perfectly-tuned unilateral raise) on the specific packets that need multiple doublings. Both trade-offs are honest; no attempt is made to hide the tail-case waste.
+
+**Detection is strict.** Only the vendor's explicit max-tokens signal triggers doubling. Anything else (semantic completion, safety filter, recitation guard) is treated as a genuine termination and the response is accepted as-is. This avoids burning tokens on retries that would have returned identical output.
+
+**Terminal states.** A packet's ExecutionResult carries `terminal_reason`:
+- `success` — an attempt returned without hitting the max-tokens signal.
+- `output_cap_doubling_budget_exhausted` — every attempt terminated at max-tokens, but the model still had headroom under its declared absolute ceiling. The doubling loop simply ran out of retries. Actionable: raise the packet's initial `budget.maxOutputTokens`, or lift the doubling cap for this phase.
+- `output_cap_at_model_absolute` — the loop reached the model's declared absolute output limit and the response was still truncated. The packet is genuinely too big for this model under this prompt; raising the initial ceiling won't help. Actionable: split the packet, use a model with a larger absolute ceiling, or accept the truncated deliverable.
+- `vendor_error` — a non-4xx error interrupted the chain; the packet fails.
+
+## Where the numbers come from
+
+- **Token counts pass through unchanged from the source.** In vendor mode, the numbers on every event are exactly what the vendor's `usage` block returned. In estimated mode, they're exactly what the char/3.8 heuristic computed at the moment of the call. Report totals are those per-event counts summed — nothing between measurement and display.
+- **Cost is computed and written at the moment of each call.** Each event's `cost_usd` is (that event's tokens × the loaded policy YAML's `pricing:` block) / 1M, stamped into `telemetry.jsonl` at write time. The report's totals are those per-event costs summed.
+- **The report shows what the run produced.** Every figure on the report comes from summing that run's own telemetry events.
+
+To verify any of these, walk `telemetry.jsonl` by hand — every line is inspectable.
+
+## Pricing table provenance
+
+The rates that turn tokens into dollars live in the `pricing:` block of each policy YAML under `plugin/config/policies/`. Each block also carries:
+
+- `pricing_source:` — the vendor URL these rates were taken from
+- `pricing_last_verified:` — the ISO date the maintainer last checked the source page
+
+Before publishing a study that relies on these numbers, check both fields against the current vendor page. If the vendor changed rates and this repo hasn't caught up, submit a PR updating the YAML — the report will then compute costs at the correct schedule automatically.
+
+The orchestrator subagent is instructed (via `plugin/agents/orchestrator.md` rule 6) to read pricing constants ONLY from the loaded policy YAML, never from its own trained knowledge. If the policy's pricing block is missing or malformed, the run aborts rather than guessing.

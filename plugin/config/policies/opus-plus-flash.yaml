@@ -1,0 +1,81 @@
+# Multi-model — premium-judgment phases on Opus, high-volume mechanical
+# work on Gemini 3.5 Flash. The pass that demonstrates cross-model routing.
+version: 1
+name: opus-plus-flash
+
+models:
+  - id: opus
+    adapter: builtin-anthropic
+    model_name: claude-opus-4-7
+    pricing: { input: 5.00, input_cached: 0.50, output: 25.00 }
+    pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
+    pricing_last_verified: 2026-07-09
+    auth: { env: ANTHROPIC_API_KEY }
+    max_output_tokens_absolute: 32000
+  - id: gemini-flash
+    adapter: mcp:gemini-flash-server
+    model_name: gemini-3.5-flash
+    display_name: gemini-3.5-flash
+    pricing: { input: 1.50, input_cached: 0.15, output: 9.00 }
+    pricing_source: https://ai.google.dev/gemini-api/docs/pricing
+    pricing_last_verified: 2026-07-09
+    auth: { env: GEMINI_API_KEY }
+    max_output_tokens_absolute: 8192
+
+rules:
+  # Premium-judgment phases — stay on Opus
+  - when: { phase: requirements_analysis }
+    use: opus
+    reason: "Judgment-heavy, low volume"
+  - when: { phase: architecture_design }
+    use: opus
+    reason: "Foundational, decision-bearing"
+  - when: { phase: plan_task_packets }
+    use: opus
+    reason: "Needs full context to slice work cleanly"
+  - when: { phase: senior_code_review }
+    use: opus
+    reason: "Cross-file reasoning + judgment"
+  - when: { phase: security_review }
+    use: opus
+    reason: "Risk-bearing, low volume"
+
+  # High-volume mechanical phases — Gemini Flash
+  - when:
+      phase: codegen
+      task_type:
+        - controller_handler
+        - service_method
+        - dto
+        - module_wiring
+        - migration
+        - seed_data
+        - entity
+        - guard
+        - interceptor
+        - filter
+        - react_component
+        - react_page
+        - api_client
+        - frontend_util
+        - frontend_config
+        - frontend_html
+    use: gemini-flash
+    reason: "Schema-driven boilerplate"
+  - when: { phase: tests }
+    use: gemini-flash
+    reason: "Scaffold-heavy, pattern-based"
+  - when: { phase: docs }
+    use: gemini-flash
+    reason: "Volume work"
+
+  # Debug with escalation: try mechanical tier first, escalate to Opus after 2 retries
+  - when: { phase: debug, retry_count: { gte: 2 } }
+    use: opus
+    reason: "Escalation: 2 mechanical-tier attempts failed"
+  - when: { phase: debug }
+    use: gemini-flash
+    reason: "Most debugs have clear cause"
+
+  - default: opus
+    reason: "Unrecognized task — fail safe to premium"

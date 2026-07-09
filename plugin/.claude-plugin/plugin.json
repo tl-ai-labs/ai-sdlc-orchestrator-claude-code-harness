@@ -1,0 +1,22 @@
+{
+  "name": "multi-model-orchestrator",
+  "version": "0.1.0",
+  "description": "Multi-model SDLC orchestration plugin for Claude Code. Reads a project brief and routes SDLC phases to configured models per policy.",
+  "author": { "name": "Tilicho Labs" },
+  "license": "MIT",
+  "homepage": "https://github.com/tl-ai-labs/ai-study-workforce-ops",
+  "keywords": ["sdlc", "orchestration", "multi-model", "gemini", "opus"],
+  "commands": "./commands",
+  "skills": "./skills",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": {
+    "gemini-flash-server": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/gemini-flash-server/dist/server.js"],
+      "env": {
+        "GEMINI_API_KEY": "${GEMINI_API_KEY}",
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+      }
+    }
+  }
+}

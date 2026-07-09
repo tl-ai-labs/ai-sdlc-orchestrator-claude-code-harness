@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__gemini-flash-server__execute_with_model",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/telemetry.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

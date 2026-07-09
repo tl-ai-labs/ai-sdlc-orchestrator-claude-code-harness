@@ -1,0 +1,47 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build output for the bundled MCP server
+plugin/mcp/gemini-flash-server/dist/
+
+# Ephemeral scratch dirs / one-off scripts that a subagent might leave
+# under the MCP server dir during a run — never part of the release.
+plugin/mcp/gemini-flash-server/_run*/
+plugin/mcp/gemini-flash-server/*.mjs
+
+# Raw model responses a subagent might dump at the repo root during
+# debugging — never part of the release.
+_raw_*.txt
+_raw_*.json
+
+# Run outputs — each user generates their own passes
+passes/*/
+!passes/.gitkeep
+
+# Local auth-mode choice — written by tools/setup.mjs, per-machine
+.workforce-ops-mode
+
+# Generated MCP registration — contains absolute paths + copied API keys,
+# per-machine, written by tools/setup.mjs
+.mcp.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Hook heartbeat log written by plugin/hooks/telemetry.sh
+.hook-logs/
+
+# Claude Code project state (project-installed commands + agents)
+.claude/

@@ -1,0 +1,490 @@
+#!/usr/bin/env node
+/**
+ * report.mjs — post-run summary for a Workforce Ops pass.
+ *
+ * Usage: node tools/report.mjs <path-to-pass-directory>
+ *
+ * Reads telemetry.jsonl + manifest.json from the pass directory and prints
+ * a tabular summary to stdout. The SDLC work is shown first; costs (with
+ * the runner-overhead carve-out) come below so the reader is not surprised
+ * by the total-vs-SDLC delta.
+ */
+
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { join, resolve, basename, dirname } from "node:path";
+import { homedir } from "node:os";
+
+const argv = process.argv.slice(2);
+const asMarkdown = argv.includes("--markdown");
+const passDir = resolve(argv.filter((a) => !a.startsWith("--"))[0] ?? "");
+
+if (!passDir || !existsSync(passDir)) {
+  console.error("Usage: node tools/report.mjs <path-to-pass-directory> [--markdown]");
+  console.error("Example: node tools/report.mjs passes/pass1");
+  process.exit(2);
+}
+
+const telemetryPath = join(passDir, "telemetry.jsonl");
+const manifestPath  = join(passDir, "manifest.json");
+
+if (!existsSync(telemetryPath)) {
+  console.error(`No telemetry.jsonl found in ${passDir}.`);
+  console.error("Confirm the run finished and produced this file.");
+  process.exit(2);
+}
+
+const events = readFileSync(telemetryPath, "utf8")
+  .split("\n")
+  .filter((l) => l.trim())
+  .map((l) => JSON.parse(l));
+
+const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) : {};
+
+// ─── SDLC phase classification ────────────────────────────────────────
+// Anything in this set is treated as SDLC-productive work in the summary.
+// Everything else is bucketed as "runner overhead" (planning, reads,
+// bookkeeping, debug loops, shell). Adjust here if your policy uses phases
+// with different names.
+const SDLC_PHASES = new Set([
+  "requirements_analysis",
+  "architecture_design",
+  "plan_task_packets",
+  "codegen",
+  "tests",
+  "docs",
+  "senior_code_review",
+  "security_review",
+  "test_run",
+]);
+
+// ─── aggregate per phase, tracking provenance ─────────────────────────
+// Every event carries a `provenance` field per orchestrator rule 6:
+//   - "vendor"    — real vendor-reported tokens (Anthropic API returned
+//                   its usage block; or MCP-dispatched Gemini call)
+//   - "estimated" — char/3.8 derived, used only when the subagent handled
+//                   the call in-session without an API key
+//   - (absent)    — legacy runs pre-dating rule 6's two-mode design;
+//                   treated as "unknown" and reported as such
+const phaseAgg = new Map(); // phase → {calls, tokIn, tokOut, cost, provCounts}
+let sdlcCost = 0, sdlcCalls = 0;
+let overheadCost = 0, overheadCalls = 0;
+let totalIn = 0, totalOut = 0, totalCached = 0;
+let vendorEvents = 0, estimatedEvents = 0, unknownEvents = 0;
+let vendorCost = 0, estimatedCost = 0;
+
+// Per-packet aggregation across doubling attempts. Each TaskPacket may span
+// multiple TelemetryEvents (one per attempt); they share a task_id. We collapse
+// them into a single per-packet record so the report shows one row per packet
+// rather than N rows per doubling. This is what makes the doubling loop
+// invisible at the summary level but auditable at the raw-event level.
+const packetAgg = new Map(); // task_id → {phase, module, model, attempts, finalCeiling, totalCost, terminal}
+
+for (const e of events) {
+  const p = e.phase ?? "unknown";
+  const isSdlc = SDLC_PHASES.has(p);
+  const tokIn = e.input_tokens ?? 0;
+  const tokOut = e.output_tokens ?? 0;
+  const cached = e.input_tokens_cached ?? 0;
+  const cost = e.cost_usd ?? 0;
+  const prov = e.provenance ?? "unknown";
+
+  totalIn  += tokIn;
+  totalOut += tokOut;
+  totalCached += cached;
+  if (isSdlc) { sdlcCost += cost; sdlcCalls += 1; }
+  else        { overheadCost += cost; overheadCalls += 1; }
+
+  if      (prov === "vendor")    { vendorEvents++;    vendorCost += cost; }
+  else if (prov === "estimated") { estimatedEvents++; estimatedCost += cost; }
+  else                            { unknownEvents++; }
+
+  const rec = phaseAgg.get(p) ?? { calls: 0, tokIn: 0, tokOut: 0, cost: 0, sdlc: isSdlc, provCounts: { vendor: 0, estimated: 0, unknown: 0 } };
+  rec.calls += 1;
+  rec.tokIn += tokIn;
+  rec.tokOut += tokOut;
+  rec.cost += cost;
+  rec.provCounts[prov === "vendor" ? "vendor" : prov === "estimated" ? "estimated" : "unknown"]++;
+  phaseAgg.set(p, rec);
+
+  // Per-packet accumulation for the "output-ceiling attempts" observation
+  // (n=1 report section). We only track packets whose events carry the
+  // attempt fields — older telemetry without them contributes nothing.
+  const tid = e.task_id;
+  if (tid && (e.attempt_number != null || e.ceiling_used != null)) {
+    const pkt = packetAgg.get(tid) ?? {
+      task_id: tid,
+      phase: p,
+      module: e.module ?? "?",
+      model: e.model ?? "?",
+      attempts: 0,
+      initialCeiling: e.ceiling_used ?? null,
+      finalCeiling: e.ceiling_used ?? null,
+      totalCost: 0,
+      lastSuccess: false,
+    };
+    pkt.attempts += 1;
+    if (pkt.initialCeiling == null || (e.attempt_number ?? 1) === 1) {
+      pkt.initialCeiling = e.ceiling_used ?? pkt.initialCeiling;
+    }
+    if (e.ceiling_used != null) pkt.finalCeiling = e.ceiling_used;
+    pkt.totalCost += cost;
+    pkt.lastSuccess = e.success === true;
+    packetAgg.set(tid, pkt);
+  }
+}
+
+// Packets that needed at least one doubling. These are the interesting cases
+// for the "Findings from this run (n=1)" section — every other packet fit
+// under its initial ceiling first-shot.
+const packetsWithDoublings = [...packetAgg.values()]
+  .filter((p) => p.attempts > 1)
+  .sort((a, b) => b.attempts - a.attempts);
+
+// Overall mode label. Any events without vendor tokens taint the whole run.
+const runMode =
+  vendorEvents > 0 && estimatedEvents === 0 && unknownEvents === 0 ? "vendor" :
+  estimatedEvents > 0 && vendorEvents === 0                        ? "estimated" :
+  vendorEvents > 0 && estimatedEvents > 0                          ? "mixed" :
+                                                                     "unknown";
+const provTag = (rec) =>
+  rec.provCounts.vendor === rec.calls    ? "V" :
+  rec.provCounts.estimated === rec.calls ? "E" :
+  rec.provCounts.unknown === rec.calls   ? "?" :
+                                           "M"; // mixed within phase
+
+const totalCost = sdlcCost + overheadCost;
+const sessionCost = manifest.total_cost_usd ?? totalCost;
+
+// ─── formatting helpers ──────────────────────────────────────────────
+const fmtUSD = (n) => `$${n.toFixed(4)}`;
+const fmtCompact = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+const fmtDuration = (sec) => {
+  if (!sec) return "—";
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+};
+
+// ─── render ───────────────────────────────────────────────────────────
+const passName = manifest.pass_name ?? manifest.pass ?? basename(passDir);
+const policy = manifest.policy_name ?? "—";
+const started = manifest.started_at ?? "—";
+const duration = fmtDuration(manifest.duration_sec ?? manifest.total_wall_clock_sec ?? 0);
+
+const line = "─".repeat(66);
+const header = `Workforce Ops · ${basename(passDir)} · ${policy} · ${started}`;
+const modeLabel =
+  runMode === "vendor"    ? "Vendor-authoritative" :
+  runMode === "estimated" ? "Estimator mode"       :
+  runMode === "mixed"     ? "Mixed (vendor + estimator)" :
+                            "Unknown provenance";
+const modeHint =
+  runMode === "vendor"    ? "every event carries real Anthropic / Google usage — reconcilable to your API dashboard" :
+  runMode === "estimated" ? "direct-tier events are char/3.8 estimated; total will drift from vendor-billed" :
+  runMode === "mixed"     ? "MCP-dispatched events are vendor-reported; direct-tier events are estimated" :
+                            "pre-provenance telemetry; run again with today's orchestrator to get a labeled report";
+
+if (asMarkdown) {
+  console.log(`# ${header}\n`);
+  console.log(`**Mode: ${modeLabel}** — ${modeHint}\n`);
+  console.log(`## SDLC task run\n`);
+  console.log(`| Phase | Prov | Calls | Tokens (in / out) | Cost |`);
+  console.log(`|---|:---:|---:|---|---:|`);
+} else {
+  console.log(`\n┌${line}┐`);
+  console.log(`│ ${header.padEnd(64)} │`);
+  console.log(`└${line}┘\n`);
+  console.log(`Mode: ${modeLabel}`);
+  console.log(`  ${modeHint}\n`);
+  console.log(`SDLC task run\n`);
+  console.log(`  ${"Phase".padEnd(24)}${"Prov".padStart(6)}${"Calls".padStart(7)}${"Tokens (in / out)".padStart(22)}${"Cost".padStart(11)}`);
+  console.log(`  ${"─".repeat(24 + 6 + 7 + 22 + 11)}`);
+}
+
+// SDLC rows in a stable order, then any remaining phases
+const preferredOrder = ["requirements_analysis", "architecture_design", "plan_task_packets", "codegen", "tests", "docs", "test_run", "senior_code_review", "security_review"];
+const seen = new Set();
+const sdlcRows = [];
+for (const p of preferredOrder) {
+  if (phaseAgg.has(p)) { sdlcRows.push([p, phaseAgg.get(p)]); seen.add(p); }
+}
+for (const [p, rec] of phaseAgg) {
+  if (!seen.has(p) && rec.sdlc) sdlcRows.push([p, rec]);
+}
+
+for (const [phase, rec] of sdlcRows) {
+  const tokStr = `${fmtCompact(rec.tokIn)} / ${fmtCompact(rec.tokOut)}`;
+  const tag = provTag(rec);
+  if (asMarkdown) {
+    console.log(`| \`${phase}\` | ${tag} | ${rec.calls} | ${tokStr} | ${fmtUSD(rec.cost)} |`);
+  } else {
+    console.log(`  ${phase.padEnd(24)}${tag.padStart(6)}${String(rec.calls).padStart(7)}${tokStr.padStart(22)}${fmtUSD(rec.cost).padStart(11)}`);
+  }
+}
+
+if (asMarkdown) {
+  console.log(`| **SDLC task total** |  |  |  | **${fmtUSD(sdlcCost)}** |\n`);
+  console.log(`_Prov key: V = vendor-authoritative, E = estimated, M = mixed within phase, ? = pre-provenance legacy._\n`);
+} else {
+  console.log(`  ${"─".repeat(24 + 6 + 7 + 22 + 11)}`);
+  console.log(`  ${"SDLC task total".padEnd(59)}${fmtUSD(sdlcCost).padStart(11)}\n`);
+  console.log(`  Prov key: V = vendor-authoritative, E = estimated, M = mixed, ? = legacy\n`);
+}
+
+// Run stats
+if (asMarkdown) {
+  console.log(`## Run stats\n`);
+  console.log(`- Wall-clock: ${duration}`);
+  console.log(`- Model calls: ${events.length}`);
+  const arts = manifest.artifacts?.code_files?.length ?? (manifest.artifacts?.files ?? "—");
+  console.log(`- Code files produced: ${arts}`);
+  console.log("");
+} else {
+  console.log(`  Wall-clock                                                ${duration}`);
+  console.log(`  Model calls                                              ${String(events.length).padStart(4)}`);
+  const arts = manifest.artifacts?.code_files?.length ?? (manifest.artifacts?.files ?? "—");
+  console.log(`  Code files produced                                      ${String(arts).padStart(4)}\n`);
+}
+
+// Cost block — SDLC first (already shown above); runner overhead + total.
+// The "total" label depends on provenance mix — see runMode above.
+const totalLabel =
+  runMode === "vendor"    ? "Total (vendor-billed)" :
+  runMode === "estimated" ? "Total (estimator sum)"  :
+  runMode === "mixed"     ? "Total (mixed)"          :
+                            "Total (unknown provenance)";
+const totalNote =
+  runMode === "vendor"    ? "reconcilable to your Anthropic + Google dashboards" :
+  runMode === "estimated" ? "char/3.8 × policy rates; drift ±15% from vendor bill is normal" :
+  runMode === "mixed"     ? "MCP dispatches vendor-billed; direct calls estimated" :
+                            "provenance field missing from events";
+
+if (asMarkdown) {
+  console.log(`## Costs\n`);
+  console.log(`| Line | Amount |`);
+  console.log(`|---|---:|`);
+  console.log(`| SDLC task cost | ${fmtUSD(sdlcCost)} |`);
+  console.log(`| Runner overhead | ${fmtUSD(overheadCost)} |`);
+  if (runMode === "mixed") {
+    console.log(`| — vendor-billed subtotal | ${fmtUSD(vendorCost)} |`);
+    console.log(`| — estimator subtotal | ${fmtUSD(estimatedCost)} |`);
+  }
+  console.log(`| **${totalLabel}** | **${fmtUSD(sessionCost)}** |\n`);
+  console.log(`_${totalNote}_\n`);
+} else {
+  console.log(`Costs\n`);
+  console.log(`  SDLC task cost                                       ${fmtUSD(sdlcCost).padStart(9)}  (sum of SDLC-phase events)`);
+  console.log(`  Runner overhead                                      ${fmtUSD(overheadCost).padStart(9)}  (planning / reads / debug)`);
+  if (runMode === "mixed") {
+    console.log(`    — vendor-billed subtotal                         ${fmtUSD(vendorCost).padStart(9)}  (${vendorEvents} events)`);
+    console.log(`    — estimator subtotal                             ${fmtUSD(estimatedCost).padStart(9)}  (${estimatedEvents} events)`);
+  }
+  console.log(`  ${"─".repeat(24 + 6 + 7 + 22 + 11)}`);
+  console.log(`  ${totalLabel.padEnd(59)}${fmtUSD(sessionCost).padStart(11)}`);
+  console.log(`  ${modeHint === totalNote ? "" : "  " + totalNote}\n`);
+}
+
+// Methodology — content shifts based on mode
+const methLines =
+  runMode === "vendor" ? [
+    "Every event's tokens and cost came from the vendor's own usage block —",
+    "Anthropic and Google responses are read verbatim into telemetry.jsonl.",
+    "Cross-check the total against your Anthropic + Google API dashboards for",
+    "the session's time window; they should match to within a few cents.",
+    "See docs/methodology.md for the full derivation.",
+  ] : runMode === "estimated" ? [
+    "Every event's tokens are char-count estimated (≈3.8 chars/token) per",
+    "plugin/agents/orchestrator.md rule 6, then multiplied by policy rates.",
+    "This is the mode Claude Code subscription users run in — no API key",
+    "means no per-call vendor usage is available to the subagent.",
+    "To get vendor-authoritative numbers, set ANTHROPIC_API_KEY and rerun.",
+    "See docs/methodology.md.",
+  ] : runMode === "mixed" ? [
+    "Mixed provenance run. Mechanical-tier events dispatched through the MCP",
+    "server carry real vendor tokens; direct-tier events (subagent-handled)",
+    "use the char/3.8 estimator per plugin/agents/orchestrator.md rule 6.",
+    "See docs/methodology.md.",
+  ] : [
+    "This run's telemetry pre-dates the provenance field. Rerun with",
+    "today's orchestrator for a labeled report. See docs/methodology.md.",
+  ];
+if (asMarkdown) {
+  console.log(`## Methodology\n`);
+  for (const l of methLines) console.log(`- ${l}`);
+  console.log("");
+} else {
+  console.log(`Methodology`);
+  for (const l of methLines) console.log(`  • ${l}`);
+  console.log("");
+}
+
+// ─── Findings from this run (n=1) ─────────────────────────────────────
+// Neutral report of what happened, with a standing preamble that any single
+// run has material variance. No editorializing on which model, which policy,
+// or which mechanism "won" or "lost" — the raw telemetry.jsonl is authoritative
+// if a reader wants to draw their own conclusions.
+const findingsPreamble = [
+  "This is n=1. Generation tasks have material run-to-run variance under",
+  "identical settings. Before drawing conclusions about a policy's cost-quality",
+  "profile from any number on this report, run at least 5 independent passes",
+  "and report the distribution, not a single point.",
+];
+if (asMarkdown) {
+  console.log(`## Findings from this run (n=1)\n`);
+  for (const l of findingsPreamble) console.log(`> ${l}`);
+  console.log("");
+} else {
+  console.log(`Findings from this run (n=1)`);
+  for (const l of findingsPreamble) console.log(`  ${l}`);
+  console.log("");
+}
+
+// Output-ceiling doubling — factual list; no per-model editorial.
+if (packetsWithDoublings.length > 0) {
+  if (asMarkdown) {
+    console.log(`### Packets that needed output-ceiling doublings\n`);
+    console.log(`Each row is one TaskPacket whose first attempt hit the vendor max-tokens signal, triggering the adapter's doubling loop. \`Final ceiling\` is the max_tokens the packet ultimately converged under (or terminated at, if it exhausted the doubling budget). Cost is the sum across attempts; cached input keeps retry cost low. This is descriptive, not diagnostic — a packet needing doublings on one run may fit first-shot on another.\n`);
+    console.log(`| Packet | Phase | Model | Attempts | Initial → final ceiling | Cost across attempts | Terminal |`);
+    console.log(`|---|---|---|---:|---|---:|---|`);
+    for (const p of packetsWithDoublings) {
+      const terminal = p.lastSuccess ? "converged" : "still truncated";
+      console.log(
+        `| \`${p.task_id}\` | ${p.phase} | ${p.model} | ${p.attempts} | ${p.initialCeiling} → ${p.finalCeiling} | ${fmtUSD(p.totalCost)} | ${terminal} |`
+      );
+    }
+    console.log("");
+  } else {
+    console.log(`Packets that needed output-ceiling doublings\n`);
+    console.log(`  ${"Packet".padEnd(24)}${"Phase".padEnd(22)}${"Model".padEnd(22)}${"Att".padStart(4)}  ${"Init→Final".padStart(14)}  ${"Cost".padStart(10)}  Terminal`);
+    for (const p of packetsWithDoublings) {
+      const terminal = p.lastSuccess ? "converged" : "still truncated";
+      console.log(
+        `  ${p.task_id.padEnd(24)}${p.phase.padEnd(22)}${p.model.padEnd(22)}${String(p.attempts).padStart(4)}  ${`${p.initialCeiling}→${p.finalCeiling}`.padStart(14)}  ${fmtUSD(p.totalCost).padStart(10)}  ${terminal}`
+      );
+    }
+    console.log("");
+  }
+}
+
+// Next iterations — the mitigation menu, uniform across models. Every study
+// gets the same list; nothing here is per-vendor.
+const nextIterations = [
+  ["Run 5+ independent passes under identical settings and report the cost / completion-rate distribution rather than a single-point number.",
+   "Why: n=1 conclusions about generation quality are known to be unreliable; distribution reveals whether an outcome is systematic or a tail draw.",
+   "Pitfall: 5× the wall-clock and API spend per policy under study."],
+  ["If any packets terminated as 'still truncated', re-run with a higher initial ceiling for that phase's packet template.",
+   "Why: doubling from too-low an initial burns extra output tokens on the retries before converging; a moderate raise of the initial catches large files first-shot.",
+   "Pitfall: raising the initial across the board pays extra ceiling on every packet, most of which don't need it."],
+  ["Cross-check the report's total against the vendor dashboard for the run's time window.",
+   "Why: the only end-to-end integrity check for vendor-authoritative mode; a material divergence means either a telemetry gap or a pricing-YAML drift.",
+   "Pitfall: dashboards aggregate by API key, so mixing keys or running other work in the window contaminates the comparison."],
+];
+if (asMarkdown) {
+  console.log(`### Suggested next iterations\n`);
+  for (const [what, why, pitfall] of nextIterations) {
+    console.log(`- **${what}**`);
+    console.log(`  - _Why:_ ${why}`);
+    console.log(`  - _Pitfall:_ ${pitfall}`);
+  }
+  console.log("");
+} else {
+  console.log(`Suggested next iterations`);
+  for (const [what, why, pitfall] of nextIterations) {
+    console.log(`  • ${what}`);
+    console.log(`      Why:     ${why}`);
+    console.log(`      Pitfall: ${pitfall}`);
+  }
+  console.log("");
+}
+
+// ─── Artifacts ────────────────────────────────────────────────────────
+// The list is organized so a reader can trace any number on the report
+// back to a specific file. Order:
+//   1. SDLC narrative artifacts (what the pass produced)
+//   2. Data artifacts (telemetry, manifest, packets — the numbers)
+//   3. Code output (the actual generated source tree)
+//   4. Claude Code session artifacts (raw transcripts a reviewer can grep
+//      for exact model responses, if they need to audit at that level)
+// Everything is conditional on existsSync — missing files aren't listed.
+const artLines = [];
+
+// 1. SDLC narrative
+const narrativeFiles = [
+  ["Requirements",              "requirements.md"],
+  ["Design",                    "design.md"],
+  ["Task-packet plan",          "packets.json"],
+  ["Senior review",             "review.json"],
+  ["Senior review (markdown)",  "senior_review.md"],
+  ["Security review",           "security_review.md"],
+  ["Generated README",          "README.md"],
+];
+for (const [label, name] of narrativeFiles) {
+  const p = join(passDir, name);
+  if (existsSync(p)) artLines.push([label, p]);
+}
+const adrDir = join(passDir, "docs", "adr");
+if (existsSync(adrDir)) artLines.push(["ADR set", adrDir + "/"]);
+
+// 2. Data
+artLines.push(["Telemetry (JSON-lines)", join(passDir, "telemetry.jsonl")]);
+artLines.push(["Manifest",               join(passDir, "manifest.json")]);
+
+// 3. Code output — check the two common layouts (app/ or src/ at pass root)
+for (const candidate of ["app", "src"]) {
+  const p = join(passDir, candidate);
+  if (existsSync(p)) { artLines.push(["Generated source", p + "/"]); break; }
+}
+for (const dir of ["prisma", "test"]) {
+  const p = join(passDir, dir);
+  if (existsSync(p)) artLines.push([dir === "prisma" ? "Prisma schema + seed" : "Tests", p + "/"]);
+}
+
+// 4. Claude Code session artifacts — computed deterministically from the
+// project directory. Claude Code writes transcripts to:
+//   ~/.claude/projects/<project-hash>/<session-id>.jsonl
+// and per-subagent transcripts to:
+//   ~/.claude/projects/<project-hash>/<session-id>/subagents/agent-*.jsonl
+// The project-hash is the absolute project path with '/' AND whitespace
+// replaced by '-' (Claude Code encodes both — missing the whitespace step
+// silently drops the transcripts when the path contains spaces).
+// We list every JSONL modified during the pass's time window; that's
+// almost always the session transcript(s) for this run.
+try {
+  // Project root is two levels up from passDir (passes/<run-id>/ → repo root)
+  const projectRoot = dirname(dirname(passDir));
+  const projectHash = projectRoot.replace(/[\/\s]/g, "-");
+  const claudeProjectDir = join(homedir(), ".claude", "projects", projectHash);
+  if (existsSync(claudeProjectDir)) {
+    const startedAt = Date.parse(manifest.started_at ?? "") || 0;
+    const endedAt   = Date.parse(manifest.ended_at   ?? "") || Date.now();
+    // Session-level transcripts (files directly under the project dir)
+    const sessionFiles = readdirSync(claudeProjectDir)
+      .filter((n) => n.endsWith(".jsonl"))
+      .map((n) => ({ n, full: join(claudeProjectDir, n), mtime: statSync(join(claudeProjectDir, n)).mtimeMs }))
+      .filter(({ mtime }) => startedAt === 0 || (mtime >= startedAt - 5*60_000 && mtime <= endedAt + 5*60_000))
+      .sort((a, b) => a.mtime - b.mtime);
+    for (const { full } of sessionFiles) {
+      artLines.push(["Claude Code session log", full]);
+    }
+    // Subagent transcripts (one directory per session, subagents/ inside)
+    for (const { n } of sessionFiles) {
+      const sessionId = n.replace(/\.jsonl$/, "");
+      const subDir = join(claudeProjectDir, sessionId, "subagents");
+      if (existsSync(subDir)) {
+        const subs = readdirSync(subDir).filter((x) => x.endsWith(".jsonl"));
+        for (const s of subs) artLines.push(["Subagent transcript", join(subDir, s)]);
+      }
+    }
+    if (sessionFiles.length === 0) {
+      artLines.push(["Claude Code session log", claudeProjectDir + "/  (no JSONL in the pass's time window)"]);
+    }
+  }
+} catch { /* Claude Code project dir not accessible — skip */ }
+
+if (asMarkdown) {
+  console.log(`## Artifacts\n`);
+  for (const [label, p] of artLines) console.log(`- ${label}: \`${p}\``);
+} else {
+  console.log(`Artifacts`);
+  for (const [label, p] of artLines) console.log(`  • ${label.padEnd(28)}${p}`);
+}
+console.log("");
