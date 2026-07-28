@@ -22,16 +22,17 @@ plugin/mcp/gemini-flash-server/*.mjs
 _raw_*.txt
 _raw_*.json
 
-# Run outputs — each user generates their own passes
-passes/*/
-!passes/.gitkeep
-
-# Local auth-mode choice — written by tools/setup.mjs, per-machine
-.workforce-ops-mode
+# Run outputs — each user generates their own passes under
+# examples/<study-id>/passes/<run-id>/
+examples/*/passes/*/
 
 # Generated MCP registration — contains absolute paths + copied API keys,
 # per-machine, written by tools/setup.mjs
 .mcp.json
+
+# Local Claude Code repo-conventions file — kept out of the public repo
+# on purpose; the durable rules live in CONTRIBUTING.md.
+CLAUDE.md
 
 # OS / editor
 .DS_Store

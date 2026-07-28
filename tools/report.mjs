@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * report.mjs — post-run summary for a Workforce Ops pass.
+ * report.mjs — post-run summary for an AI-SDLC pass.
  *
  * Usage: node tools/report.mjs <path-to-pass-directory>
  *
@@ -20,7 +20,7 @@ const passDir = resolve(argv.filter((a) => !a.startsWith("--"))[0] ?? "");
 
 if (!passDir || !existsSync(passDir)) {
   console.error("Usage: node tools/report.mjs <path-to-pass-directory> [--markdown]");
-  console.error("Example: node tools/report.mjs passes/pass1");
+  console.error("Example: node tools/report.mjs examples/workforce-ops/passes/pass1");
   process.exit(2);
 }
 
@@ -449,8 +449,9 @@ for (const dir of ["prisma", "test"]) {
 // We list every JSONL modified during the pass's time window; that's
 // almost always the session transcript(s) for this run.
 try {
-  // Project root is two levels up from passDir (passes/<run-id>/ → repo root)
-  const projectRoot = dirname(dirname(passDir));
+  // Project root is four levels up from passDir
+  // (examples/<study>/passes/<run-id>/ → repo root)
+  const projectRoot = dirname(dirname(dirname(dirname(passDir))));
   const projectHash = projectRoot.replace(/[\/\s]/g, "-");
   const claudeProjectDir = join(homedir(), ".claude", "projects", projectHash);
   if (existsSync(claudeProjectDir)) {

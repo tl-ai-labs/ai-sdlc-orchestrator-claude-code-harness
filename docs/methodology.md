@@ -4,9 +4,9 @@ How the tokens and costs on the report are derived, in plain terms.
 
 ## The mode determines everything
 
-Every telemetry event carries a `provenance` field: `"vendor"` or `"estimated"`. The report labels the whole run according to what's on those events. The mode is an explicit choice made in `tools/setup.mjs` and persisted to `.workforce-ops-mode` at the repo root. The orchestrator reads that file on every run — it does not infer the mode from `ANTHROPIC_API_KEY` presence, because presence alone is not a choice, and silently switching modes on env-var accident is exactly the authenticity hole this file exists to close.
+Every telemetry event carries a `provenance` field: `"vendor"` or `"estimated"`. The report labels the whole run according to what's on those events. The mode is chosen per run via the required `--auth=vendor|estimated` flag on `/run-sdlc-pass`. The orchestrator reads the flag at startup and follows that path for every event; if the flag is missing the run aborts. Mode is not inferred from `ANTHROPIC_API_KEY` presence — the flag is the sole source of truth, so identical commands produce identical modes regardless of the shell's env-var state.
 
-### Vendor-authoritative mode — `.workforce-ops-mode` = `vendor`
+### Vendor-authoritative mode — `--auth=vendor`
 
 The orchestrator (per [rule 6 in orchestrator.md](../plugin/agents/orchestrator.md)) dispatches **every** LLM call — including its own tier's calls — through the MCP server. The MCP server hits the vendor API directly, receives the vendor's own `usage` block in the response, and writes those exact numbers into the event:
 
@@ -14,9 +14,9 @@ The orchestrator (per [rule 6 in orchestrator.md](../plugin/agents/orchestrator.
 - `cost_usd` — (vendor tokens × the policy YAML's `pricing:` block) / 1M
 - `provenance: "vendor"`
 
-**These numbers reconcile to the Anthropic and Google dashboards for the API key and time window the run used.** That's the whole point of this mode. Independent parties who clone the repo and run under vendor-authoritative mode should see numbers within a few percent of the published figures — differences are LLM non-determinism in packet decomposition, not measurement drift.
+These numbers reconcile to the Anthropic and Google dashboards for the API key and time window the run used. An independent run under vendor-authoritative mode should land within a few percent of the published figures; residual variance is LLM non-determinism in packet decomposition, not measurement drift.
 
-### Estimator mode — `.workforce-ops-mode` = `estimated`
+### Estimator mode — `--auth=estimated`
 
 Claude Code handles auth via a Pro / Team / Enterprise subscription. Direct-tier calls (Opus phases, under any policy) run inside the subagent's conversation loop, which doesn't expose per-call `usage` to the subagent. The orchestrator therefore estimates tokens using a character-count heuristic:
 
@@ -34,7 +34,7 @@ The 3.8 midpoint is fine for order-of-magnitude reasoning; it will not exactly m
 
 ## Which mode were the published numbers produced in?
 
-The numbers on this repo's public README were produced under **vendor-authoritative mode** — the run used `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` (for the `opus-plus-flash` variant). Every published cost line is Anthropic- or Google-billed. Runs under the same mode that diverge materially are meaningful signal — they can be filed as issues so the drift can be investigated.
+The numbers on this repo's public README were produced under **vendor-authoritative mode** — the run used `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` (for the `opus-plus-flash` variant). Every published cost line is Anthropic- or Google-billed. Material divergence on a same-mode reproduction can be filed as an issue.
 
 ## Trade-off between the modes
 
@@ -45,7 +45,7 @@ The numbers on this repo's public README were produced under **vendor-authoritat
 | Numbers on report | Match the Anthropic and Google dashboards for the API key used | Order-of-magnitude approximation of a vendor-billed run |
 | Recommended for | Publishing, cross-checking against the bill, Google-style audit | Casual runs, exploring the tool without an API key |
 
-Both are legitimate. The choice depends on the intended use.
+The choice depends on the intended use.
 
 ## Cross-checking against the Anthropic dashboard
 
@@ -56,7 +56,7 @@ To verify the report against reality:
 3. Filter to the API key and time window matching the run.
 4. Compare Anthropic's charge to the report's "Total session cost" line.
 
-The two should match to within a few cents. Divergences beyond that are exactly the kind of drift this repo is designed to catch and can be filed as issues for investigation.
+The two should match to within a few cents. Larger divergences can be filed as issues.
 
 ## Output-ceiling doubling
 
@@ -64,9 +64,9 @@ Every TaskPacket carries a `budget.maxOutputTokens` — the initial output-token
 
 Every attempt emits its own TelemetryEvent with `attempt_number`, `ceiling_used`, and (on retries) `retry_reason: "output_cap"`, all sharing the packet's `task_id`. The report collapses them into one row per packet under **Packets that needed output-ceiling doublings** — the raw JSONL preserves the full attempt chain for full audit at that level.
 
-**Why doubling instead of raising the ceiling unilaterally.** Under a well-chosen initial ceiling, most packets fit first-shot and pay nothing extra; only the packets that actually need the room double. Under a uniformly-raised ceiling, every packet pays the higher rate. For SDLC codegen — where the file-size distribution is heavily skewed toward small files with a few large outliers — doubling wins in aggregate. It loses (by roughly 1.75× vs. a perfectly-tuned unilateral raise) on the specific packets that need multiple doublings. Both trade-offs are honest; no attempt is made to hide the tail-case waste.
+**Why doubling instead of raising the ceiling unilaterally.** Under a well-chosen initial ceiling, most packets fit first-shot and pay nothing extra; only the packets that actually need the room double. Under a uniformly-raised ceiling, every packet pays the higher rate. For SDLC codegen — where the file-size distribution is heavily skewed toward small files with a few large outliers — doubling wins in aggregate. It costs roughly 1.75× a perfectly-tuned unilateral raise on the specific packets that need multiple doublings.
 
-**Detection is strict.** Only the vendor's explicit max-tokens signal triggers doubling. Anything else (semantic completion, safety filter, recitation guard) is treated as a genuine termination and the response is accepted as-is. This avoids burning tokens on retries that would have returned identical output.
+**Detection is strict.** Only the vendor's explicit max-tokens signal triggers doubling. Anything else (semantic completion, safety filter, recitation guard) is treated as a genuine termination and the response is accepted as-is. This avoids retries that would have returned identical output.
 
 **Terminal states.** A packet's ExecutionResult carries `terminal_reason`:
 - `success` — an attempt returned without hitting the max-tokens signal.

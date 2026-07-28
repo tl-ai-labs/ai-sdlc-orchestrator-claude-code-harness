@@ -216,15 +216,19 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
 
 // Recognized as project-level, stable across every packet in a pass.
 // These files' contents don't change once written; caching them saves
-// input cost on every subsequent dispatch.
-const STABLE_INPUT_PATHS = new Set([
+// input cost on every subsequent dispatch. Matched on basename so the
+// heuristic survives the brief and output_dir living at any repo path
+// (e.g. brief at examples/<study>/brief.md, artifacts at
+// examples/<study>/passes/<run-id>/requirements.md).
+const STABLE_INPUT_BASENAMES = new Set([
   "brief.md",
   "requirements.md",
   "design.md",
   "security_review.md",
 ]);
 function isStableInput(input: { path: string; reason: string }): boolean {
-  if (STABLE_INPUT_PATHS.has(input.path)) return true;
+  const basename = input.path.split("/").pop() ?? input.path;
+  if (STABLE_INPUT_BASENAMES.has(basename)) return true;
   // Also accept explicit orchestrator marking. Rule 6 (orchestrator.md)
   // instructs the orchestrator to mark inputs that don't change per packet.
   return /\bstable\b/i.test(input.reason);

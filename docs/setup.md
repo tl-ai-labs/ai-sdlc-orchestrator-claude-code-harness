@@ -1,6 +1,6 @@
 # Setup
 
-Everything you need to prepare your machine for a study run.
+Everything you need to prepare your machine for a run.
 
 ## Prerequisites
 
@@ -12,38 +12,34 @@ Everything you need to prepare your machine for a study run.
   Verify with `claude --version`.
 - **A macOS or Linux shell.** Windows via WSL2 also works.
 
-## Anthropic (Claude) authentication — you pick the mode
+## Anthropic (Claude) authentication
 
-The setup wizard (`tools/setup.mjs`) asks you **explicitly** which mode to use. There is no auto-detection based on whether `ANTHROPIC_API_KEY` happens to be exported in your shell — that was the old behavior and it caused two people running the same command to get different numbers without realizing why. The wizard now saves your choice to `.workforce-ops-mode` at the repo root; the orchestrator reads that file on every run.
+The auth mode is chosen per run via the `--auth` flag on `/run-sdlc-pass` (see [running.md](running.md)). The setup wizard does not persist a mode; it only checks which API keys are visible so you know which modes are available.
 
-### Option V — Vendor-authoritative (recommended for reproducibility)
+### `--auth=vendor` — Anthropic-billed, reconciles to the dashboard
 
-Prerequisite: an Anthropic API key. Get one at [console.anthropic.com](https://console.anthropic.com/settings/keys), then before running the wizard:
+Prerequisite: an Anthropic API key. Get one at [console.anthropic.com](https://console.anthropic.com/settings/keys), then export:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Pick **V** when the wizard asks. The orchestrator routes **every** LLM call through the MCP server, which hits Anthropic's API directly. Every event on the report carries vendor-reported tokens. The final total will match your `console.anthropic.com` dashboard for the run's time window, to within a few cents.
+Under `--auth=vendor` the orchestrator dispatches **every** LLM call through the MCP server, which hits Anthropic's API directly. Every event on the report carries vendor-reported tokens. The final total matches your `console.anthropic.com` dashboard for the run's time window, to within a few cents.
 
-### Option E — Estimator (works with a Claude Code subscription, no API key)
+### `--auth=estimated` — Claude Code subscription, no API key required
 
-If you have a Claude Pro / Team / Enterprise subscription and you'd rather not set an API key, sign in to Claude Code once:
+If you have a Claude Pro / Team / Enterprise subscription, sign in to Claude Code once:
 
 ```bash
 claude
 # follow the interactive login prompt
 ```
 
-Pick **E** when the wizard asks. Direct-tier work (Opus phases) runs inside Claude Code's own conversation loop under your subscription; mechanical-tier work (Gemini under `opus-plus-flash`) still goes through the MCP server and carries vendor tokens.
+Under `--auth=estimated`, direct-tier work (Opus phases) runs inside Claude Code's own conversation loop under your subscription; mechanical-tier work (Gemini under `opus-plus-flash`) still goes through the MCP server and carries vendor tokens.
 
-Because the subagent can't read per-call `usage` from inside the Claude Code loop, direct-tier tokens are **char-count estimated** (≈3.8 chars/token) and multiplied by the policy YAML's `pricing:` block. The report labels the run "Estimator mode" and shows `E` next to the affected phases. Expect the total to diverge from the vendor-billed figures — that's inherent to estimation.
+Because the subagent can't read per-call `usage` from inside the Claude Code loop, direct-tier tokens are char-count estimated (≈3.8 chars/token) and multiplied by the policy YAML's `pricing:` block. The report labels the run "Estimator mode" and shows `E` next to the affected phases; totals will diverge from a vendor-billed run.
 
-Both modes are legitimate. Pick based on what you need. See [methodology.md](methodology.md) for the full derivation and trade-off table.
-
-### Changing your mind
-
-Delete `.workforce-ops-mode` and re-run `node tools/setup.mjs`.
+See [methodology.md](methodology.md) for the derivation and trade-off table.
 
 ## Google (Gemini) authentication
 
@@ -65,9 +61,9 @@ From the repo root:
 node tools/setup.mjs
 ```
 
-The wizard verifies each prerequisite, installs and builds the bundled MCP server, and copies the slash command + orchestrator agent into `./.claude/` so Claude Code finds them in both interactive and headless modes. Nothing is written outside this repo except the newly built `plugin/mcp/gemini-flash-server/node_modules/` and `dist/`.
+The wizard verifies each prerequisite, installs and builds the bundled MCP server, and copies the slash command + subagents into `./.claude/` so Claude Code finds them in both interactive and headless modes. Nothing is written outside this repo except the newly built `plugin/mcp/gemini-flash-server/node_modules/` and `dist/`.
 
-Once the wizard finishes successfully, you are ready to run. See [running.md](running.md).
+Once the wizard finishes, you are ready to run. See [running.md](running.md).
 
 ## Troubleshooting
 
@@ -82,5 +78,7 @@ npm install
 npm run build
 ```
 The build output goes to `dist/server.js`; if that exists, you are good.
+
+**`/run-sdlc-pass requires --auth=vendor|estimated`** — the flag is not optional. Add `--auth=vendor` (if `ANTHROPIC_API_KEY` is exported) or `--auth=estimated` (if you're signed in to Claude Code) to the command.
 
 **Rerun the wizard** — safe to run `node tools/setup.mjs` repeatedly. It skips steps that are already done.

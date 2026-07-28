@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 /**
- * setup.mjs — interactive onboarding for the Workforce Ops study.
+ * setup.mjs — interactive onboarding for the AI-SDLC orchestrator harness.
  *
  * Walks the user through prerequisites (Node, Claude Code CLI, API keys),
- * installs the bundled MCP server's dependencies, project-installs the
- * slash command + orchestrator subagent into ./.claude/, and prints the
- * next-step commands. Every check has a friendly path forward — never
- * throws a raw error at the user.
+ * installs the bundled MCP server's dependencies, and project-installs the
+ * slash command + subagents into ./.claude/. Prints the next-step commands
+ * for both auth modes. Every check has a friendly path forward.
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, copyFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
@@ -47,8 +46,8 @@ function nodeMajor() {
 }
 
 // ─── main flow ────────────────────────────────────────────────────────
-console.log(`\n${c.bold}Workforce Ops — self-run setup${c.reset}`);
-console.log(`${c.dim}This wizard checks prerequisites and prepares your machine to run the study.${c.reset}`);
+console.log(`\n${c.bold}AI-SDLC orchestrator — setup${c.reset}`);
+console.log(`${c.dim}This wizard checks prerequisites and prepares your machine to run the pipeline.${c.reset}`);
 
 step(1, "Node.js version");
 const nv = nodeMajor();
@@ -76,76 +75,27 @@ if (which("claude")) {
   if (!proceed) { rl.close(); process.exit(1); }
 }
 
-// ─── Auth mode — user picks explicitly ───────────────────────────────
-// The mode is the load-bearing authenticity decision on this repo — it
-// determines whether the report's dollars are Anthropic-billed or
-// char-count-estimated. We do NOT infer from ANTHROPIC_API_KEY presence,
-// because many devs have that env var exported for unrelated reasons and
-// would silently get a different report than they expected. The choice
-// gets persisted to `.workforce-ops-mode` at the repo root and the
-// orchestrator (rule 6 in plugin/agents/orchestrator.md) reads it there.
-step(3, "Auth mode — pick how this run's numbers get produced");
-console.log(`  Two modes. Pick the one that matches how you want to be billed and reported.`);
-console.log(``);
-console.log(`  ${c.bold}(V) Vendor-authoritative${c.reset} — needs an Anthropic API key.`);
-console.log(`      Every LLM call is billed to your Anthropic account. The report's dollar`);
-console.log(`      totals will match your console.anthropic.com dashboard for the run's`);
-console.log(`      time window, to within a few cents. This is the mode our published`);
-console.log(`      numbers on studies.ai-sdlc.tilicho.in were produced under; picking it`);
-console.log(`      is the way to reproduce them.`);
-console.log(``);
-console.log(`  ${c.bold}(E) Estimator${c.reset} — uses your Claude Code subscription for direct-tier work.`);
-console.log(`      No Anthropic API key needed. Direct-tier tokens (Opus phases) are`);
-console.log(`      char-count estimated at ~3.8 chars/token because Claude Code's`);
-console.log(`      subscription loop doesn't expose per-call usage. Expect the report`);
-console.log(`      to differ from published vendor-mode numbers by roughly ±15%.`);
-console.log(``);
-
-const modeAns = (await ask("Pick a mode [V/E]")).trim().toLowerCase();
-let mode;
-if (modeAns === "v" || modeAns === "vendor") {
-  mode = "vendor";
-} else if (modeAns === "e" || modeAns === "estimated" || modeAns === "estimator") {
-  mode = "estimated";
+// ─── API keys — availability check, not a mode-selection step ─────────
+// Auth mode is chosen per invocation via /run-sdlc-pass --auth=vendor|estimated
+// and enforced by the orchestrator (rule 6). This step only reports what
+// keys are visible so the user knows which mode is available to them.
+step(3, "API keys — availability");
+if (process.env.ANTHROPIC_API_KEY) {
+  ok("ANTHROPIC_API_KEY is set — --auth=vendor is available.");
 } else {
-  fail(`Unrecognized choice "${modeAns}". Enter V or E.`);
-  rl.close();
-  process.exit(1);
+  hint("ANTHROPIC_API_KEY not set — --auth=vendor will abort until it is exported.");
+  hint("  Get a key at https://console.anthropic.com/settings/keys, then:");
+  hint("  export ANTHROPIC_API_KEY=sk-ant-...");
+  hint("--auth=estimated works without an API key when signed in to a Claude Code subscription.");
 }
-
-if (mode === "vendor") {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    fail("Vendor mode picked, but ANTHROPIC_API_KEY is not set in this shell.");
-    hint("Get a key at https://console.anthropic.com/settings/keys, then:");
-    hint("  export ANTHROPIC_API_KEY=sk-ant-...");
-    hint("Then re-run this wizard. (I did not save the mode file — nothing to undo.)");
-    rl.close();
-    process.exit(1);
-  }
-  writeFileSync(join(ROOT, ".workforce-ops-mode"), "vendor\n");
-  ok(`${c.bold}Vendor-authoritative mode${c.reset} saved to .workforce-ops-mode.`);
-  console.log(`  Every event will carry Anthropic-reported tokens and provenance: "vendor".`);
-} else {
-  writeFileSync(join(ROOT, ".workforce-ops-mode"), "estimated\n");
-  ok(`${c.bold}Estimator mode${c.reset} saved to .workforce-ops-mode.`);
-  console.log(`  Direct-tier tokens are char/3.8 estimated; MCP-dispatched calls`);
-  console.log(`  (e.g. Gemini under opus-plus-flash) still carry vendor-reported tokens.`);
-  console.log(`  The report will label the run "Estimator mode" and show E next to affected phases.`);
-  if (process.env.ANTHROPIC_API_KEY) {
-    hint("ANTHROPIC_API_KEY is set in your environment but will be ignored in this mode.");
-  }
-}
-
-// ─── Gemini auth — only needed for opus-plus-flash ───────────────────
-step(4, "Gemini auth — status");
 if (process.env.GEMINI_API_KEY) {
-  ok("GEMINI_API_KEY is set. You can run either opus-only or opus-plus-flash.");
+  ok("GEMINI_API_KEY is set — opus-plus-flash policy is available.");
 } else {
-  ok("GEMINI_API_KEY not set. This is fine for opus-only (the default).");
-  hint("Set GEMINI_API_KEY only if you plan to run opus-plus-flash. Free-tier key: https://aistudio.google.com/app/apikey");
+  hint("GEMINI_API_KEY not set. Only needed for the opus-plus-flash policy.");
+  hint("  Free-tier key: https://aistudio.google.com/app/apikey");
 }
 
-step(5, "Bundled MCP server dependencies");
+step(4, "Bundled MCP server dependencies");
 const mcpDir = join(ROOT, "plugin", "mcp", "gemini-flash-server");
 const nodeMods = join(mcpDir, "node_modules");
 if (existsSync(nodeMods) && existsSync(join(mcpDir, "dist", "server.js"))) {
@@ -164,11 +114,11 @@ if (existsSync(nodeMods) && existsSync(join(mcpDir, "dist", "server.js"))) {
   }
 }
 
-step(6, "Project-install the slash command + all subagents");
+step(5, "Project-install the slash command + all subagents");
 // Some Claude Code versions do not activate plugin-supplied commands or
 // subagents when the user launches with a plain `claude` (no --plugin-dir).
-// We project-install everything into ./.claude/ so both interactive and
-// headless runs discover them without requiring the flag.
+// Project-installing everything into ./.claude/ makes both interactive and
+// headless runs discover them without the flag.
 const projClaude = join(ROOT, ".claude");
 mkdirSync(join(projClaude, "commands"), { recursive: true });
 mkdirSync(join(projClaude, "agents"),   { recursive: true });
@@ -176,8 +126,6 @@ copyFileSync(
   join(ROOT, "plugin", "commands", "run-sdlc-pass.md"),
   join(projClaude, "commands", "run-sdlc-pass.md"),
 );
-// All four subagents — the orchestrator delegates to the other three at
-// specific phases, so all of them must resolve from ./.claude/agents/.
 for (const a of ["orchestrator", "architect", "senior-reviewer", "security-reviewer"]) {
   copyFileSync(
     join(ROOT, "plugin", "agents", `${a}.md`),
@@ -186,11 +134,9 @@ for (const a of ["orchestrator", "architect", "senior-reviewer", "security-revie
 }
 ok("Slash command + all subagents installed under ./.claude/");
 
-// Register the bundled MCP server at the repo root so plain `claude`
-// (no --plugin-dir flag) discovers `mcp__gemini-flash-server__*` tools.
-// This is what closes the loop for vendor-authoritative mode — without
-// it, the orchestrator's dispatch calls resolve to "tool not in toolset"
-// and the run either flails or silently falls back to estimator behavior.
+// Register the bundled MCP server so plain `claude` (no --plugin-dir flag)
+// discovers `mcp__gemini-flash-server__*` tools. Required for vendor mode
+// dispatch and for opus-plus-flash's Gemini routing.
 const mcpJsonPath = join(ROOT, ".mcp.json");
 const mcpEntry = {
   mcpServers: {
@@ -207,34 +153,40 @@ const mcpEntry = {
 writeFileSync(mcpJsonPath, JSON.stringify(mcpEntry, null, 2) + "\n");
 ok(".mcp.json written — plain `claude` will discover the MCP server.");
 
-step(7, "Ready");
+step(6, "Ready");
 console.log(`
-  ${c.bold}You are set up.${c.reset} Two ways to run — pick one:
+  ${c.bold}Setup complete.${c.reset} Pick an auth mode per run via --auth on /run-sdlc-pass.
 
   ${c.bold}Interactive${c.reset} (recommended for first run — you see HITL gates):
     ${c.dim}# --permission-mode acceptEdits auto-approves file reads/writes${c.reset}
     ${c.dim}# inside this repo so the run only stops at the four HITL gates.${c.reset}
     claude --permission-mode acceptEdits
-    ${c.dim}# then at the prompt:${c.reset}
-    > /run-sdlc-pass --run-id=pass1 brief.md
+    ${c.dim}# then at the prompt (vendor mode — needs ANTHROPIC_API_KEY):${c.reset}
+    > /run-sdlc-pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
+    ${c.dim}# or estimator mode (subscription auth, no API key required):${c.reset}
+    > /run-sdlc-pass --auth=estimated --run-id=pass1 examples/workforce-ops/brief.md
 
   ${c.bold}Headless${c.reset} (unattended, captured to a log file):
-    ${c.dim}# opus-only baseline${c.reset}
-    claude --print "/run-sdlc-pass --run-id=pass1 brief.md" \\
+    ${c.dim}# opus-only baseline under vendor mode${c.reset}
+    claude --print "/run-sdlc-pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md" \\
       --permission-mode acceptEdits \\
       --output-format stream-json --verbose \\
-      > passes/pass1/live-run.log
+      > examples/workforce-ops/passes/pass1/live-run.log
 
-    ${c.dim}# opus + Gemini Flash multi-model${c.reset}
-    claude --print "/run-sdlc-pass --policy=opus-plus-flash --run-id=pass2 brief.md" \\
+    ${c.dim}# opus + Gemini Flash multi-model under vendor mode${c.reset}
+    claude --print "/run-sdlc-pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md" \\
       --permission-mode acceptEdits \\
       --output-format stream-json --verbose \\
-      > passes/pass2/live-run.log
+      > examples/workforce-ops/passes/pass2/live-run.log
 
-  ${c.dim}Expected wall-clock: 1 – 1.5 hours per pass.${c.reset}
+  ${c.dim}Wall-clock per pass: about 1 – 1.5 hours.${c.reset}
 
   After a run finishes, print a summary with:
-    node tools/report.mjs passes/pass1
+    node tools/report.mjs examples/workforce-ops/passes/pass1
+
+  To run the pipeline against a brief other than the shipped one, copy
+  docs/brief-template.md, fill it in, and invoke:
+    /run-sdlc-pass --auth=vendor --study=<your-project> --run-id=pass1 path/to/your-brief.md
 
   Full docs are in docs/. Start with docs/running.md.
 `);

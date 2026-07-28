@@ -1,12 +1,12 @@
 # Understanding the output
 
-After a pass finishes, three things live under `passes/<run-id>/`:
+After a pass finishes, three things live under `examples/<study-id>/passes/<run-id>/`:
 
 - `telemetry.jsonl` — one JSON object per line, one line per LLM call. The raw data.
 - `manifest.json` — a rollup of the telemetry into totals, per-phase breakdown, and metadata.
 - Generated source under `app/` (or similar, per the phase-writer) — the actual code the run produced.
 
-And the report emitted by `node tools/report.mjs passes/<run-id>` is a rendered view of the manifest.
+And the report emitted by `node tools/report.mjs examples/<study-id>/passes/<run-id>` is a rendered view of the manifest.
 
 ## The report, section by section
 
@@ -79,7 +79,7 @@ Fields the report reads: `phase`, `input_tokens`, `input_tokens_cached`, `output
 To sum costs by phase using standard shell tools:
 
 ```bash
-jq -r 'select(.phase=="codegen") | .cost_usd' passes/pass1/telemetry.jsonl \
+jq -r 'select(.phase=="codegen") | .cost_usd' examples/workforce-ops/passes/pass1/telemetry.jsonl \
   | awk '{s+=$1} END {print s}'
 ```
 

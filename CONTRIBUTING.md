@@ -29,6 +29,8 @@ Open an issue to discuss before writing a large PR — saves everyone time.
 
 Sentence case, present tense, no emojis. The body wraps at 72 characters and explains *why*, not *what* — the diff shows the what. Keep them short and readable.
 
+Do not add `Co-Authored-By:` trailers for AI assistants. The committer identity is a bot on purpose; AI-attribution trailers add noise on a public repo. This applies to all commits, whether or not a Claude Code / other AI session helped author the change.
+
 ## Code style
 
 The tooling scripts (`tools/setup.mjs`, `tools/report.mjs`) are plain ES modules. No TypeScript there, no build step; keep them that way so someone can read and modify them without a compiler.
