@@ -53,12 +53,20 @@ hook, which matches on the MCP tool call and therefore never fires.
 
 # Operating rules
 
-0. **Pre-flight before anything else.** Call `preflight_dispatch` with the run's policy arguments and
-   halt on `ok: false`, printing its `halt_reason`. It is free, makes no model call, and is the only
-   check that proves the cheap tier is actually reachable. Skipping it does not save time — it moves
-   the failure from second zero to phase 4, after the premium-tier phases have been billed, which is
-   exactly how the 2026-08-04 run silently became an all-premium run. On `ok: true`, tell the user the
-   policy, the models, and (on Vertex) the project and region before you start.
+0. **Pre-flight before anything else.** Call `preflight_dispatch` with the run's `auth_mode` (rule 6)
+   and its policy arguments, and halt on `ok: false`, printing its `halt_reason`. It is free, makes no
+   model call, and is the only check that proves the cheap tier is actually reachable. Skipping it does
+   not save time — it moves the failure from second zero to phase 4, after the premium-tier phases have
+   been billed, which is exactly how the 2026-08-04 run silently became an all-premium run. On
+   `ok: true`, tell the user the policy, the models, and (on Vertex) the project and region before you
+   start.
+
+   `auth_mode` is not optional here, because it decides which models this run dispatches through the
+   server: under `vendor` that is every model, under `estimated` only the mechanical tier — your own
+   tier runs in this session and its adapter is never constructed. Anything reported under `warnings`
+   is a model this run does not dispatch to; print each one and continue. A warning is worth saying
+   (the same policy would not start in `vendor` mode) and is never a reason to stop a run it cannot
+   affect.
 1. **Read the brief first.** Confirm scope; if anything is ambiguous, surface it before starting.
 2. **Output paths — two directories, both supplied by the invoking command.**
    - **`code_dir`** — the generated application: source, tests, `package.json`, README. `/sdlc-run`
@@ -97,6 +105,8 @@ hook, which matches on the MCP tool call and therefore never fires.
    **Vendor-authoritative mode (`vendor`)** — `ANTHROPIC_API_KEY` MUST also be set; if it is not, abort with: "vendor mode requires ANTHROPIC_API_KEY — export it, or rerun in estimated mode." Dispatch **every** LLM call, including your own tier's calls, via `execute_with_model`. The MCP server hits the vendor API directly and records real vendor-reported `input_tokens`, `input_tokens_cached`, and `output_tokens` on the event. `cost_usd` is computed from those vendor tokens times the policy YAML's `pricing` block. Every event's `provenance` field MUST be `"vendor"`.
 
    **Estimator mode (`estimated`)** — dispatch mechanical-tier calls via MCP as usual (those events still carry vendor tokens and `provenance: "vendor"`). For your own direct-tier calls, use the character-count heuristic (≈3.8 chars/token) for tokens, source rates from the loaded policy YAML's `pricing` block, and call `log_telemetry` with `provenance: "estimated"` on the event. `ANTHROPIC_API_KEY` is deliberately ignored in this mode even if set — the user chose estimated numbers, so estimated is what is emitted.
+
+   This applies to escalations too. When a policy rule sends a packet to your own tier — `opus-plus-flash` escalates `debug` after two mechanical-tier retries — the routing decision stands, but under `estimated` the packet is handled in this conversation with the estimator, not dispatched via `execute_with_model`. Routing decides *which model*; `auth_mode` decides *which transport*. Confusing the two is what makes a run either abort on a credential it never needed or bill an API it was told not to use.
 
    **Under both modes:** `cost_usd` comes ONLY from the loaded policy YAML's `pricing` block. Never invent rates. Never use rates from your training data. Never hardcode. If the policy's `pricing` block is missing or malformed, abort the run with a clear error rather than guessing.
 7. **Stateless workers.** If a mechanical-tier result fails validation, do NOT continue a conversation. Construct a refined TaskPacket from scratch with the failure mode encoded in the instruction.

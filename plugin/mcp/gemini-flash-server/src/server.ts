@@ -24,6 +24,7 @@ import { existsSync } from "node:fs";
 
 import { loadPolicy, loadPolicyFromPath, getModel } from "./policy.js";
 import { pickModel, simulatePolicyCost } from "./routing.js";
+import { assessModels, parseAuthMode, type AuthMode } from "./preflight.js";
 import { appendEvent, normalizeDirectTierEvent } from "./telemetry.js";
 import { createAdapter } from "./adapters/index.js";
 import {
@@ -84,22 +85,22 @@ function adapterFor(policy: Policy, modelId: string) {
  *
  * Adapters land in the shared cache, so the first real dispatch reuses what this
  * built rather than paying for construction twice.
+ *
+ * WHY IT TAKES THE AUTH MODE
+ *
+ * Which models this server actually dispatches to is not a property of the policy
+ * alone — it depends on the run's auth mode, so a check that ignores the mode gets
+ * the answer wrong half the time. Under `estimated` the orchestrator runs its own
+ * tier inside the Claude Code session and never constructs that adapter, so a missing
+ * ANTHROPIC_API_KEY is inert; halting on it (which this did on 2026-08-04) is a false
+ * positive on a gate the operator is told never to override. The classification lives
+ * in preflight.ts, which is unit-testable without credentials; what stays here is the
+ * environment probing that is not.
  */
-function preflightDispatch(policy: Policy) {
-  const models = policy.models.map((m) => {
-    try {
-      adapterFor(policy, m.id);
-      return { id: m.id, model_name: m.model_name, adapter: m.adapter, ok: true as const };
-    } catch (err: any) {
-      return {
-        id: m.id,
-        model_name: m.model_name,
-        adapter: m.adapter,
-        ok: false as const,
-        error: err?.message ?? String(err),
-      };
-    }
-  });
+function preflightDispatch(policy: Policy, authMode: AuthMode) {
+  const assessment = assessModels(policy.models, authMode, (modelId) =>
+    adapterFor(policy, modelId),
+  );
 
   // Report the resolved Gemini configuration alongside the pass/fail. On a
   // healthy setup this is the line that tells the operator which project and
@@ -128,22 +129,17 @@ function preflightDispatch(policy: Policy) {
     gemini = { backend: null, error: err?.message ?? String(err), adc_file: adcFileExists ? adcPath : null };
   }
 
-  const failed = models.filter((m) => !m.ok);
   return {
-    ok: failed.length === 0,
+    ok: assessment.ok,
+    auth_mode: authMode,
     policy: { name: policy.name, version: policy.version },
-    models,
+    models: assessment.models,
     gemini,
-    // Spelled out rather than left to the caller to phrase, so the halt message
-    // an operator sees is the same one whichever model is driving the run.
-    halt_reason:
-      failed.length === 0
-        ? null
-        : `Cannot dispatch to ${failed.length} of ${models.length} models in policy '${policy.name}': ` +
-          failed.map((f) => `${f.id} (${f.error})`).join("; ") +
-          ". Do not start the run — every packet routed to these models would fall back to the premium " +
-          "tier, producing a run that costs more than a single-model baseline. Fix credentials first, " +
-          "then re-run this check.",
+    halt_reason: assessment.halt_reason,
+    // Failures on models this run will not dispatch to. Reported because they are
+    // true and useful — the same policy in vendor mode would not start — but they
+    // must never stop a run that was never going to touch them.
+    warnings: assessment.warnings,
   };
 }
 
@@ -198,18 +194,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "preflight_dispatch",
       description:
-        "Prove every model in the policy can be dispatched to, BEFORE the run spends anything. " +
-        "Constructs each adapter (where credential discovery happens and fails) and reports the " +
-        "resolved Gemini backend, project and region. Makes no API call and costs nothing. " +
-        "Call this once at the start of every run and halt on ok:false — otherwise a credential " +
-        "problem only surfaces at the first mechanical packet, after the premium phases are billed.",
+        "Prove every model this run will dispatch to can be reached, BEFORE the run spends " +
+        "anything. Constructs each adapter (where credential discovery happens and fails) and " +
+        "reports the resolved Gemini backend, project and region. Makes no API call and costs " +
+        "nothing. Call this once at the start of every run and halt on ok:false — otherwise a " +
+        "credential problem only surfaces at the first mechanical packet, after the premium " +
+        "phases are billed. Requires auth_mode: under 'vendor' every model is dispatched through " +
+        "this server and so every adapter must work, while under 'estimated' the orchestrator's " +
+        "own tier runs in-session and its adapter is never constructed — failures there are " +
+        "reported in `warnings` and do not halt.",
       inputSchema: {
         type: "object",
         properties: {
+          auth_mode: {
+            type: "string",
+            enum: ["vendor", "estimated"],
+            description: "The run's auth mode. Decides which models are actually dispatched here.",
+          },
           policy_name: { type: "string" },
           project_root: { type: "string" },
           policy_path: { type: "string" },
         },
+        required: ["auth_mode"],
       },
     },
     {
@@ -325,8 +331,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "preflight_dispatch": {
         const a = args as any;
+        // Parsed before the policy is loaded so a missing mode fails on the mode,
+        // not on some downstream symptom of it. parseAuthMode throws rather than
+        // defaulting — see preflight.ts for why neither default is safe.
+        const authMode = parseAuthMode(a.auth_mode);
         const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
-        const out = preflightDispatch(policy);
+        const out = preflightDispatch(policy, authMode);
         return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
       }
       case "load_policy": {
