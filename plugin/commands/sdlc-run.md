@@ -37,11 +37,15 @@ If several exist, list them and ask which.
 **b. A brief the user names.** If the user has a brief elsewhere, ask for the path and read it.
 
 **c. A brief that ships with the plugin.** Offer the two shipped examples, described in one line
-each so the choice is meaningful:
-- `examples/workforce-ops/brief.md` — HR and workforce operations: employees, time entries, leave
-  approval, reporting, with encrypted PII and role-based masking.
-- `examples/travel-ops/brief.md` — travel booking operations: fare rules, holds, cancellation and
-  refund computation, an append-only ledger, with encrypted traveller PII.
+each so the choice is meaningful. Both paths are inside the installed plugin, not the working
+directory — the user is typically standing in an empty folder, where no repository file exists:
+- `${CLAUDE_PLUGIN_ROOT}/examples/workforce-ops/brief.md` — HR and workforce operations: employees,
+  time entries, leave approval, reporting, with encrypted PII and role-based masking.
+- `${CLAUDE_PLUGIN_ROOT}/examples/travel-ops/brief.md` — travel booking operations: fare rules,
+  holds, cancellation and refund computation, an append-only ledger, with encrypted traveller PII.
+
+Copy the chosen file to `brief.md` in the current directory before running, so the run record sits
+beside the brief it was built from and the user can edit it for a second pass.
 
 **d. No brief anywhere — write one.** This is the normal case in an empty folder. Interview the
 user and write the brief for them. Ask, in plain language and one at a time:
@@ -54,10 +58,28 @@ user and write the brief for them. Ask, in plain language and one at a time:
 5. What is explicitly not in this build?
 6. How will they know it worked? Push for checks someone can run.
 
-Write the answers into the section layout in `docs/brief-template.md`, save it as `brief.md` in the
-current directory, show it to the user, and get their approval before continuing. The brief is the
-single input to everything downstream — a vague brief produces vague software, and the user cannot
-tell the difference until the run has finished and the money is spent.
+Write the answers into the section layout below, save it as `brief.md` in the current directory,
+show it to the user, and get their approval before continuing. The brief is the single input to
+everything downstream — a vague brief produces vague software, and the user cannot tell the
+difference until the run has finished and the money is spent.
+
+The requirements phase and the `architect` subagent read these headings by name. The wording under
+each is up to the author, but the set is fixed:
+
+```
+# Project Brief — <project name>
+## One-line summary
+## Business context
+## Scope                        (one `### 1. <Module name>` per bounded slice, capabilities bulleted)
+## Cross-cutting requirements
+## Tech stack (fixed)
+## Non-functional
+## Explicitly OUT of scope
+## Acceptance criteria
+```
+
+Either shipped example in step 2c is a filled-in instance of this layout; read one if a section's
+expected depth is unclear.
 
 # 3. Confirm where the output goes
 
