@@ -1,19 +1,21 @@
 {
-  "name": "ai-study-workforce-ops",
+  "name": "ai-sdlc-orchestrator-claude-code-harness",
   "version": "1.0.0",
-  "description": "Self-runnable AI-SDLC case study: build the Workforce Ops project on your machine using multi-model orchestration.",
+  "description": "Claude Code plugin that runs a multi-model AI-SDLC pipeline against a project brief and reports what the run spent.",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "setup": "node tools/setup.mjs",
-    "report": "node tools/report.mjs"
+    "report": "node tools/report.mjs",
+    "test": "node --test tools/test/*.test.mjs && node tools/test-mcp.mjs",
+    "verify": "node plugin/scripts/verify-setup.mjs"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tl-ai-labs/ai-study-workforce-ops.git"
+    "url": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness.git"
   },
   "dependencies": {
     "yaml": "^2.5.0"

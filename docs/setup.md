@@ -14,7 +14,7 @@ Everything you need to prepare your machine for a run.
 
 ## Anthropic (Claude) authentication
 
-The auth mode is chosen per run via the `--auth` flag on `/run-sdlc-pass` (see [running.md](running.md)). The setup wizard does not persist a mode; it only checks which API keys are visible so you know which modes are available.
+The auth mode is chosen per run: `/sdlc-run` asks you and recommends one based on the credentials it finds, and `/run-sdlc-pass` takes it from the `--auth` flag (see [running.md](running.md)). The setup wizard does not persist a mode; it only checks which API keys are visible so you know which modes are available.
 
 ### `--auth=vendor` — Anthropic-billed, reconciles to the dashboard
 
@@ -45,11 +45,31 @@ See [methodology.md](methodology.md) for the derivation and trade-off table.
 
 Required **only** if you plan to run the `opus-plus-flash` policy — the mechanical phases dispatch to Gemini 3.5 Flash.
 
-Get a free-tier API key from [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey), then export:
+Google exposes Gemini through two front doors. Either one works; the server detects which credentials are present and uses that door.
+
+**Vertex AI — if you have a Google Cloud project.** No API key. Authenticate once and the SDK signs every request with those credentials; the calls bill your project.
+
+```bash
+gcloud auth application-default login
+```
+
+The billing project is read from the credentials file that command writes. If your account has more than one project, or you authenticate with a service account instead, name it explicitly:
+
+```bash
+export GOOGLE_CLOUD_PROJECT=my-project
+```
+
+`GOOGLE_CLOUD_LOCATION` selects the Vertex endpoint. It defaults to `global`, and that default is deliberate: Vertex bills regional endpoints **+10% on every token class** for Gemini 3 and later ([Vertex pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing), effective 2026-07-01), while the rates pinned in the policy files are the flat global ones. On the default the cost this plugin reports is the cost Google bills.
+
+Pin a region if you need quota or latency the global endpoint cannot give you — the surcharge is then included in the reported cost rather than ignored, so your numbers stay honest either way.
+
+**AI Studio — if you do not.** Get an API key from [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey), then export:
 
 ```bash
 export GEMINI_API_KEY=...
 ```
+
+If both are present the API key wins, on the reasoning that exporting one is a deliberate choice for this shell while Google Cloud credentials are frequently just ambient machine state. Set `GEMINI_BACKEND=vertex` or `GEMINI_BACKEND=api-key` to override the detection.
 
 If you only plan to run the `opus-only` policy, you can skip Gemini entirely.
 
@@ -79,6 +99,6 @@ npm run build
 ```
 The build output goes to `dist/server.js`; if that exists, you are good.
 
-**`/run-sdlc-pass requires --auth=vendor|estimated`** — the flag is not optional. Add `--auth=vendor` (if `ANTHROPIC_API_KEY` is exported) or `--auth=estimated` (if you're signed in to Claude Code) to the command.
+**`this run requires auth_mode=vendor|estimated`** — the run reached the orchestrator without a mode. On `/run-sdlc-pass` the `--auth` flag is not optional: add `--auth=vendor` (if `ANTHROPIC_API_KEY` is exported) or `--auth=estimated` (if you're signed in to Claude Code). `/sdlc-run` asks for the mode, so seeing this from `/sdlc-run` means the answer was not carried through — start the command again.
 
 **Rerun the wizard** — safe to run `node tools/setup.mjs` repeatedly. It skips steps that are already done.

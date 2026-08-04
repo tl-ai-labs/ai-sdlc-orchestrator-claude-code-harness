@@ -12,7 +12,7 @@ models:
       input_cached: 0.50   # cache-read rate
       output: 25.00
     pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
-    pricing_last_verified: 2026-07-09
+    pricing_last_verified: 2026-08-04
     auth:
       env: ANTHROPIC_API_KEY
     # Vendor-declared absolute output-tokens ceiling. Adapters clamp the

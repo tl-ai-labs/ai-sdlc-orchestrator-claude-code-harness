@@ -4,7 +4,7 @@
   "description": "Multi-model SDLC orchestration plugin for Claude Code. Reads a project brief and routes SDLC phases to configured models per policy.",
   "author": { "name": "Tilicho Labs" },
   "license": "MIT",
-  "homepage": "https://github.com/tl-ai-labs/ai-study-workforce-ops",
+  "homepage": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness",
   "keywords": ["sdlc", "orchestration", "multi-model", "gemini", "opus"],
   "commands": "./commands",
   "skills": "./skills",
@@ -15,7 +15,11 @@
       "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/gemini-flash-server/dist/server.js"],
       "env": {
         "GEMINI_API_KEY": "${GEMINI_API_KEY}",
-        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+        "GOOGLE_APPLICATION_CREDENTIALS": "${GOOGLE_APPLICATION_CREDENTIALS}",
+        "GOOGLE_CLOUD_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
+        "GOOGLE_CLOUD_LOCATION": "${GOOGLE_CLOUD_LOCATION}",
+        "GEMINI_BACKEND": "${GEMINI_BACKEND}"
       }
     }
   }
