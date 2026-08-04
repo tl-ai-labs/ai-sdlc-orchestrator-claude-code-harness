@@ -76,6 +76,8 @@ One JSON object per line. Key fields:
 
 Fields the report reads: `phase`, `input_tokens`, `input_tokens_cached`, `output_tokens`, `cost_usd`, `success`. Everything else is available for downstream analysis.
 
+`latency_ms` is `null` on phases that ran on the direct tier — those execute inside Claude Code rather than being dispatched through the MCP server, so nothing ever timed them. `null` means "not measured", as distinct from a real measured `0`. Phases dispatched to a mechanical-tier model (Gemini) carry a real wall-clock figure. To compare tiers on speed, use the gaps between consecutive `ts` values, which are stamped server-side for every event.
+
 To sum costs by phase using standard shell tools:
 
 ```bash

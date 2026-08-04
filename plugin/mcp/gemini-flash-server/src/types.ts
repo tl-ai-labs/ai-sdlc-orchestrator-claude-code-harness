@@ -56,7 +56,12 @@ export interface TelemetryEvent {
   output_tokens: number;
   output_tokens_reasoning?: number; // thinking/reasoning tokens, billed at output rate; surfaced separately for cost-to-complete analysis
   cost_usd: number;
-  latency_ms: number;
+  /**
+   * Wall-clock duration of the model call. `null` on the direct tier — those phases run
+   * inside Claude Code and never reach this server, so no stopwatch ever ran. `null`
+   * means "not measured"; `0` would falsely mean "returned instantly".
+   */
+  latency_ms: number | null;
   success: boolean;
   retry_count: number;
   // Output-cap doubling telemetry. When a dispatch hits max_tokens, the adapter
