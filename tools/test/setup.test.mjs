@@ -212,6 +212,35 @@ test("both env-forwarding sites carry every name the server reads", () => {
   }
 });
 
+test("plugin.json does not re-declare a hooks file Claude Code already auto-loads", () => {
+  // Claude Code discovers `hooks/hooks.json` inside a plugin on its own. A
+  // manifest that ALSO names that path registers the same hook twice, and the
+  // CLI rejects the whole plugin — every command, agent and the MCP server
+  // included — with a bare "failed to load".
+  //
+  // This cost a real install. The manifest read fine, the hook file read fine,
+  // and nothing in this suite touched the pair, because the fault does not
+  // exist in either file alone: it only appears where our manifest meets the
+  // installed CLI. Caught on 2026-08-04 by a first-time install against Claude
+  // Code 2.1.215, after the plugin had already been published.
+  //
+  // Both halves are asserted. Dropping the declaration is only correct while
+  // the file still sits at the auto-loaded path — move or rename it with the
+  // declaration gone and the hook silently stops registering, which is a worse
+  // failure than the loud one, since a run then completes with no telemetry.
+  const manifest = readJson("plugin/.claude-plugin/plugin.json");
+  assert.ok(
+    !("hooks" in manifest),
+    "plugin.json must not declare `hooks` — Claude Code auto-loads hooks/hooks.json, " +
+      "and declaring it as well registers it twice and fails the whole plugin load",
+  );
+  assert.ok(
+    existsSync(join(ROOT, "plugin/hooks/hooks.json")),
+    "plugin/hooks/hooks.json must exist at the path Claude Code auto-loads — " +
+      "with no manifest declaration, this path is the only thing registering the hook",
+  );
+});
+
 test("adcPath matches where gcloud writes credentials", () => {
   // Kept in step by hand with defaultAdcPath() in the server and ADC_FILE in
   // tools/setup.mjs — three copies, because none of the three files can
