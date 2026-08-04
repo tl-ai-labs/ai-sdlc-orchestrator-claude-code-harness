@@ -12,7 +12,7 @@ This skill is the source of truth for the orchestrator. When invoked under `/run
 ## State machine
 
 ```
--1. preflight_dispatch              → prove every model in the policy is reachable (free, no API call)
+-1. preflight_dispatch              → prove every model this run dispatches to is reachable (free, no API call)
 0. read_brief
 1. requirements_analysis           → requirements.md
    ── GATE 1 ─────────────────────────────────────
@@ -34,14 +34,25 @@ This skill is the source of truth for the orchestrator. When invoked under `/run
 
 ## Phase -1 — preflight_dispatch (MANDATORY, before anything else)
 
-Call `preflight_dispatch` with the same `policy_name` / `project_root` / `policy_path` you will use for
-the run, and **read the result before doing anything else**.
+Call `preflight_dispatch` with the run's `auth_mode` and the same `policy_name` / `project_root` /
+`policy_path` you will use for the run, and **read the result before doing anything else**.
+
+`auth_mode` is required and is the mode already resolved for this run (rule 6) — do not omit it, do not
+guess it. It changes the answer: it is what tells pre-flight which models this run actually dispatches
+through the server.
 
 **If `ok` is false, STOP.** Print the `halt_reason` verbatim, print the failing model's `error`, and end
 the run. Do not read the brief, do not start phase 1, do not "try the mechanical tier and see". A policy
 whose cheap tier cannot be reached does not degrade into a slightly-more-expensive run — every packet
 falls back to the premium tier, and the result costs *more* than a single-model baseline while appearing
 to succeed. That is the one outcome this plugin exists to disprove, so it is worth refusing to start.
+
+**If `warnings` is non-empty, print each one and keep going.** A warning is a model this run will not
+dispatch to, so its failure cannot affect this run — under `estimated` that is the direct tier, which
+runs inside your own session and never touches the server or its credentials. Print them because they
+are true and the operator should know the same policy would not start in `vendor` mode. Do not treat a
+warning as a halt: refusing to start a viable run is not the safe error, it is the one that teaches the
+operator to override a gate that exists to protect them.
 
 **If `ok` is true**, report the configuration to the user in one line before phase 1 — the policy name,
 each model, and for Vertex the resolved project and region — then continue. This is the only point in
@@ -52,6 +63,13 @@ This call constructs each adapter, which is where credential discovery happens a
 unusable credential throws. It makes no model call and costs nothing. It exists because that
 construction used to happen lazily at the first mechanical packet — phase 4 of 9, after the premium
 phases were already billed — which is the worst possible moment to discover a setup problem.
+
+**Escalation to the direct tier under `estimated` stays in-session.** `opus-plus-flash` escalates a
+`debug` packet to the premium model after two mechanical-tier retries (`retry_count: { gte: 2 }`). In
+`estimated` mode that escalated packet is yours to handle in your own conversation, with char-count
+estimation and `provenance: "estimated"`, exactly like every other direct-tier phase — do not dispatch
+it via `execute_with_model`, and do not conclude from a pre-flight warning about that model that the
+escalation path is broken. The routing decision is unchanged; only the transport differs.
 
 ---
 
