@@ -37,9 +37,11 @@ whose model dispatch fails partway through the first run.
 ```
 
 **Type it in a new session.** Claude Code registers a plugin's slash commands
-when a session starts, so the session that just ran the install does not offer
-`/sdlc-run` — the plugin is installed, the command arrives one session late.
-Open a new session in the same folder and it is there.
+*and* starts its MCP servers when a session starts, so the session that just ran
+the install has neither. The command arrives one session late, and so does the
+bundled model server that every cost-efficient dispatch goes through — a run
+started in the install session would put all nine phases on the premium model.
+Open a new session in the same folder and both are there.
 
 `/sdlc-run` takes no arguments. It checks the install, finds a brief in the
 folder or offers the shipped examples — or writes a brief from your description

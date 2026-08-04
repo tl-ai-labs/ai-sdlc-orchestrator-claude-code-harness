@@ -54,9 +54,72 @@ export function adcPath(home = homedir()) {
 }
 
 /**
+ * The environment variables plugin.json declares as host pass-throughs.
+ *
+ * Kept in sync by hand with PLUGIN_DECLARED_ENV in
+ * mcp/gemini-flash-server/src/env.ts. This script runs before `npm ci`, so it
+ * cannot import the server's TypeScript — same constraint, and same hand-sync
+ * rule, as adcPath() above.
+ */
+export const DECLARED_ENV = [
+  "GEMINI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_PROJECT",
+  "GOOGLE_CLOUD_LOCATION",
+  "GEMINI_BACKEND",
+];
+
+/**
+ * True when a value is a shell placeholder that was never substituted — the
+ * literal string `${NAME}`, and nothing else.
+ *
+ * plugin.json declares the MCP server's environment as `"${GOOGLE_CLOUD_PROJECT}"`
+ * style pass-throughs. When the host has the variable set, the value is
+ * substituted. When it does not — the default state of anyone who launched Claude
+ * Code from the desktop app, which inherits no login shell — the placeholder is
+ * handed through verbatim. Confirmed against a live server process on 2026-08-04.
+ *
+ * That literal is truthy, which is why this check exists: without it, every
+ * credential probe below sees a "set" variable and reports a green light, and the
+ * user is told their Gemini setup is ready when no door into Gemini is actually
+ * open. Anchored at both ends so a legitimate value that merely contains a dollar
+ * sign — a path, a passphrase — is left alone.
+ */
+export function isUnexpandedPlaceholder(value) {
+  return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(String(value ?? "").trim());
+}
+
+/**
+ * A copy of `env` with unusable values dropped: absent, empty, or an unexpanded
+ * placeholder. Returns a new object rather than mutating, because this script
+ * only reports — the server does the real in-place stripping at startup
+ * (see mcp/gemini-flash-server/src/envBootstrap.ts).
+ */
+export function usableEnv(env = {}) {
+  const out = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) continue;
+    const trimmed = String(value).trim();
+    if (trimmed === "" || isUnexpandedPlaceholder(trimmed)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/** Declared variables that reached us as unexpanded placeholders, in declaration order. */
+export function unexpandedDeclaredEnv(env = {}) {
+  return DECLARED_ENV.filter((name) => isUnexpandedPlaceholder(env[name]));
+}
+
+/**
  * Whether ANY door into Gemini is open, mirroring the precedence in
  * geminiTransports.ts `selectGeminiBackend`: an API key, an explicit service
  * account file, a gcloud ADC file, or a GCP project named in the environment.
+ *
+ * Callers must pass an env that has already been through usableEnv() — this
+ * function trusts every value it is given, by design, so that the "what counts as
+ * a real value" rule lives in exactly one place.
  *
  * Split out because the previous check only looked at GEMINI_API_KEY and
  * GOOGLE_APPLICATION_CREDENTIALS, so the ordinary enterprise setup — a plain
@@ -141,9 +204,30 @@ export function evaluate({
     });
   }
 
+  // Everything below asks "is this credential set?", and the honest answer
+  // depends on discarding values that look set but carry no information. Do
+  // that once, here, so no individual check can be fooled by a placeholder.
+  const declaredPlaceholders = unexpandedDeclaredEnv(env);
+  const realEnv = usableEnv(env);
+
+  if (declaredPlaceholders.length > 0) {
+    problems.push({
+      id: "env-placeholders",
+      severity: "warning",
+      message:
+        `${declaredPlaceholders.length} plugin environment variable(s) arrived unset and unexpanded ` +
+        `(${declaredPlaceholders.join(", ")}). The server strips these at startup and falls back to ` +
+        "Application Default Credentials, so this is not itself a failure — but if you meant to set " +
+        "any of them, the value is not reaching the plugin.",
+      fix:
+        "Set them where Claude Code itself will see them — the `env` block of ~/.claude/settings.json — " +
+        "not just in a terminal profile. Claude Code launched from the desktop app inherits no login shell.",
+    });
+  }
+
   // Credentials are reported, never repaired: writing a key anywhere on the
   // user's behalf is not this script's business.
-  if (!env.ANTHROPIC_API_KEY) {
+  if (!realEnv.ANTHROPIC_API_KEY) {
     problems.push({
       id: "anthropic-key",
       severity: "warning",
@@ -154,7 +238,7 @@ export function evaluate({
     });
   }
 
-  if (!hasGeminiCredentials({ env, hasAdcFile })) {
+  if (!hasGeminiCredentials({ env: realEnv, hasAdcFile })) {
     problems.push({
       id: "gemini-credentials",
       severity: "warning",

@@ -9,14 +9,29 @@
  *   load_policy          — return the active policy (debug/inspection)
  */
 
+// MUST stay the first import. It strips environment variables that arrived as
+// unexpanded `${VAR}` placeholders — which is what plugin.json's env pass-throughs
+// hand us whenever the host never exported them — and ES module evaluation order is
+// the only thing guaranteeing it happens before any SDK reads process.env. See
+// envBootstrap.ts and env.ts for the full account of what this prevented.
+import "./envBootstrap.js";
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+
+import { existsSync } from "node:fs";
 
 import { loadPolicy, loadPolicyFromPath, getModel } from "./policy.js";
 import { pickModel, simulatePolicyCost } from "./routing.js";
 import { appendEvent, normalizeDirectTierEvent } from "./telemetry.js";
 import { createAdapter } from "./adapters/index.js";
+import {
+  defaultAdcPath,
+  selectGeminiBackend,
+  resolveGcpProject,
+  resolveGcpLocation,
+} from "./adapters/geminiTransports.js";
 import type { TaskPacket, TelemetryEvent, Policy } from "./types.js";
 
 const SERVER_NAME = "gemini-flash-server";
@@ -43,6 +58,93 @@ function adapterFor(policy: Policy, modelId: string) {
   const adapter = createAdapter(model);
   adapterCache.set(modelId, adapter);
   return adapter;
+}
+
+/**
+ * Prove every model in the policy can actually be dispatched to — before the run
+ * spends anything.
+ *
+ * WHY THIS EXISTS
+ *
+ * Adapters are constructed lazily, on first dispatch. GeminiFlashAdapter's
+ * constructor is where credential discovery happens and where it throws when no
+ * door into Gemini is open — a deliberate design, because construction was meant
+ * to happen "during setup validation, before any premium-tier phase has been
+ * billed". Nothing ever called it that early. In practice the first construction
+ * happened at the first mechanical packet, which is phase 4 of 9, roughly twenty
+ * minutes and several dollars of premium-tier work into a run. The 2026-08-04
+ * live run failed exactly there: every mechanical dispatch died, the orchestrator
+ * fell back to the premium tier, and the run silently became the opposite of the
+ * cost demonstration it exists to produce.
+ *
+ * Calling this first closes that gap. It constructs every adapter the loaded
+ * policy names, which is the same code path a real dispatch takes, and reports
+ * the resolved Gemini configuration. It makes no API call and costs nothing, so
+ * there is no reason not to run it every time.
+ *
+ * Adapters land in the shared cache, so the first real dispatch reuses what this
+ * built rather than paying for construction twice.
+ */
+function preflightDispatch(policy: Policy) {
+  const models = policy.models.map((m) => {
+    try {
+      adapterFor(policy, m.id);
+      return { id: m.id, model_name: m.model_name, adapter: m.adapter, ok: true as const };
+    } catch (err: any) {
+      return {
+        id: m.id,
+        model_name: m.model_name,
+        adapter: m.adapter,
+        ok: false as const,
+        error: err?.message ?? String(err),
+      };
+    }
+  });
+
+  // Report the resolved Gemini configuration alongside the pass/fail. On a
+  // healthy setup this is the line that tells the operator which project and
+  // region the run is about to bill, which is worth seeing before it starts and
+  // not only afterwards in the telemetry.
+  const adcPath = defaultAdcPath();
+  const adcFileExists = existsSync(adcPath);
+  let gemini: Record<string, unknown>;
+  try {
+    const keyEnvName =
+      policy.models.find((m) => m.adapter === "mcp:gemini-flash-server")?.auth?.env ??
+      "GEMINI_API_KEY";
+    const choice = selectGeminiBackend({ env: process.env, keyEnvName, adcFileExists });
+    gemini = {
+      backend: choice.backend,
+      reason: choice.reason,
+      adc_file: adcFileExists ? adcPath : null,
+      ...(choice.backend === "vertex-adc"
+        ? {
+            project: resolveGcpProject(process.env, adcPath),
+            location: resolveGcpLocation(process.env),
+          }
+        : {}),
+    };
+  } catch (err: any) {
+    gemini = { backend: null, error: err?.message ?? String(err), adc_file: adcFileExists ? adcPath : null };
+  }
+
+  const failed = models.filter((m) => !m.ok);
+  return {
+    ok: failed.length === 0,
+    policy: { name: policy.name, version: policy.version },
+    models,
+    gemini,
+    // Spelled out rather than left to the caller to phrase, so the halt message
+    // an operator sees is the same one whichever model is driving the run.
+    halt_reason:
+      failed.length === 0
+        ? null
+        : `Cannot dispatch to ${failed.length} of ${models.length} models in policy '${policy.name}': ` +
+          failed.map((f) => `${f.id} (${f.error})`).join("; ") +
+          ". Do not start the run — every packet routed to these models would fall back to the premium " +
+          "tier, producing a run that costs more than a single-model baseline. Fix credentials first, " +
+          "then re-run this check.",
+  };
 }
 
 const server = new Server(
@@ -91,6 +193,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: { telemetry_path: { type: "string" }, event: { type: "object" } },
         required: ["telemetry_path", "event"],
+      },
+    },
+    {
+      name: "preflight_dispatch",
+      description:
+        "Prove every model in the policy can be dispatched to, BEFORE the run spends anything. " +
+        "Constructs each adapter (where credential discovery happens and fails) and reports the " +
+        "resolved Gemini backend, project and region. Makes no API call and costs nothing. " +
+        "Call this once at the start of every run and halt on ok:false — otherwise a credential " +
+        "problem only surfaces at the first mechanical packet, after the premium phases are billed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          policy_name: { type: "string" },
+          project_root: { type: "string" },
+          policy_path: { type: "string" },
+        },
       },
     },
     {
@@ -203,6 +322,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // server-side before persisting. See normalizeDirectTierEvent for the full why.
         appendEvent(a.telemetry_path, normalizeDirectTierEvent(a.event as TelemetryEvent));
         return { content: [{ type: "text", text: "ok" }] };
+      }
+      case "preflight_dispatch": {
+        const a = args as any;
+        const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
+        const out = preflightDispatch(policy);
+        return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
       }
       case "load_policy": {
         const a = args as any;
