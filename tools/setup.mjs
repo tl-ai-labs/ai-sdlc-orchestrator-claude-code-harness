@@ -149,8 +149,17 @@ for (const a of ["orchestrator", "architect", "senior-reviewer", "security-revie
 ok("Slash command + all subagents installed under ./.claude/");
 
 // Register the bundled MCP server so plain `claude` (no --plugin-dir flag)
-// discovers `mcp__gemini-flash-server__*` tools. Required for vendor mode
-// dispatch and for opus-plus-flash's Gemini routing.
+// discovers its tools. Required for vendor mode dispatch and for
+// opus-plus-flash's Gemini routing.
+//
+// The bare key below is what makes this the *clone* route: a server registered
+// through a project `.mcp.json` keeps its key verbatim, so its tools surface as
+// `mcp__gemini-flash-server__*`. The plugin route does not — Claude Code
+// namespaces a plugin-provided MCP server with the plugin's own name, so
+// `/plugin install` yields `mcp__plugin_multi-model-orchestrator_gemini-flash-server__*`
+// instead. The orchestrator's frontmatter grants both spellings for exactly
+// this reason; see "The MCP tool names depend on how the plugin was installed"
+// in plugin/agents/orchestrator.md. Do not "simplify" either side to one name.
 const mcpJsonPath = join(ROOT, ".mcp.json");
 const mcpEntry = {
   mcpServers: {
