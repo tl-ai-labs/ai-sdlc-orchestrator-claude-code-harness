@@ -36,6 +36,11 @@ whose model dispatch fails partway through the first run.
 /sdlc-run
 ```
 
+**Type it in a new session.** Claude Code registers a plugin's slash commands
+when a session starts, so the session that just ran the install does not offer
+`/sdlc-run` — the plugin is installed, the command arrives one session late.
+Open a new session in the same folder and it is there.
+
 `/sdlc-run` takes no arguments. It checks the install, finds a brief in the
 folder or offers the shipped examples — or writes a brief from your description
 if you do not have one — shows which model each phase will run on, confirms the
