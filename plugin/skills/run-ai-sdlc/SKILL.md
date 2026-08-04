@@ -12,6 +12,7 @@ This skill is the source of truth for the orchestrator. When invoked under `/run
 ## State machine
 
 ```
+-1. preflight_dispatch              → prove every model in the policy is reachable (free, no API call)
 0. read_brief
 1. requirements_analysis           → requirements.md
    ── GATE 1 ─────────────────────────────────────
@@ -28,6 +29,29 @@ This skill is the source of truth for the orchestrator. When invoked under `/run
 9. generate_final_report              → updates manifest.json with artifacts + rollups
    ── GATE 4 (final acceptance) ───────────────────
 ```
+
+---
+
+## Phase -1 — preflight_dispatch (MANDATORY, before anything else)
+
+Call `preflight_dispatch` with the same `policy_name` / `project_root` / `policy_path` you will use for
+the run, and **read the result before doing anything else**.
+
+**If `ok` is false, STOP.** Print the `halt_reason` verbatim, print the failing model's `error`, and end
+the run. Do not read the brief, do not start phase 1, do not "try the mechanical tier and see". A policy
+whose cheap tier cannot be reached does not degrade into a slightly-more-expensive run — every packet
+falls back to the premium tier, and the result costs *more* than a single-model baseline while appearing
+to succeed. That is the one outcome this plugin exists to disprove, so it is worth refusing to start.
+
+**If `ok` is true**, report the configuration to the user in one line before phase 1 — the policy name,
+each model, and for Vertex the resolved project and region — then continue. This is the only point in
+the run where the operator can see what is about to be billed and to which project, while it is still
+free to stop.
+
+This call constructs each adapter, which is where credential discovery happens and where a missing or
+unusable credential throws. It makes no model call and costs nothing. It exists because that
+construction used to happen lazily at the first mechanical packet — phase 4 of 9, after the premium
+phases were already billed — which is the worst possible moment to discover a setup problem.
 
 ---
 

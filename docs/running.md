@@ -1,9 +1,10 @@
 # Running
 
 **If you installed the plugin rather than cloning the repo, you do not need this
-page to start.** Type `/sdlc-run` in a new session — slash commands register when
-a session starts, so the session that installed the plugin does not offer it yet.
-It takes no arguments, asks for whatever it
+page to start.** Type `/sdlc-run` in a new session — slash commands register and plugin MCP
+servers start when a session starts, so the session that installed the plugin has
+neither the command nor the bundled model server that mechanical phases dispatch
+through. It takes no arguments, asks for whatever it
 needs, and picks the settings described below on your behalf. This page is the
 reference for `/run-sdlc-pass`, the same run with every setting exposed as a
 flag — useful for repeat runs, for scripting, and for understanding what

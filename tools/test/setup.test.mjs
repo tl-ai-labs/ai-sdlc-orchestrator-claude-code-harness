@@ -22,6 +22,10 @@ import {
   evaluate,
   adcPath,
   hasGeminiCredentials,
+  isUnexpandedPlaceholder,
+  usableEnv,
+  unexpandedDeclaredEnv,
+  DECLARED_ENV,
 } from "../../plugin/scripts/verify-setup.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -372,4 +376,128 @@ test("the README documents the install a first-time user is given, with the real
     readme.includes(`cache/${mkt.name}/${mkt.plugins[0].name}/`),
     "the repair command in the README must use the published marketplace and plugin names"
   );
+});
+
+// ─── unexpanded environment placeholders ──────────────────────────────
+//
+// plugin.json declares the MCP server's environment as `"${VAR}"` pass-throughs.
+// When the host never exported the variable, the literal placeholder is handed
+// through instead of an empty value — verified against a live server process on
+// 2026-08-04. The literal is truthy, so before this check every credential probe
+// below saw a "set" variable and gave the run a green light while no door into
+// Gemini was actually open. The run then spent its premium phases and died at the
+// first mechanical dispatch.
+
+test("isUnexpandedPlaceholder recognises a placeholder and nothing else", () => {
+  assert.equal(isUnexpandedPlaceholder("${GOOGLE_CLOUD_PROJECT}"), true);
+  assert.equal(isUnexpandedPlaceholder("  ${GEMINI_BACKEND}  "), true);
+  // Anchored on both ends, so a real value containing a dollar sign survives.
+  assert.equal(isUnexpandedPlaceholder("ai-studies-console"), false);
+  assert.equal(isUnexpandedPlaceholder("prefix-${VAR}"), false);
+  assert.equal(isUnexpandedPlaceholder("${VAR}-suffix"), false);
+  assert.equal(isUnexpandedPlaceholder("$VAR"), false);
+  assert.equal(isUnexpandedPlaceholder(undefined), false);
+});
+
+test("usableEnv drops placeholders and empties, keeps real values", () => {
+  const out = usableEnv({
+    GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT}",
+    GOOGLE_CLOUD_LOCATION: "",
+    GEMINI_API_KEY: "   ",
+    ANTHROPIC_API_KEY: "sk-real",
+  });
+  assert.deepEqual(out, { ANTHROPIC_API_KEY: "sk-real" });
+});
+
+test("usableEnv does not mutate its input", () => {
+  // This script only reports; the in-place stripping is the server's job
+  // (mcp/gemini-flash-server/src/envBootstrap.ts).
+  const env = { GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT}" };
+  usableEnv(env);
+  assert.equal(env.GOOGLE_CLOUD_PROJECT, "${GOOGLE_CLOUD_PROJECT}");
+});
+
+test("a placeholder no longer counts as a Gemini credential", () => {
+  // THE REGRESSION. Every one of these was reported as "credentials present"
+  // before the fix, because the literal is truthy.
+  const poisoned = {
+    GEMINI_API_KEY: "${GEMINI_API_KEY}",
+    GOOGLE_APPLICATION_CREDENTIALS: "${GOOGLE_APPLICATION_CREDENTIALS}",
+    GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT}",
+  };
+  assert.equal(hasGeminiCredentials({ env: poisoned }), true, "the raw env still fools it, by design");
+  assert.equal(
+    hasGeminiCredentials({ env: usableEnv(poisoned) }),
+    false,
+    "once cleaned, no door is open and the user must be told so",
+  );
+});
+
+test("evaluate reports no Gemini credentials when every value is a placeholder", () => {
+  const { problems } = evaluate({
+    nodeMajor: 20,
+    hasClaudeCli: true,
+    hasNodeModules: true,
+    hasDist: true,
+    hasAdcFile: false,
+    env: {
+      GEMINI_API_KEY: "${GEMINI_API_KEY}",
+      GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT}",
+      GEMINI_BACKEND: "${GEMINI_BACKEND}",
+    },
+  });
+  assert.ok(
+    problems.some((p) => p.id === "gemini-credentials"),
+    "a false green light here is what caused the 2026-08-04 all-premium run",
+  );
+  const placeholders = problems.find((p) => p.id === "env-placeholders");
+  assert.ok(placeholders, "the user must be told their variables are not reaching the plugin");
+  assert.equal(placeholders.severity, "warning", "the server self-heals, so this alone must not block");
+  assert.match(placeholders.fix, /settings\.json/, "the fix must name where Claude Code actually reads env");
+});
+
+test("evaluate stays quiet about placeholders when there are none", () => {
+  const { problems } = evaluate({
+    nodeMajor: 20,
+    hasClaudeCli: true,
+    hasNodeModules: true,
+    hasDist: true,
+    hasAdcFile: true,
+    env: { ANTHROPIC_API_KEY: "sk-real" },
+  });
+  assert.equal(problems.some((p) => p.id === "env-placeholders"), false);
+  assert.equal(problems.some((p) => p.id === "gemini-credentials"), false);
+});
+
+test("unexpandedDeclaredEnv reports only declared names, in declaration order", () => {
+  const found = unexpandedDeclaredEnv({
+    GEMINI_BACKEND: "${GEMINI_BACKEND}",
+    GEMINI_API_KEY: "${GEMINI_API_KEY}",
+    UNRELATED_VAR: "${UNRELATED_VAR}",
+  });
+  assert.deepEqual(found, ["GEMINI_API_KEY", "GEMINI_BACKEND"]);
+});
+
+test("the declared list matches what plugin.json actually forwards", () => {
+  // Two files, no import between them. If a pass-through is added to plugin.json
+  // and not here, its placeholder silently keeps the old broken behaviour.
+  const manifest = JSON.parse(
+    readFileSync(join(ROOT, "plugin/.claude-plugin/plugin.json"), "utf8"),
+  );
+  const forwarded = Object.keys(manifest.mcpServers["gemini-flash-server"].env);
+  assert.deepEqual([...DECLARED_ENV].sort(), forwarded.sort());
+});
+
+test("the server sanitizes exactly the names this script declares", () => {
+  // verify-setup.mjs runs before `npm ci` and cannot import the server's
+  // TypeScript, so the two lists are hand-synced. This is the only thing
+  // stopping them drifting apart.
+  const envTs = readFileSync(
+    join(ROOT, "plugin/mcp/gemini-flash-server/src/env.ts"),
+    "utf8",
+  );
+  const block = envTs.slice(envTs.indexOf("PLUGIN_DECLARED_ENV"));
+  for (const name of DECLARED_ENV) {
+    assert.ok(block.includes(name), `${name} is declared here but the server never strips it`);
+  }
 });
