@@ -1,20 +1,57 @@
 # AI-SDLC Orchestrator — Claude Code Harness
 
-**Requires:** Node 20+, [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), and either an Anthropic API key (`--auth=vendor`) or a Claude Code subscription (`--auth=estimated`).
+**Requires:** Node 20+, [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), and either an Anthropic API key or a Claude Code subscription. Gemini access — either Vertex AI on a Google Cloud project (no key) or an AI Studio API key — is needed only by the multi-model policy.
 
 ## Overview
 
 A Claude Code plugin that runs a multi-model AI-SDLC pipeline (requirements →
 design → codegen → tests → senior review → security review) against a project
-brief. Ships with the Workforce Operations brief under
-[examples/workforce-ops/](examples/workforce-ops/) as the reference case.
+brief. Two briefs ship with the repo: Workforce Operations under
+[examples/workforce-ops/](examples/workforce-ops/) is the reference case, and
+Travel Booking Operations under [examples/travel-ops/](examples/travel-ops/) is
+a second domain — booking, cancellation and refund handling — for demonstrating
+the pipeline on travel-sector problems.
 
 The repo contains the plugin, the reference brief, a setup wizard, and a
 reporter. Runs use your own Anthropic (and optionally Google) API keys.
 Telemetry, generated code, and reports are written under the repo; nothing is
 uploaded.
 
+## Install
+
+Two prompts, in an empty folder, with Claude Code open. Nothing to clone and no
+commands to type.
+
+```
+Setup this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness
+```
+
+Claude Code follows [SETUP.md](SETUP.md): it registers the marketplace, installs
+the plugin, builds the bundled model server, and reports what is ready and what
+is missing. The build step is not optional — the plugin manifest points at build
+output that no clone carries, so an install that skips it registers a command
+whose model dispatch fails partway through the first run.
+
+```
+/sdlc-run
+```
+
+`/sdlc-run` takes no arguments. It checks the install, finds a brief in the
+folder or offers the shipped examples — or writes a brief from your description
+if you do not have one — shows which model each phase will run on, confirms the
+plan, and only then starts spending. Generated code lands in `./src`; the run
+record, including telemetry and the cost report, lands in `./.sdlc/`.
+
+To check an existing install at any time, or to repair one after
+`/plugin update` replaces the plugin files:
+
+```bash
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --fix
+```
+
 ## Quickstart
+
+Working from a clone instead, with the full flag surface:
 
 ```bash
 git clone https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness.git
@@ -64,9 +101,9 @@ size, and HITL redirections.
 
 ## Running the pipeline on a different brief
 
-`/run-sdlc-pass` reads the brief path as a positional argument. Passing a
-markdown file other than the shipped one runs the orchestrator against that
-file instead.
+`/sdlc-run` handles this by asking — point it at your file, or let it write one
+from a description. The rest of this section covers the same thing through
+`/run-sdlc-pass`, which takes the brief path as a positional argument.
 
 ```
 /run-sdlc-pass --auth=vendor --study=my-project --run-id=pass1 path/to/my-brief.md
@@ -81,7 +118,9 @@ phase and architect subagent expect is in
 
 ## Auth mode
 
-`--auth` is required on every `/run-sdlc-pass` invocation. Two values:
+Every run records tokens in one of two modes. `/sdlc-run` puts the choice to you
+and recommends one based on the credentials it finds; `/run-sdlc-pass` requires
+`--auth` on every invocation. Two values:
 
 - **`--auth=vendor`** — needs `ANTHROPIC_API_KEY`. Every LLM call is dispatched via the bundled MCP server and billed to your Anthropic account; the report's dollar totals match your `console.anthropic.com` dashboard for the run's time window.
 - **`--auth=estimated`** — uses your Claude Code subscription for direct-tier work. No API key required. Direct-tier tokens are char-count estimated at ~3.8 chars/token; the report is an approximation and will not match a vendor-billed run exactly.
@@ -117,6 +156,7 @@ report at the end shows what the run spent.
 - [docs/understanding-output.md](docs/understanding-output.md) — reading the report and the raw files
 - [docs/methodology.md](docs/methodology.md) — how tokens and costs are recorded, what is measured vs estimated
 - [examples/workforce-ops/](examples/workforce-ops/) — the reference brief and any recorded passes
+- [examples/travel-ops/](examples/travel-ops/) — a second brief: booking, cancellation and refund handling
 
 ## License
 

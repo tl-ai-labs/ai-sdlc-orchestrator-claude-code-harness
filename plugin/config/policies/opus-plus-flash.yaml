@@ -9,16 +9,27 @@ models:
     model_name: claude-opus-4-7
     pricing: { input: 5.00, input_cached: 0.50, output: 25.00 }
     pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
-    pricing_last_verified: 2026-07-09
+    pricing_last_verified: 2026-08-04
     auth: { env: ANTHROPIC_API_KEY }
     max_output_tokens_absolute: 32000
   - id: gemini-flash
     adapter: mcp:gemini-flash-server
     model_name: gemini-3.5-flash
     display_name: gemini-3.5-flash
+    # The flat rate, which is what both default doors bill: AI Studio, and
+    # Vertex on its "global" endpoint. Verified 2026-08-04 against both pages
+    # below. Vertex adds +10% on every token class for REGIONAL endpoints
+    # (Gemini 3 and later, effective 2026-07-01) — the adapter defaults to the
+    # global endpoint so these numbers hold, and applies the surcharge to the
+    # cost it reports if GOOGLE_CLOUD_LOCATION pins a region. Do not hand-edit
+    # a x1.10 into this block; see applyVertexSurcharge in geminiTransports.ts.
     pricing: { input: 1.50, input_cached: 0.15, output: 9.00 }
-    pricing_source: https://ai.google.dev/gemini-api/docs/pricing
-    pricing_last_verified: 2026-07-09
+    pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
+    pricing_last_verified: 2026-08-04
+    # Names the API-key env var for the AI Studio path. It is not a
+    # requirement: when it is unset the adapter falls through to Vertex AI and
+    # signs with Application Default Credentials instead — same model, same
+    # rates, no key. See plugin/mcp/gemini-flash-server/src/adapters/geminiTransports.ts.
     auth: { env: GEMINI_API_KEY }
     max_output_tokens_absolute: 8192
 

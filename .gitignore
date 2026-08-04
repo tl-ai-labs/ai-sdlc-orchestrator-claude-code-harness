@@ -22,8 +22,12 @@ plugin/mcp/gemini-flash-server/*.mjs
 _raw_*.txt
 _raw_*.json
 
-# Run outputs — each user generates their own passes under
-# examples/<study-id>/passes/<run-id>/
+# Run outputs — each user generates their own. /sdlc-run writes the generated
+# application to src/ and the run record to .sdlc/ in whatever directory it was
+# started from; a run started inside a clone would otherwise offer both for
+# commit. /run-sdlc-pass writes under examples/<study-id>/passes/<run-id>/.
+/src/
+/.sdlc/
 examples/*/passes/*/
 
 # Generated MCP registration — contains absolute paths + copied API keys,

@@ -82,6 +82,19 @@ Every attempt emits its own TelemetryEvent with `attempt_number`, `ceiling_used`
 
 To verify any of these, walk `telemetry.jsonl` by hand — every line is inspectable.
 
+## How Gemini's token counts are read
+
+Google's `usageMetadata` has two fields that look alike and behave in opposite ways. Both are handled explicitly, because getting either wrong moves the headline number.
+
+**`cachedContentTokenCount` is a *subset* of `promptTokenCount`.** The prompt count is the whole prompt, cached portion included. Cost is computed on disjoint counts — fresh input at the full rate, cached input at the read rate — so the cached count is subtracted from the prompt count before pricing. Skipping that subtraction bills the cached tokens twice and makes an effective cache look more expensive than no cache at all.
+
+**`thoughtsTokenCount` is a *sibling* of `candidatesTokenCount`.** Gemini 3.x reasons before it answers, and Google bills that reasoning at the output rate — but reports it outside the candidate count. Billed output is therefore `candidatesTokenCount + thoughtsTokenCount`. This is not a rounding correction: on a verification call against `gemini-3.5-flash` on 2026-08-04, one answer token came with 97 thinking tokens. Reading the candidate count alone would have reported 1 output token where Google billed 98, at the output tier's $9/M — understating precisely the model whose lower cost the multi-model pass exists to demonstrate.
+
+Two consequences worth knowing when reading a report:
+
+- **Thinking tokens count against the packet's output ceiling.** A packet can spend its whole ceiling reasoning and return no text, which the vendor reports as `MAX_TOKENS`. That is a genuine truncation and the doubling loop handles it as one — the attempt is billed, because the reasoning happened.
+- **Gemini also caches implicitly, without being asked.** A packet resembling one sent minutes earlier can come back with a non-zero cached count under no explicit cache. Costs stay correct either way, since the cached count is read from the response rather than inferred from whether a cache was requested. But it means a cold-vs-warm pair measured back to back understates the gap: the "cold" call may already be partly warm.
+
 ## Pricing table provenance
 
 The rates that turn tokens into dollars live in the `pricing:` block of each policy YAML under `plugin/config/policies/`. Each block also carries:

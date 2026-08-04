@@ -10,6 +10,7 @@
 
 import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, copyFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
@@ -17,6 +18,12 @@ import { stdin as input, stdout as output } from "node:process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
+
+// Where `gcloud auth application-default login` writes user credentials.
+// Same path as plugin/scripts/verify-setup.mjs `adcPath()` and the server's
+// `defaultAdcPath()` — three copies because none of the three can import the
+// others (different package roots, and this runs before the server is built).
+const ADC_FILE = join(homedir(), ".config", "gcloud", "application_default_credentials.json");
 
 // ─── small helpers ────────────────────────────────────────────────────
 const c = { dim: "\x1b[2m", bold: "\x1b[1m", green: "\x1b[32m", amber: "\x1b[33m", red: "\x1b[31m", reset: "\x1b[0m" };
@@ -88,11 +95,18 @@ if (process.env.ANTHROPIC_API_KEY) {
   hint("  export ANTHROPIC_API_KEY=sk-ant-...");
   hint("--auth=estimated works without an API key when signed in to a Claude Code subscription.");
 }
+// Gemini is reachable through either of Google's two front doors, so report
+// on both. Vertex needs no key at all — `gcloud auth application-default
+// login` writes a credentials file under $HOME and the SDK signs with it —
+// which is why an absent GEMINI_API_KEY is not, on its own, a problem.
 if (process.env.GEMINI_API_KEY) {
-  ok("GEMINI_API_KEY is set — opus-plus-flash policy is available.");
+  ok("GEMINI_API_KEY is set — opus-plus-flash routes Gemini through AI Studio.");
+} else if (existsSync(ADC_FILE) || process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+  ok("Google Cloud credentials found — opus-plus-flash routes Gemini through Vertex AI.");
 } else {
-  hint("GEMINI_API_KEY not set. Only needed for the opus-plus-flash policy.");
-  hint("  Free-tier key: https://aistudio.google.com/app/apikey");
+  hint("No Gemini credentials. Only needed for the opus-plus-flash policy.");
+  hint("  Vertex AI (no key): gcloud auth application-default login");
+  hint("  AI Studio key:      https://aistudio.google.com/app/apikey");
 }
 
 step(4, "Bundled MCP server dependencies");
@@ -143,10 +157,25 @@ const mcpEntry = {
     "gemini-flash-server": {
       command: "node",
       args: [join(ROOT, "plugin", "mcp", "gemini-flash-server", "dist", "server.js")],
-      env: {
-        ...(process.env.GEMINI_API_KEY ? { GEMINI_API_KEY: process.env.GEMINI_API_KEY } : {}),
-        ...(process.env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } : {}),
-      },
+      // A stdio MCP server does not inherit the full parent environment, so
+      // every variable the server reads has to be forwarded explicitly. The
+      // Google block covers the Vertex door: a service-account file, the
+      // billing project, the region, and the backend override. None is
+      // required — with a plain `gcloud auth application-default login` the
+      // server finds the credentials file under $HOME and reads the project
+      // out of it — but a service-account or multi-project setup needs them.
+      env: Object.fromEntries(
+        [
+          "ANTHROPIC_API_KEY",
+          "GEMINI_API_KEY",
+          "GOOGLE_APPLICATION_CREDENTIALS",
+          "GOOGLE_CLOUD_PROJECT",
+          "GOOGLE_CLOUD_LOCATION",
+          "GEMINI_BACKEND",
+        ]
+          .filter((name) => process.env[name])
+          .map((name) => [name, process.env[name]]),
+      ),
     },
   },
 };

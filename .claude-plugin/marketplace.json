@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "tilicho-ai-labs",
+  "description": "Multi-model AI-SDLC orchestration for Claude Code.",
+  "owner": {
+    "name": "Tilicho Labs",
+    "url": "https://tilicho.in"
+  },
+  "plugins": [
+    {
+      "name": "multi-model-orchestrator",
+      "source": "./plugin",
+      "description": "Runs a multi-model SDLC pipeline against a project brief. Routes judgment phases to Claude and mechanical phases to a cost-efficient model per policy, and reports what the run spent.",
+      "version": "0.1.0",
+      "author": { "name": "Tilicho Labs" },
+      "homepage": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness",
+      "repository": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness",
+      "license": "MIT",
+      "category": "development",
+      "keywords": ["sdlc", "orchestration", "multi-model", "gemini", "opus"]
+    }
+  ]
+}
