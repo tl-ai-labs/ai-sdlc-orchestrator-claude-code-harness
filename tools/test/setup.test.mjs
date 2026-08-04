@@ -325,6 +325,42 @@ test("SETUP.md quotes the names the catalogue actually publishes", () => {
   );
 });
 
+test("every document that hands a fresh install to /sdlc-run says to open a new session", () => {
+  // Claude Code builds its slash-command list when a session starts, and
+  // nothing written to disk afterwards can add a command to a session that is
+  // already running. So a successful install leaves `/sdlc-run` genuinely
+  // absent from the very session that performed it. The plugin is fine; the
+  // command arrives one session late.
+  //
+  // Caught on 2026-08-04 during the first end-to-end install: setup reported
+  // success, the documented next prompt was `/sdlc-run`, and it was not in the
+  // menu. The install session then offered `/reload-plugins`, which the
+  // desktop app does not have — leaving a working install and no way forward.
+  //
+  // Both halves are asserted for every document that points at prompt 2,
+  // because the dead end is reachable from any one of them on its own.
+  for (const file of ["SETUP.md", "README.md", "docs/running.md"]) {
+    const text = readFileSync(join(ROOT, file), "utf8");
+    assert.match(
+      text,
+      /new session/i,
+      `${file} sends the user to /sdlc-run without saying it needs a session opened ` +
+        `after the install — the command will not be in the menu of the one that installed it`,
+    );
+    // These documents put every command the reader is meant to type inside a
+    // fenced block, and refer to commands in prose with inline backticks. So
+    // the fences are the surface that matters: SETUP.md names
+    // `/reload-plugins` on purpose, to tell the installing session not to
+    // offer it, and that sentence must not be mistaken for the offence.
+    const fenced = [...text.matchAll(/```[\s\S]*?```/g)].map((m) => m[0]).join("\n");
+    assert.ok(
+      !fenced.includes("/reload-plugins"),
+      `${file} presents /reload-plugins as a command to type — the desktop app has no such ` +
+        `command, and a dead end is worse than the restart it was meant to avoid`,
+    );
+  }
+});
+
 test("the README documents the install a first-time user is given, with the real names", () => {
   // The README is the first thing anyone reads, and it is the one place the
   // repair command can be copied from without an install already working.

@@ -30,11 +30,13 @@ The marketplace registers under the name `tilicho-ai-labs`.
 /plugin install multi-model-orchestrator@tilicho-ai-labs
 ```
 
-Then reload so the command becomes available in the current session:
+The plugin's files are in place from here on, but its slash commands are not yet available in
+this session, and no reload makes them available: Claude Code builds that list when a session
+starts. Do not go looking for a reload command — `/reload-plugins` does not exist in the desktop
+app, and running it wastes the user's turn on an error. Step 5 says what to tell them instead.
 
-```
-/reload-plugins
-```
+Continue with the build below. It runs as a shell command and does not need the plugin's slash
+commands to exist.
 
 ## 3. Build the bundled model server
 
@@ -86,6 +88,17 @@ that the next step is a single prompt:
 
 It takes no arguments. It asks for whatever it needs — including the project brief, which it will
 write from a description if the user does not have one.
+
+**Say this in the same breath: the command is not available in this session.** Claude Code builds
+its list of slash commands when a session starts, and nothing written to disk afterwards can add
+one to a session already running. The install is complete and correct; `/sdlc-run` simply arrives
+one session late. Tell the user to open a new session in the same folder and type it there, where
+it will be in the menu.
+
+Do not send the user to `/reload-plugins`. It does not exist in the Claude Code desktop app, so on
+the surface where this is most likely to be read it produces a flat "isn't available in this
+environment" and leaves the user with a working install and no way forward — a worse dead end than
+the restart it was meant to save.
 
 ---
 
