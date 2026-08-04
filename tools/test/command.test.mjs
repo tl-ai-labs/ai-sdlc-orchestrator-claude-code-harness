@@ -208,14 +208,129 @@ test("the orchestrator runs the generated tests where the generated code is", ()
   assert.match(npmLine, /<code_dir>/, "tests run from code_dir, not from the run-record directory");
 });
 
-test("the agent frontmatter still grants the tools the run depends on", () => {
+// The orchestrator's granted tools, parsed into an exact set. Substring checks
+// are not good enough here: `mcp__gemini-flash-server__execute_with_model` and
+// `mcp__plugin_multi-model-orchestrator_gemini-flash-server__execute_with_model`
+// share a long tail, and the whole point of these tests is to tell them apart.
+function grantedTools() {
   const { head } = frontmatter(read(AGENT));
-  for (const tool of [
+  const line = head.split("\n").find((l) => l.startsWith("tools:"));
+  assert.ok(line, "the orchestrator frontmatter must declare a tools: line");
+  return new Set(
+    line
+      .slice("tools:".length)
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean),
+  );
+}
+
+test("the agent frontmatter grants the MCP tools under BOTH install-route names", () => {
+  // The bundled server's tool names are not fixed — they depend on how the user
+  // installed the plugin, and the repo supports two routes:
+  //
+  //   /plugin install      → Claude Code namespaces a plugin-provided MCP server
+  //                          with the plugin's own name, giving
+  //                          mcp__plugin_multi-model-orchestrator_gemini-flash-server__*
+  //   clone + setup.mjs    → registers the server in a project .mcp.json under a
+  //                          bare key, giving mcp__gemini-flash-server__*
+  //
+  // Only one resolves in any given session; the other is silently absent, which
+  // is exactly why both must be granted. Naming a tool that does not exist is
+  // harmless — Claude Code ignores it rather than erroring.
+  //
+  // Caught on 2026-08-04 on the first plugin-route run: the frontmatter listed
+  // only the bare (clone-route) names, so nothing bound, and the orchestrator
+  // fell back to driving the plugin's compiled modules over Bash. The old
+  // version of this test asserted the bare names alone, so it passed green
+  // through the entire failure.
+  const tools = grantedTools();
+  for (const short of ["execute_with_model", "log_telemetry", "load_policy"]) {
+    for (const full of [
+      `mcp__gemini-flash-server__${short}`,
+      `mcp__plugin_multi-model-orchestrator_gemini-flash-server__${short}`,
+    ]) {
+      assert.ok(
+        tools.has(full),
+        `the orchestrator cannot dispatch without ${full} — one install route ` +
+          `produces exactly this name, and an ungranted tool never binds`,
+      );
+    }
+  }
+});
+
+test("the orchestrator can spawn every subagent the workflow tells it to invoke", () => {
+  // SKILL.md delegates three phases to dedicated subagents. Delegation needs a
+  // subagent-spawning tool, and TaskCreate/TaskUpdate/TaskList are not it —
+  // those are the to-do list. The spawning tool is Agent (Task on older
+  // builds); both are granted so the plugin works either way.
+  //
+  // Caught on 2026-08-04: the orchestrator held the Task* to-do tools and no
+  // spawn tool at all, so architect.md, senior-reviewer.md and
+  // security-reviewer.md were unreachable files and every phase collapsed into
+  // the orchestrator itself — while the shipped docs described a four-agent
+  // pipeline.
+  const tools = grantedTools();
+  assert.ok(
+    tools.has("Agent") || tools.has("Task"),
+    "the orchestrator delegates phases to subagents but holds no tool that can spawn one " +
+      "(TaskCreate/TaskUpdate/TaskList are the to-do list, not delegation)",
+  );
+
+  const skill = read("plugin", "skills", "run-ai-sdlc", "SKILL.md");
+  for (const sub of ["architect", "senior-reviewer", "security-reviewer"]) {
+    assert.match(
+      skill,
+      new RegExp(`\\b${sub}\\b`),
+      `SKILL.md no longer mentions the ${sub} subagent — if a phase stopped being ` +
+        `delegated, delete its agent file rather than leaving it unreachable`,
+    );
+    assert.ok(
+      existsSync(join(ROOT, "plugin", "agents", `${sub}.md`)),
+      `SKILL.md delegates a phase to ${sub}, which has no agent file`,
+    );
+  }
+});
+
+test("every agent that must find files on its own can actually search", () => {
+  // Glob and Grep are not present on every Claude Code build — the desktop app
+  // in use on 2026-08-04 has neither — and an unresolvable tool name is dropped
+  // from an agent's surface silently. An agent left holding only Read cannot
+  // even list the directory it was handed, and Read-only blindness looks
+  // exactly like a clean review.
+  //
+  // Bash is the search path that exists everywhere, so any agent whose job
+  // starts from a directory rather than a named file must hold it.
+  const needsSearch = ["senior-reviewer", "security-reviewer"];
+  for (const name of needsSearch) {
+    const { head } = frontmatter(read("plugin", "agents", `${name}.md`));
+    const line = head.split("\n").find((l) => l.startsWith("tools:")) ?? "";
+    const tools = new Set(line.slice("tools:".length).split(",").map((t) => t.trim()));
+    assert.ok(
+      tools.has("Bash"),
+      `${name} is handed a directory to review but has no Bash — if this build drops ` +
+        `Glob and Grep it is left with Read, which cannot enumerate a directory`,
+    );
+  }
+});
+
+test("the telemetry hook matches the dispatch tool under both install routes", () => {
+  // The hook fires on the MCP dispatch call, so its matcher carries the same
+  // two-name problem as the frontmatter. A matcher that matches nothing fails
+  // silently — indistinguishable from a hook with nothing to do — so the only
+  // way to catch it is here.
+  const hooks = JSON.parse(read("plugin", "hooks", "hooks.json"));
+  const entries = hooks.hooks?.PostToolUse ?? [];
+  assert.ok(entries.length > 0, "the telemetry hook must still be registered on PostToolUse");
+
+  for (const name of [
     "mcp__gemini-flash-server__execute_with_model",
-    "mcp__gemini-flash-server__log_telemetry",
-    "mcp__gemini-flash-server__load_policy",
+    "mcp__plugin_multi-model-orchestrator_gemini-flash-server__execute_with_model",
   ]) {
-    assert.ok(head.includes(tool), `the orchestrator cannot dispatch without ${tool}`);
+    assert.ok(
+      entries.some((e) => new RegExp(e.matcher).test(name)),
+      `no PostToolUse matcher fires on ${name} — telemetry would be lost for that install route`,
+    );
   }
 });
 

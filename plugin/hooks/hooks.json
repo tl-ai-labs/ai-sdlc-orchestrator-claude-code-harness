@@ -2,7 +2,8 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "mcp__gemini-flash-server__execute_with_model",
+        "_comment": "The matcher is a regex, and it has to be, because the bundled MCP server's tool name is not fixed. Claude Code namespaces a plugin-provided MCP server with the plugin's own name, so a /plugin install produces mcp__plugin_multi-model-orchestrator_gemini-flash-server__execute_with_model, while a clone whose .mcp.json registers the server directly (tools/setup.mjs) produces the bare mcp__gemini-flash-server__execute_with_model. The optional group covers both routes. Matching only the bare name — as this file did until 2026-08-04 — meant the telemetry hook never fired on any plugin install, and did so silently, because a hook that matches nothing is indistinguishable from a hook with nothing to do.",
+        "matcher": "mcp__(plugin_multi-model-orchestrator_)?gemini-flash-server__execute_with_model",
         "hooks": [
           {
             "type": "command",

@@ -94,9 +94,9 @@ Every attempt emits its own TelemetryEvent with `attempt_number`, `ceiling_used`
 
 For each packet, in dependency order:
 
-**Direct-tier work (subagent handles it, no MCP dispatch):** the orchestrator (Opus) writes the file directly. Estimate tokens via `chars/3.8` heuristic for both inputs and outputs; source pricing constants from the loaded policy's `pricing:` block for this model; log a TelemetryEvent via `mcp__gemini-flash-server__log_telemetry`.
+**Direct-tier work (subagent handles it, no MCP dispatch):** the orchestrator (Opus) writes the file directly. Estimate tokens via `chars/3.8` heuristic for both inputs and outputs; source pricing constants from the loaded policy's `pricing:` block for this model; log a TelemetryEvent via `log_telemetry`.
 
-**Mechanical-tier work (routed to another model):** call `mcp__gemini-flash-server__execute_with_model` with the packet, `policy_name`, and `cache_context`. The server routes per policy. Validate the returned structured output against the schema; if invalid, construct a *refined* packet (new id, `retry_count+1`, with the validation error appended to instruction) and re-dispatch. After 2 mechanical-tier retries fail, the policy escalates to the subagent's own tier automatically (rule with `retry_count: { gte: 2 }`).
+**Mechanical-tier work (routed to another model):** call `execute_with_model` with the packet, `policy_name`, and `cache_context`. The server routes per policy. Validate the returned structured output against the schema; if invalid, construct a *refined* packet (new id, `retry_count+1`, with the validation error appended to instruction) and re-dispatch. After 2 mechanical-tier retries fail, the policy escalates to the subagent's own tier automatically (rule with `retry_count: { gte: 2 }`).
 
 Write the returned file content to disk at the packet's stated `artifact_path`.
 
@@ -175,7 +175,7 @@ Read all events in `<telemetry_path>`. Build rollup manifest using the `buildMan
 
 ## Telemetry contract (every LLM call)
 
-Log via `mcp__gemini-flash-server__log_telemetry` with `telemetry_path` = `<output_dir>/telemetry.jsonl`. Event shape:
+Log via `log_telemetry` with `telemetry_path` = `<output_dir>/telemetry.jsonl`. Event shape:
 
 ```json
 {

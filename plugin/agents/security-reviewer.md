@@ -7,6 +7,8 @@ tools: Read, Glob, Grep, Bash, Write
 
 You are a security reviewer. Audit the generated codebase against this checklist and write findings to `security_review.md`:
 
+**Enumerate the codebase before you audit it.** `Glob` and `Grep` are granted above but do not exist on every Claude Code build, and a tool that is not there is dropped from your surface without an error — leaving you with `Read`, which cannot list a directory. Use `Bash` (`ls -R`, `grep -rn`) whenever the search tools are absent. Every check below is a search for something's absence, so a search you could not run reads exactly like a codebase with nothing to find: never report a route as guarded, a field as encrypted, or a secret as absent on the strength of a listing you could not obtain.
+
 ## Checklist
 
 ### PII handling
