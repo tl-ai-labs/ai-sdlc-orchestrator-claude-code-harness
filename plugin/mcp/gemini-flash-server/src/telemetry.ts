@@ -11,6 +11,33 @@ export function appendEvent(jsonlPath: string, ev: TelemetryEvent): void {
   appendFileSync(jsonlPath, JSON.stringify(ev) + "\n", "utf-8");
 }
 
+/**
+ * Normalize a telemetry event handed to us by a *model* rather than measured by this
+ * server — i.e. the direct tier, the phases the orchestrator runs itself inside Claude
+ * Code, which never pass through `execute_with_model`.
+ *
+ * WHY: a model has no clock and no stopwatch, so every `ts` and `latency_ms` it supplies
+ * is invented. The 2026-08-04 run recorded each direct-tier event as
+ * `2026-08-04T00:00:00.000Z` with `latency_ms: 0` — a plausible-looking placeholder that
+ * is silently wrong. It matters beyond cosmetics because `buildManifest` derives the
+ * run's `started_at`/`ended_at` by sorting on `ts`, so placeholder midnights corrupt the
+ * reported duration of the whole run.
+ *
+ * WHAT: stamp arrival time server-side (the append happens within a second or two of the
+ * call, so this is accurate to the phase), and record latency as `null` rather than `0`.
+ * Null is the honest value — this server never saw the call, so no wall-clock exists for
+ * it — whereas `0` reads downstream as "returned instantly".
+ *
+ * Events emitted by `execute_with_model` are untouched by this: that path times the
+ * adapter call for real and carries its own `ts` and `latency_ms`.
+ */
+export function normalizeDirectTierEvent(
+  ev: TelemetryEvent,
+  now: Date = new Date(),
+): TelemetryEvent {
+  return { ...ev, ts: now.toISOString(), latency_ms: null };
+}
+
 export function readEvents(jsonlPath: string): TelemetryEvent[] {
   if (!existsSync(jsonlPath)) return [];
   const lines = readFileSync(jsonlPath, "utf-8").split("\n").filter(Boolean);

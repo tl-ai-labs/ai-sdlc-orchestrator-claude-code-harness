@@ -15,7 +15,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 import { loadPolicy, loadPolicyFromPath, getModel } from "./policy.js";
 import { pickModel, simulatePolicyCost } from "./routing.js";
-import { appendEvent } from "./telemetry.js";
+import { appendEvent, normalizeDirectTierEvent } from "./telemetry.js";
 import { createAdapter } from "./adapters/index.js";
 import type { TaskPacket, TelemetryEvent, Policy } from "./types.js";
 
@@ -198,7 +198,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "log_telemetry": {
         const a = args as any;
-        appendEvent(a.telemetry_path, a.event as TelemetryEvent);
+        // The caller here is a model reporting a call it made itself (the direct tier),
+        // so its `ts` and `latency_ms` are guesses, not measurements — overwrite both
+        // server-side before persisting. See normalizeDirectTierEvent for the full why.
+        appendEvent(a.telemetry_path, normalizeDirectTierEvent(a.event as TelemetryEvent));
         return { content: [{ type: "text", text: "ok" }] };
       }
       case "load_policy": {
