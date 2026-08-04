@@ -36,13 +36,20 @@ If several exist, list them and ask which.
 
 **b. A brief the user names.** If the user has a brief elsewhere, ask for the path and read it.
 
-**c. A brief that ships with the plugin.** Offer the two shipped examples, described in one line
-each so the choice is meaningful. Both paths are inside the installed plugin, not the working
-directory — the user is typically standing in an empty folder, where no repository file exists:
+**c. A brief that ships with the plugin.** Offer the three shipped examples, described in one line
+each so the choice is meaningful. Say plainly how long each takes, because the difference is
+minutes versus hours and the user is paying for it. All three paths are inside the installed
+plugin, not the working directory — the user is typically standing in an empty folder, where no
+repository file exists:
+- `${CLAUDE_PLUGIN_ROOT}/examples/quick-demo/brief.md` — a one-endpoint ping service on Express,
+  no database. The one to pick to see the pipeline end to end: minutes, not hours, and a fraction
+  of the cost.
 - `${CLAUDE_PLUGIN_ROOT}/examples/workforce-ops/brief.md` — HR and workforce operations: employees,
-  time entries, leave approval, reporting, with encrypted PII and role-based masking.
+  time entries, leave approval, reporting, with encrypted PII and role-based masking. Five modules;
+  expect an hour or more.
 - `${CLAUDE_PLUGIN_ROOT}/examples/travel-ops/brief.md` — travel booking operations: fare rules,
   holds, cancellation and refund computation, an append-only ledger, with encrypted traveller PII.
+  Five modules; expect an hour or more.
 
 Copy the chosen file to `brief.md` in the current directory before running, so the run record sits
 beside the brief it was built from and the user can edit it for a second pass.

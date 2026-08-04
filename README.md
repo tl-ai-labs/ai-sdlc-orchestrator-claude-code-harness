@@ -6,11 +6,14 @@
 
 A Claude Code plugin that runs a multi-model AI-SDLC pipeline (requirements →
 design → codegen → tests → senior review → security review) against a project
-brief. Two briefs ship with the repo: Workforce Operations under
+brief. Three briefs ship with the repo. Ping Service under
+[examples/quick-demo/](examples/quick-demo/) is one endpoint on Express with no
+database — the one to run first, because it exercises every phase in minutes
+rather than hours. Workforce Operations under
 [examples/workforce-ops/](examples/workforce-ops/) is the reference case, and
 Travel Booking Operations under [examples/travel-ops/](examples/travel-ops/) is
-a second domain — booking, cancellation and refund handling — for demonstrating
-the pipeline on travel-sector problems.
+a second domain — booking, cancellation and refund handling. Both of those
+describe five modules, so expect a run of an hour or more.
 
 The repo contains the plugin, the reference brief, a setup wizard, and a
 reporter. Runs use your own Anthropic (and optionally Google) API keys.
@@ -162,6 +165,7 @@ report at the end shows what the run spent.
 - [docs/brief-template.md](docs/brief-template.md) — the section layout the pipeline expects in a brief file
 - [docs/understanding-output.md](docs/understanding-output.md) — reading the report and the raw files
 - [docs/methodology.md](docs/methodology.md) — how tokens and costs are recorded, what is measured vs estimated
+- [examples/quick-demo/](examples/quick-demo/) — the smallest brief: one endpoint, no database, minutes to run
 - [examples/workforce-ops/](examples/workforce-ops/) — the reference brief and any recorded passes
 - [examples/travel-ops/](examples/travel-ops/) — a second brief: booking, cancellation and refund handling
 
