@@ -18,6 +18,12 @@ Workforce Ops case that ships with the repo.
 Related: [running.md](running.md#bring-your-own-brief) for the full workflow,
 [methodology.md](methodology.md) for what the pipeline records.
 
+This page is for people working in a clone. `/sdlc-run` runs from wherever the
+user is standing — usually an empty folder — and `docs/` is not copied on
+install, so the wizard carries the same section set inline in
+`plugin/commands/sdlc-run.md`. **A heading changed here must be changed there
+too**; `tools/test/command.test.mjs` compares the two and fails if they drift.
+
 ---
 
 ## Section set

@@ -78,15 +78,103 @@ test("/sdlc-run checks the install before it can spend anything", () => {
   assert.ok(existsSync(join(ROOT, "plugin", "scripts", "verify-setup.mjs")), "the script the wizard calls must exist");
 });
 
-test("/sdlc-run offers every brief the repo actually ships", () => {
+test("/sdlc-run offers every brief the repo actually ships, by its installed path", () => {
   const body = frontmatter(read(WIZARD)).body;
 
+  // The wizard runs from wherever the user is standing — normally an empty
+  // folder with no repository anywhere near it. A bare `examples/<name>/brief.md`
+  // resolves against that folder and finds nothing, so every brief the wizard
+  // offers has to be named by its location inside the installed plugin.
   const shipped = readdirSync(join(ROOT, "examples"), { withFileTypes: true })
     .filter((e) => e.isDirectory() && existsSync(join(ROOT, "examples", e.name, "brief.md")))
-    .map((e) => `examples/${e.name}/brief.md`);
+    .map((e) => e.name);
 
-  for (const brief of shipped) {
-    assert.ok(body.includes(brief), `the wizard must offer ${brief} — a shipped brief the user cannot pick is dead weight`);
+  assert.ok(shipped.length > 0, "examples/ must contain at least one <name>/brief.md to offer");
+
+  for (const name of shipped) {
+    const offered = `\${CLAUDE_PLUGIN_ROOT}/examples/${name}/brief.md`;
+    assert.ok(
+      body.includes(offered),
+      `the wizard must offer ${offered} — a brief named by a repo-relative path is unreachable from an empty folder`,
+    );
+    assert.ok(
+      existsSync(join(ROOT, "plugin", "examples", name, "brief.md")),
+      `plugin/examples/${name}/brief.md is missing — only plugin/ is copied on install, ` +
+        `so a brief left at the repo root ships to nobody`,
+    );
+  }
+});
+
+test("every plugin file the wizard names is inside the part of the repo that ships", () => {
+  const body = frontmatter(read(WIZARD)).body;
+
+  // The general form of the bug above, and of the duplicate-hooks bug before
+  // it: the repository is not the installation. `plugin/` is copied to the
+  // plugin cache and nothing else is, so a wizard instruction that reaches for
+  // a repo-root file is a promise the installed plugin cannot keep. Every path
+  // the wizard hands the user is checked here against what actually ships.
+  //
+  // Caught on 2026-08-04, when a first install offered two example briefs that
+  // existed only at the repo root and could not be opened from an empty folder.
+  const referenced = [...body.matchAll(/\$\{CLAUDE_PLUGIN_ROOT\}(\/[\w./-]+)/g)].map((m) => m[1]);
+  assert.ok(referenced.length > 0, "the wizard must reference at least one shipped path");
+
+  for (const rel of new Set(referenced)) {
+    assert.ok(
+      existsSync(join(ROOT, "plugin", rel)),
+      `the wizard points at \${CLAUDE_PLUGIN_ROOT}${rel}, which does not exist under plugin/ — ` +
+        `it would resolve to a missing file on every install`,
+    );
+  }
+});
+
+test("the briefs shipped inside the plugin are the briefs kept at the repo root", () => {
+  // Two copies exist because they serve two entry points: `/run-sdlc-pass` is
+  // run from a clone and reads `examples/<name>/brief.md`, while `/sdlc-run` is
+  // run from an empty folder and can only read what the install copied. Neither
+  // location can be dropped, so this asserts they never drift — editing one and
+  // forgetting the other fails here rather than shipping a stale brief to the
+  // only users who cannot see the repository.
+  const names = readdirSync(join(ROOT, "examples"), { withFileTypes: true })
+    .filter((e) => e.isDirectory() && existsSync(join(ROOT, "examples", e.name, "brief.md")))
+    .map((e) => e.name);
+
+  for (const name of names) {
+    const canonical = read("examples", name, "brief.md");
+    const shipped = read("plugin", "examples", name, "brief.md");
+    assert.equal(
+      shipped,
+      canonical,
+      `plugin/examples/${name}/brief.md has drifted from examples/${name}/brief.md — ` +
+        `copy the root file over the plugin one`,
+    );
+  }
+});
+
+test("the section layout the wizard dictates is the one the brief template documents", () => {
+  const body = frontmatter(read(WIZARD)).body;
+  const template = read("docs", "brief-template.md");
+
+  // The wizard spells the layout out inline rather than pointing at
+  // docs/brief-template.md, because that file documents the clone workflow —
+  // it opens with `/run-sdlc-pass` usage and repo-relative output paths that
+  // mean nothing in an empty folder, and it does not ship with the plugin
+  // either. Inlining removes the dependency; this test removes the drift it
+  // would otherwise allow, in both directions.
+  const headings = template
+    .slice(template.indexOf("## Section set"))
+    .split("\n")
+    .filter((l) => /^## /.test(l) && l.trim() !== "## Section set")
+    .map((l) => l.trim());
+
+  assert.ok(headings.length >= 8, "the template's section set must still list the brief's headings");
+
+  for (const heading of headings) {
+    assert.ok(
+      body.includes(heading),
+      `the wizard's inline layout is missing ${heading} — a brief written without it loses a ` +
+        `section the requirements phase and the architect subagent read by name`,
+    );
   }
 });
 
