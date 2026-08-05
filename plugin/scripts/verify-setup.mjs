@@ -23,11 +23,23 @@
  * outside our control and have changed before.
  *
  * Usage:
- *   node verify-setup.mjs          check and report; exit 1 if unusable
- *   node verify-setup.mjs --fix    check, repair what is repairable, re-check
+ *   node verify-setup.mjs                  check and report; exit 1 if unusable
+ *   node verify-setup.mjs --fix            check, repair what is repairable, re-check
+ *   node verify-setup.mjs --enable-agent   route the mechanical tier to Gemini as an
+ *                                          AGENT, then build what that needs (implies --fix)
+ *   node verify-setup.mjs --disable-agent  put it back on the model path
+ *   ...--user                              write the selection machine-wide instead of
+ *                                          for this folder only
+ *
+ * The two agent flags exist because the selection is an environment variable with
+ * a two-part spelling, and until they existed the only way to set it on an
+ * installed plugin was to hand-edit a JSON file with a format documented nowhere
+ * the user was looking. Hand-editing produced exactly the failure it looks like it
+ * would: the leaf name written without its slot, a check that reported green, and a
+ * run that died at policy load with the premium phases already billed.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -165,6 +177,55 @@ export function mcpPaths(pluginRoot) {
 export const AGENT_WORKER_MODEL_ID = "flash-agsdk-worker";
 
 /**
+ * The select slot that leaf belongs to — the left-hand side of the spec.
+ *
+ * Kept beside the leaf id and under the same hand-sync rule, because a spec is
+ * only valid as a PAIR. Writing the leaf name on its own is the single most
+ * likely mistake anyone makes here: it is the part that carries meaning, the
+ * part every document quotes, and the part that reads like a complete answer.
+ * It is not one, and until this script grew `--enable-agent` there was nothing
+ * that spelled the pair correctly on the user's behalf.
+ */
+export const AGENT_WORKER_SLOT = "gemini-flash";
+
+/** The full, valid spec that selects the agent path. Never assembled by hand. */
+export const AGENT_WORKER_SELECT = `${AGENT_WORKER_SLOT}=${AGENT_WORKER_MODEL_ID}`;
+
+/**
+ * Split an SDLC_SELECT spec into pairs, and say which pieces are not pairs.
+ *
+ * This deliberately mirrors `parseSelectOverrides` in src/routing.ts, including
+ * its validity rule (`slot=option`, comma-separated, neither side empty). The
+ * duplication is forced — this script runs before `npm ci`, so it cannot import
+ * the server — but the DISAGREEMENT it replaced was worse than the duplication.
+ *
+ * Before this function existed, the two sides read the same string differently:
+ * the server threw on anything without an `=`, while `selectsAgentWorker` below
+ * just found no match and returned false. So a spec of `flash-agsdk-worker` —
+ * the leaf name alone, the obvious guess — produced a setup check that reported
+ * green, skipped building the Python environment because it believed the agent
+ * path was not selected, and handed the user a run that died at policy load with
+ * the premium phases already paid for. A malformed spec is now a blocking
+ * problem, which is what it always was in fact.
+ */
+export function parseSelectSpec(spec) {
+  const pairs = {};
+  const invalid = [];
+  if (!spec || !String(spec).trim()) return { pairs, invalid };
+  for (const part of String(spec).split(",")) {
+    const piece = part.trim();
+    if (!piece) continue;
+    const eq = piece.indexOf("=");
+    if (eq <= 0 || eq === piece.length - 1) {
+      invalid.push(piece);
+      continue;
+    }
+    pairs[piece.slice(0, eq).trim()] = piece.slice(eq + 1).trim();
+  }
+  return { pairs, invalid };
+}
+
+/**
  * Where the agent worker's Python environment lives.
  *
  * Fourth copy of this path, and the reason is the same as adcPath()'s: nothing
@@ -196,11 +257,59 @@ export function workerPaths(pluginRoot) {
  * worker would otherwise read as a selection OF it.
  */
 export function selectsAgentWorker(env = {}) {
+  const { pairs } = parseSelectSpec(usableEnv(env).SDLC_SELECT);
+  return Object.values(pairs).includes(AGENT_WORKER_MODEL_ID);
+}
+
+/**
+ * The blocking problem raised by a spec the server will refuse to parse.
+ *
+ * Returns null when there is nothing wrong, so the caller reads as a list of
+ * conditions rather than a branch. The message quotes the offending piece
+ * verbatim and spells the correct pair, because the whole failure is that the
+ * two look interchangeable and only one of them is.
+ */
+export function selectSpecProblem(env = {}) {
   const spec = usableEnv(env).SDLC_SELECT;
-  if (!spec) return false;
-  return String(spec)
-    .split(",")
-    .some((pair) => pair.split("=").slice(1).join("=").trim() === AGENT_WORKER_MODEL_ID);
+  const { invalid } = parseSelectSpec(spec);
+  if (invalid.length === 0) return null;
+
+  // A bare leaf name is the specific mistake worth naming, because the fix is
+  // not "read the syntax" but "you were one word short".
+  const bareLeaf = invalid.includes(AGENT_WORKER_MODEL_ID);
+  return {
+    id: "select-spec",
+    severity: "blocking",
+    message:
+      `SDLC_SELECT is set to '${spec}', which is not a valid selection. ` +
+      `Each entry must be spelled 'slot=option'; ${invalid
+        .map((p) => `'${p}'`)
+        .join(", ")} ${invalid.length === 1 ? "is" : "are"} not.` +
+      (bareLeaf
+        ? ` '${AGENT_WORKER_MODEL_ID}' is the option, not the whole selection — it needs the slot in front of it.`
+        : ""),
+    fix:
+      `Set it to '${AGENT_WORKER_SELECT}' for the agent path, or remove it for the model path. ` +
+      `Re-run this script with --enable-agent to have it written correctly for you.`,
+  };
+}
+
+/**
+ * Can this install use the agent path at all?
+ *
+ * The Antigravity worker calls Vertex with `vertex=True` and application default
+ * credentials — see the client construction in worker/gemini_worker.py. There is
+ * no API-key door into it. So an install whose only Gemini credential is a
+ * `GEMINI_API_KEY` can select the agent path, build the Python environment, pass
+ * every offline check, and still fail at the first delegated packet with an
+ * authentication error, having been told at no point that the combination it
+ * chose cannot work.
+ *
+ * Callers must pass an env already through usableEnv(), same contract as
+ * hasGeminiCredentials().
+ */
+export function hasVertexCredentials({ env = {}, hasAdcFile = false } = {}) {
+  return Boolean(env.GOOGLE_APPLICATION_CREDENTIALS || hasAdcFile || env.GOOGLE_CLOUD_PROJECT);
 }
 
 /**
@@ -317,6 +426,37 @@ export function evaluate({
     });
   }
 
+  // A spec the server cannot parse, checked before anything downstream of it.
+  // It comes first among the agent-path problems because everything below reads
+  // the same variable: while it is malformed, the agent path is neither on nor
+  // off, and every other message about it would be guessing.
+  const specProblem = selectSpecProblem(realEnv);
+  if (specProblem) problems.push(specProblem);
+
+  // Selected the agent path with no way to authenticate to it. The worker builds
+  // its client with `vertex=True` and application default credentials and has no
+  // API-key branch at all, so an AI-Studio-only install fails at the first
+  // delegated packet — after the premium phases are billed — with an auth error
+  // that says nothing about the choice that caused it.
+  if (selectsAgentWorker(realEnv) && !hasVertexCredentials({ env: realEnv, hasAdcFile })) {
+    problems.push({
+      id: "agent-worker-credentials",
+      severity: "blocking",
+      message:
+        `SDLC_SELECT routes the mechanical tier to '${AGENT_WORKER_MODEL_ID}', which reaches Gemini ` +
+        "through Vertex AI and application default credentials only. This install has no Vertex " +
+        "credentials" +
+        (realEnv.GEMINI_API_KEY
+          ? " — GEMINI_API_KEY is the AI Studio path, and the agent worker has no way to use it."
+          : ".") +
+        " Every delegated task would fail to authenticate.",
+      fix:
+        "Run `gcloud auth application-default login` (and set GOOGLE_CLOUD_PROJECT if the account " +
+        "has several projects). To stay on the model path instead, which does work with an AI " +
+        "Studio key, re-run this script with --disable-agent.",
+    });
+  }
+
   // The agent path's prerequisites. Blocking rather than warning, because this
   // install has already declared it will route mechanical work there: the
   // adapter's constructor refuses without a working interpreter, pre-flight
@@ -400,7 +540,15 @@ function observeAgentWorker(pluginRoot, env) {
   return { hasVenv: true, sdkImportable: false, detail: stderr };
 }
 
-function observe(pluginRoot) {
+/**
+ * `env` is a parameter rather than a read of `process.env` because
+ * `--enable-agent` writes a selection this process will never see: settings
+ * files are read by Claude Code at session start, so the variable only reaches
+ * the environment on the NEXT session. Passing the selection in lets the same
+ * invocation that turns the agent path on also build the Python environment it
+ * needs, instead of reporting green and leaving a second command to be run.
+ */
+function observe(pluginRoot, env = process.env) {
   const { nodeModules, distEntry } = mcpPaths(pluginRoot);
   return {
     nodeMajor: nodeMajorFrom(process.versions.node),
@@ -408,8 +556,8 @@ function observe(pluginRoot) {
     hasNodeModules: existsSync(nodeModules),
     hasDist: existsSync(distEntry),
     hasAdcFile: existsSync(adcPath()),
-    env: process.env,
-    agentWorker: observeAgentWorker(pluginRoot, process.env),
+    env,
+    agentWorker: observeAgentWorker(pluginRoot, env),
   };
 }
 
@@ -550,6 +698,188 @@ export function agentProbeHint(pluginRoot, env = {}, ok = true) {
   );
 }
 
+/**
+ * Which settings file a selection should be written into.
+ *
+ * Claude Code reads four, in this precedence order: managed, local
+ * (`.claude/settings.local.json`), project (`.claude/settings.json`), user
+ * (`~/.claude/settings.json`). All four accept an `env` block, and it applies to
+ * the session and to every subprocess it spawns — which is what the bundled MCP
+ * server is.
+ *
+ * The default is the LOCAL project file, and the choice matters:
+ *   - not user-level, because the agent path is a per-project decision and a
+ *     machine-wide switch silently changes every other folder the user opens.
+ *   - not the shared project file, because that one is committed. Whether the
+ *     agent path works depends on the machine — its Python, its entitlement —
+ *     so a teammate who clones the repo would inherit a selection that may be
+ *     wrong for them, and inherit it invisibly.
+ * `--user` is offered for the person who genuinely wants it everywhere, and
+ * says so out loud when it writes.
+ */
+export function settingsPathFor(scope, cwd, home = homedir()) {
+  return scope === "user"
+    ? join(home, ".claude", "settings.json")
+    : join(cwd, ".claude", "settings.local.json");
+}
+
+/**
+ * Return a copy of a settings object with the agent selection added or removed.
+ *
+ * Pure, so the merge rules are testable without touching anyone's real
+ * configuration — and these rules are the whole point of the function:
+ *   - every other key, and every other variable in `env`, is preserved. This
+ *     file is the user's, not ours; it commonly holds their API keys.
+ *   - disabling removes the pair for OUR slot only, keeping any other slot the
+ *     user selected. It removes SDLC_SELECT entirely when nothing is left,
+ *     rather than leaving an empty string behind, because an empty spec and an
+ *     absent one must behave identically and only one of them looks intentional.
+ *   - an existing malformed spec is discarded rather than merged. It could not
+ *     have been doing anything except breaking policy load, and preserving it
+ *     would mean this command cannot repair the exact mistake it exists for.
+ */
+export function withAgentSelection(settings, enabled) {
+  const next = { ...(settings ?? {}) };
+  const env = { ...(next.env ?? {}) };
+  const { pairs } = parseSelectSpec(env.SDLC_SELECT);
+
+  if (enabled) pairs[AGENT_WORKER_SLOT] = AGENT_WORKER_MODEL_ID;
+  else if (pairs[AGENT_WORKER_SLOT] === AGENT_WORKER_MODEL_ID) delete pairs[AGENT_WORKER_SLOT];
+
+  const spec = Object.entries(pairs)
+    .map(([slot, option]) => `${slot}=${option}`)
+    .join(",");
+
+  if (spec) env.SDLC_SELECT = spec;
+  else delete env.SDLC_SELECT;
+
+  if (Object.keys(env).length > 0) next.env = env;
+  else delete next.env;
+  return next;
+}
+
+/**
+ * Is this `.mcp.json` entry the bundled server this repo builds?
+ *
+ * Matched on the server SCRIPT rather than the entry's key, because the key is
+ * the user's to choose and only the script identifies the program. A folder that
+ * registers some other MCP server must not have its environment rewritten by a
+ * flag about our routing.
+ */
+export function isBundledServerEntry(server) {
+  const argv = Array.isArray(server?.args) ? server.args.join(" ") : "";
+  return argv.includes(join("gemini-flash-server", "dist", "server.js"));
+}
+
+/**
+ * Return a copy of an `.mcp.json` document with the selection applied to every
+ * entry that is our bundled server.
+ *
+ * WHY THIS EXISTS AT ALL. The clone route registers the server through a project
+ * `.mcp.json` whose `env` block is EXHAUSTIVE — a stdio MCP server does not
+ * inherit the parent environment, so anything not listed there never reaches the
+ * server (see the env block written by tools/setup.mjs). On that route a
+ * selection written only into a settings file is read by Claude Code, applied to
+ * the session, and then dropped at the server boundary: the flag reports success
+ * and changes nothing. Writing both places is what makes one command correct on
+ * both installation routes.
+ *
+ * The plugin route has no `.mcp.json` of ours, so `updated` comes back empty
+ * there and the settings write is the whole of the change.
+ */
+export function withMcpSelection(config, enabled) {
+  const servers = config?.mcpServers;
+  if (!servers || typeof servers !== "object") return { config, updated: [] };
+
+  const nextServers = { ...servers };
+  const updated = [];
+  for (const [name, server] of Object.entries(servers)) {
+    if (!isBundledServerEntry(server)) continue;
+    // A server entry carries its variables under `env`, exactly as a settings
+    // file does, so the same merge rules apply verbatim — including preserving
+    // the API keys tools/setup.mjs forwarded into that block.
+    nextServers[name] = withAgentSelection(server, enabled);
+    updated.push(name);
+  }
+  return { config: updated.length ? { ...config, mcpServers: nextServers } : config, updated };
+}
+
+/**
+ * Write the selection into a settings file, creating it if it is not there, and
+ * into this folder's `.mcp.json` when one registers the bundled server.
+ *
+ * Returns `{ ok, path, mcpPath, spec, detail }` rather than throwing or exiting,
+ * so the caller owns the reporting and the exit code.
+ *
+ * A file that exists but does not parse is refused rather than replaced. It is
+ * the user's configuration and may hold the only copy of a key they have;
+ * overwriting it to fix a routing preference is a trade nobody would accept if
+ * asked. That refusal happens BEFORE anything is written, so a bad file leaves
+ * the install exactly as it was rather than half-changed.
+ */
+export function enableAgentPath({ scope = "project", cwd = process.cwd(), enabled = true } = {}) {
+  const path = settingsPathFor(scope, cwd);
+  const mcpJsonPath = join(cwd, ".mcp.json");
+  const documents = [];
+
+  for (const target of [path, mcpJsonPath]) {
+    if (!existsSync(target)) {
+      documents.push({ target, current: {} });
+      continue;
+    }
+    try {
+      documents.push({ target, current: JSON.parse(readFileSync(target, "utf8")) });
+    } catch (err) {
+      return {
+        ok: false,
+        path: target,
+        mcpPath: null,
+        spec: null,
+        detail: `${target} is not valid JSON (${err.message}). Fix or move it, then retry — this script will not overwrite a file it cannot read.`,
+      };
+    }
+  }
+
+  const [settingsDoc, mcpDoc] = documents;
+  const next = withAgentSelection(settingsDoc.current, enabled);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  } catch (err) {
+    return {
+      ok: false,
+      path,
+      mcpPath: null,
+      spec: null,
+      detail: `Could not write ${path}: ${err.message}`,
+    };
+  }
+
+  // Only when the file was already there. Creating a `.mcp.json` from a routing
+  // flag would register a server pointing at a path this script has no business
+  // guessing; that file is `npm run setup`'s to write.
+  let mcpPath = null;
+  if (existsSync(mcpJsonPath)) {
+    const { config, updated } = withMcpSelection(mcpDoc.current, enabled);
+    if (updated.length > 0) {
+      try {
+        writeFileSync(mcpJsonPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+        mcpPath = mcpJsonPath;
+      } catch (err) {
+        return {
+          ok: false,
+          path: mcpJsonPath,
+          mcpPath: null,
+          spec: null,
+          detail: `Could not write ${mcpJsonPath}: ${err.message}`,
+        };
+      }
+    }
+  }
+
+  return { ok: true, path, mcpPath, spec: next.env?.SDLC_SELECT ?? null, detail: null };
+}
+
 function report({ ok, problems }, log) {
   const blocking = problems.filter((p) => p.severity === "blocking");
   const warnings = problems.filter((p) => p.severity === "warning");
@@ -568,17 +898,68 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const log = (m) => console.log(m);
   const shouldFix = process.argv.includes("--fix");
+  const enableAgent = process.argv.includes("--enable-agent");
+  const disableAgent = process.argv.includes("--disable-agent");
+  const scope = process.argv.includes("--user") ? "user" : "project";
 
   log("\nAI-SDLC orchestrator — setup check");
 
-  let state = evaluate(observe(pluginRoot));
+  // The environment this check reasons about. It starts as the real one and is
+  // replaced below when a selection is written, so that turning the agent path
+  // on and building what it needs happen in a single command.
+  let env = process.env;
+
+  if (enableAgent && disableAgent) {
+    log("  ✗ --enable-agent and --disable-agent contradict each other. Pass one.");
+    process.exit(1);
+  }
+
+  if (enableAgent || disableAgent) {
+    const written = enableAgentPath({ scope, enabled: enableAgent });
+    if (!written.ok) {
+      log(`  ✗ ${written.detail}`);
+      process.exit(1);
+    }
+    env = { ...process.env };
+    if (written.spec) env.SDLC_SELECT = written.spec;
+    else delete env.SDLC_SELECT;
+
+    log(
+      enableAgent
+        ? `  ✓ Mechanical tier set to the agent path (SDLC_SELECT=${written.spec}) in ${written.path}.`
+        : `  ✓ Mechanical tier set back to the model path in ${written.path}.`
+    );
+    // Said plainly because the two scopes fail differently and both failures are
+    // quiet: a user-level write changes every folder on the machine, and a
+    // project-level one is invisible from anywhere else.
+    log(
+      scope === "user"
+        ? "    This is machine-wide — it applies to every folder you open from now on."
+        : "    This applies to this folder only. Add --user to set it machine-wide."
+    );
+    // Named rather than left silent: on a clone this is the file that actually
+    // decides, and a reader who later edits only the settings file would be
+    // puzzled when nothing changed.
+    if (written.mcpPath) log(`    Also updated ${written.mcpPath}, which is what this folder's server reads.`);
+    // Not a nicety: Claude Code reads settings when a session starts, so the
+    // session that ran this command still has the old value. Everything below
+    // uses the new one; the session does not.
+    log("    It reaches Claude Code when you start a new session in this folder.");
+  }
+
+  // --enable-agent implies --fix. Turning the agent path on without building the
+  // Python environment it needs would leave a blocking problem that a second
+  // command has to clear, which is the two-step dance this flag exists to end.
+  const repairing = shouldFix || enableAgent;
+
+  let state = evaluate(observe(pluginRoot, env));
   const needsRepair = state.problems.some(
     (p) => p.id === "mcp-dependencies" || p.id === "mcp-build"
   );
 
-  if (needsRepair && shouldFix) {
+  if (needsRepair && repairing) {
     log("  The bundled MCP server needs building. Repairing:");
-    if (repair(pluginRoot, log)) state = evaluate(observe(pluginRoot));
+    if (repair(pluginRoot, log)) state = evaluate(observe(pluginRoot, env));
   }
 
   // Repairable for the same reason the build is: this install asked for the
@@ -588,15 +969,15 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const needsWorker = state.problems.some(
     (p) => p.id === "agent-worker-python" || p.id === "agent-worker-sdk"
   );
-  if (needsWorker && shouldFix) {
+  if (needsWorker && repairing) {
     log("  The agent worker needs a Python environment. Repairing:");
     const built = buildWorkerEnvironment(pluginRoot, log);
-    if (built.ok) state = evaluate(observe(pluginRoot));
+    if (built.ok) state = evaluate(observe(pluginRoot, env));
     else log(`  ✗ ${built.detail}`);
   }
 
   const passed = report(state, log);
-  const hint = agentProbeHint(pluginRoot, process.env, passed);
+  const hint = agentProbeHint(pluginRoot, env, passed);
   if (hint) log(hint);
 
   process.exit(passed ? 0 : 1);

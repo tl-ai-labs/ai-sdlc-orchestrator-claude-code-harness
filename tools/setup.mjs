@@ -149,7 +149,13 @@ if (!hasAdc) {
                   agent re-sends the whole conversation on every tool call, on top
                   of a fixed multi-thousand-token preamble it carries every turn.
 `);
-  hint("You can change this later — it is one line in .mcp.json (SDLC_SELECT).");
+  // Named as a command rather than as a file to edit. The selection is spelled
+  // `slot=option` and the slot is the half nobody guesses, so every route to it
+  // that ends in "open this file and type the value" produces the same silent
+  // failure: a plausible-looking spec that no policy can resolve.
+  hint("You can change this later, either way round:");
+  hint("  npm run verify -- --enable-agent    # agent path (builds what it needs)");
+  hint("  npm run verify -- --disable-agent   # back to the model path");
   geminiAsAgent = await askYesNo("Set up the agent path as well?", false);
   if (geminiAsAgent) {
     ok("Agent path selected — this wizard will build the Python worker environment.");
@@ -292,7 +298,7 @@ writeFileSync(mcpJsonPath, JSON.stringify(mcpEntry, null, 2) + "\n");
 ok(".mcp.json written — plain `claude` will discover the MCP server.");
 if (geminiAsAgent) {
   ok("Mechanical tier set to the agent path (SDLC_SELECT=gemini-flash=flash-agsdk-worker).");
-  hint("  Delete that line from .mcp.json to go back to the model path.");
+  hint("  To go back to the model path: npm run verify -- --disable-agent");
 }
 
 step("Ready");

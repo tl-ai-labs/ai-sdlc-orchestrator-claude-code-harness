@@ -97,7 +97,7 @@ Two consequences worth knowing when reading a report:
 
 ## Two doors to the mechanical tier, and how the report tells them apart
 
-`opus-plus-flash` declares two ways of reaching Gemini 3.5 Flash. The default calls it as a **model**: one request per packet, with the orchestrator reading the files and writing the answer back. The alternative runs it as an **agent** through the Antigravity SDK, working in the directory itself. Which one an install uses is set once, outside the policy file, via `SDLC_SELECT` — see [setup.md](setup.md#gemini-as-a-model-or-gemini-as-an-agent).
+`opus-plus-flash` declares two ways of reaching Gemini 3.5 Flash. The default calls it as a **model**: one request per packet, with the orchestrator reading the files and writing the answer back. The alternative runs it as an **agent** through the Antigravity SDK, working in the directory itself. Which one an install uses is chosen once, outside the policy file, by the setup wizard or by `--enable-agent` on the verify script — see [setup.md](setup.md#gemini-as-a-model-or-gemini-as-an-agent).
 
 Both leaves declare the same `pricing:` block, because they reach the same model at the same published rates. That is deliberate, and it is the reason the vendor model name alone cannot tell you which one ran — `gemini-3.5-flash` appears on both. Two fields on every event carry the distinction:
 

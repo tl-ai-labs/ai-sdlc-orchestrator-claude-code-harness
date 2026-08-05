@@ -91,19 +91,27 @@ Three things are worth knowing before choosing it:
 
 ### Choosing it
 
-On the clone route, `node tools/setup.mjs` asks — but only if it finds Google Cloud credentials, since without them the path is unavailable anyway. Answering yes builds a virtual environment under `plugin/mcp/gemini-flash-server/worker/.venv/`, installs the SDK into it, and writes one line into the project's `.mcp.json`:
+Both installation routes ask, and neither asks unless it finds Google Cloud credentials — without them this path is unavailable, so offering it would be offering something that cannot work.
 
-```json
-"SDLC_SELECT": "gemini-flash=flash-agsdk-worker"
-```
-
-That is the whole switch. Remove the line to go back to the model path; the virtual environment can stay where it is, unused, or be deleted.
-
-On the plugin route there is no wizard, so set the same variable in the `env` block of `~/.claude/settings.json` and then run the verify script with `--fix`, which builds the environment when — and only when — that variable selects the agent:
+On the clone route, `node tools/setup.mjs` asks as part of the wizard. On the plugin route, the setup instructions ask, and a yes runs the verify script with `--enable-agent`. You can run that yourself at any time, on either route:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --fix
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
 ```
+
+or, from a clone:
+
+```bash
+npm run verify -- --enable-agent
+```
+
+That one command does everything the path needs: it records the selection, builds a virtual environment under `plugin/mcp/gemini-flash-server/worker/.venv/`, installs the SDK into it, and re-checks. `--disable-agent` reverses the selection; the virtual environment can stay where it is, unused, or be deleted.
+
+The selection is recorded in `.claude/settings.local.json` **in the folder you ran it from** — this folder only, so opening another project does not inherit it. Add `--user` to write `~/.claude/settings.json` instead and have it apply everywhere. On a clone, the command also updates the `.mcp.json` that `npm run setup` wrote, because a stdio MCP server does not inherit the parent environment and that file's `env` block is the only thing the server actually reads.
+
+Either way, a settings file is read when a Claude Code session *starts*, so the selection reaches the session after this one, not the one you ran the command in.
+
+**Do not write the variable by hand.** It is `SDLC_SELECT=gemini-flash=flash-agsdk-worker` — a `slot=option` pair, and the slot is the half that gets dropped. A spec missing it looks correct, passes the setup check, and then throws when the policy loads, by which point the premium phases of a run have been billed. The verify script now reports a malformed spec as a blocking problem for exactly that reason, but the flag is what stops it from happening.
 
 If you already maintain a Python 3.10+ environment with `google-antigravity` installed and would rather not have a second one built inside the plugin, point at yours instead and no virtual environment is created:
 
@@ -180,7 +188,11 @@ The build output goes to `dist/server.js`; if that exists, you are good.
 
 **Pre-flight lists a model under `not_selected`** — a policy can offer more than one way to reach a tier (`opus-plus-flash` reaches the mechanical tier either as a model or as an agent, see above), and only the one this run selected can be dispatched to. The other is named here rather than silently omitted, so "you did not choose it" stays distinguishable from "pre-flight forgot about it". Its prerequisites are not checked, which is the point: a machine with no Python would otherwise fail pre-flight over a tier it will never call.
 
-**`agent-worker-python` or `agent-worker-sdk` from the verify script** — `SDLC_SELECT` routes the mechanical tier to the Antigravity agent, but the Python environment that path needs is missing (`agent-worker-python`) or exists and cannot import the SDK (`agent-worker-sdk`, which quotes the interpreter's own error). Both are blocking, and both have the same two exits: build the environment with `--fix` on the verify script (or `node tools/setup.mjs` on a clone), or drop `SDLC_SELECT` and go back to the model path, which needs no Python at all. The second failure usually means the environment was built against an interpreter that has since been upgraded or removed; `--fix` rebuilds with `venv --clear`, so it replaces the broken environment rather than patching it, and there is nothing to delete by hand.
+**`select-spec` from the verify script** — `SDLC_SELECT` is set to something no policy can resolve. The value is a `slot=option` pair, comma-separated for more than one, and the commonest way to get it wrong is to write the option on its own: `flash-agsdk-worker` instead of `gemini-flash=flash-agsdk-worker`. The option is the half that carries the meaning, which is why it is the half people write, and it reads like a complete answer. Before this check existed, that spelling produced a green setup report and then a throw at policy load, with the premium phases of the run already billed. Re-run the verify script with `--enable-agent` to have the pair written correctly, or `--disable-agent` to clear it.
+
+**`agent-worker-credentials` from the verify script** — `SDLC_SELECT` routes the mechanical tier to the agent worker, and this install has no Vertex credentials. The Antigravity SDK signs with Application Default Credentials and has no API-key branch, so a `GEMINI_API_KEY` does not help here — it is the other door, and the message says so when it finds one. Run `gcloud auth application-default login` (and set `GOOGLE_CLOUD_PROJECT` if the account has several projects), or run the verify script with `--disable-agent` to go back to the model path, which does work with an AI Studio key. This is offline-checkable and therefore checked; the entitlement and region problems below are not, which is what the probe is for.
+
+**`agent-worker-python` or `agent-worker-sdk` from the verify script** — `SDLC_SELECT` routes the mechanical tier to the Antigravity agent, but the Python environment that path needs is missing (`agent-worker-python`) or exists and cannot import the SDK (`agent-worker-sdk`, which quotes the interpreter's own error). Both are blocking, and both have the same two exits: build the environment with `--enable-agent` or `--fix` on the verify script (or `node tools/setup.mjs` on a clone), or run `--disable-agent` and go back to the model path, which needs no Python at all. The second failure usually means the environment was built against an interpreter that has since been upgraded or removed; both flags rebuild with `venv --clear`, so they replace the broken environment rather than patching it, and there is nothing to delete by hand.
 
 **`env-placeholders` warning from the verify script** — one or more of the variables the plugin forwards (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GEMINI_BACKEND`, `SDLC_SELECT`, `GEMINI_WORKER_PYTHON`) reached the server as the literal text `${NAME}` rather than a value. The plugin manifest declares them as pass-throughs from the host; when the host never set one, the placeholder is forwarded verbatim instead of being dropped. The server discards those values at startup and falls back to Application Default Credentials, so nothing runs on a garbage credential — but the variable you believed was set is not in play. Set it where Claude Code can see it, per the note above about the `env` block of `~/.claude/settings.json`.
 
