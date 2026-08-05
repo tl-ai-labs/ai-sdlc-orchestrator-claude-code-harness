@@ -12,24 +12,12 @@ export function appendEvent(jsonlPath: string, ev: TelemetryEvent): void {
 }
 
 /**
- * Normalize a telemetry event handed to us by a *model* rather than measured by this
- * server — i.e. the direct tier, the phases the orchestrator runs itself inside Claude
- * Code, which never pass through `execute_with_model`.
- *
- * WHY: a model has no clock and no stopwatch, so every `ts` and `latency_ms` it supplies
- * is invented. The 2026-08-04 run recorded each direct-tier event as
- * `2026-08-04T00:00:00.000Z` with `latency_ms: 0` — a plausible-looking placeholder that
- * is silently wrong. It matters beyond cosmetics because `buildManifest` derives the
- * run's `started_at`/`ended_at` by sorting on `ts`, so placeholder midnights corrupt the
- * reported duration of the whole run.
- *
- * WHAT: stamp arrival time server-side (the append happens within a second or two of the
- * call, so this is accurate to the phase), and record latency as `null` rather than `0`.
- * Null is the honest value — this server never saw the call, so no wall-clock exists for
- * it — whereas `0` reads downstream as "returned instantly".
- *
- * Events emitted by `execute_with_model` are untouched by this: that path times the
- * adapter call for real and carries its own `ts` and `latency_ms`.
+ * Normalize an event handed to us by a model rather than measured by this
+ * server (the direct tier — orchestrator phases that never pass through
+ * `execute_with_model`). A model has no clock, so its `ts` and `latency_ms`
+ * are invented. Stamp arrival time server-side and record latency as null
+ * (the honest value — this server never saw the call). `buildManifest` sorts
+ * by `ts` to derive run duration, so placeholder timestamps would corrupt it.
  */
 export function normalizeDirectTierEvent(
   ev: TelemetryEvent,
@@ -55,12 +43,7 @@ export interface Manifest {
   total_input_tokens_cached: number;
   total_output_tokens: number;
   model_breakdown: Record<string, { calls: number; cost_usd: number; input_tokens: number; output_tokens: number }>;
-  /**
-   * Per-phase rollup with optional per-model + per-token-class breakdown.
-   * The token fields are populated by the post-Phase-3 rollup so the
-   * dashboard's per-phase output-token row can drive off them. Older
-   * manifests without these fields still load (dashboard falls back).
-   */
+  /** Older manifests without token fields still load; dashboard falls back. */
   phase_breakdown: Record<string, {
     calls: number;
     cost_usd: number;
@@ -154,7 +137,6 @@ export function buildManifest(events: TelemetryEvent[], opts: {
     tb.cost_usd += ev.cost_usd;
   }
 
-  // Round
   const r6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
   total_cost_usd = r6(total_cost_usd);
   for (const k of Object.keys(model_breakdown))

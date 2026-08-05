@@ -1,35 +1,11 @@
 /**
- * worker-env.test.mjs — the Python worker's PROJECT and REGION contract, held
- * from outside.
+ * Python worker's PROJECT and REGION contract. The worker must have NO
+ * default for either — a default project silently bills the wrong account
+ * and a default region silently sends tokens to the wrong datacentre (some
+ * models are `global`-only, so wrong region is also 404).
  *
- * WHY THIS FILE EXISTS. Every Vertex model in a policy declares an explicit
- * `region:`, and that declaration is what the run's manifest records and what
- * the report prices the call against. Nothing forces the executable path to
- * read it. If the worker resolved its endpoint from the ambient environment and
- * then wrote that same ambient value into its usage sidecar, a policy could
- * declare one region, every token could bill in another, and no artifact
- * anywhere would disagree — a receipt that cannot contradict its environment is
- * not evidence of anything. That exact defect existed once and is what these
- * cases pin shut.
- *
- * WHERE THIS DIFFERS FROM THE PRIVATE VERSION IT CAME FROM. The worker grew up
- * inside a single-team experiment repo, where defaulting the project and the
- * region to that team's own targets was correct and one-off scripts invoked it
- * with no flags at all. Published, both defaults become hazards: a default
- * project silently bills an account the operator never named, and a default
- * region silently sends their tokens to a datacentre they never chose — and
- * some models are served on `global` only, so a wrong region is also a 404 several
- * paid phases into a run. So the contract inverts here: the private worker was
- * required to KEEP its `asia-south1` default; this one is required to have NO
- * default and to refuse loudly instead.
- *
- * WHY .mjs FOR PYTHON CODE: the root test script is `node --test
- * tools/test/*.test.mjs`, and a test nobody runs protects nothing. These cases
- * read the worker's source rather than executing it, because the contract they
- * pin is a precedence rule visible in a few lines of code and provable without
- * a Python environment, without credentials and without spending a token.
- *
- * $0, offline, no worker virtual environment, no network.
+ * .mjs (not .py) so `node --test` picks it up. Reads the worker source and
+ * asserts precedence rules; no Python required.
  */
 
 import { test } from "node:test";

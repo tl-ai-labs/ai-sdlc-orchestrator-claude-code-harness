@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 /**
- * setup.mjs — interactive onboarding for the AI-SDLC orchestrator harness.
- *
- * Walks the user through prerequisites (Node, Claude Code CLI, API keys),
- * installs the bundled MCP server's dependencies, and project-installs the
- * slash command + subagents into ./.claude/. Prints the next-step commands
- * for both auth modes. Every check has a friendly path forward.
+ * Clone-route setup wizard. Checks Node / CLI / keys, builds the MCP server,
+ * copies commands + subagents into ./.claude/, writes .mcp.json.
  */
 
 import { execSync, spawnSync } from "node:child_process";
@@ -16,14 +12,8 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
-// The plugin's own setup checker. Plain ESM with no build step and no
-// side effects on import, so this wizard can borrow its logic instead of
-// growing a second copy that drifts.
-// `vertexCredentialState` and `inspectCredentialFile` are borrowed rather than
-// re-implemented for a specific reason: this wizard used to decide the same
-// question with its own one-line `existsSync(ADC) || GOOGLE_APPLICATION_CREDENTIALS`,
-// which disagreed with the checker's version, so a machine could be told it had
-// credentials by one script and not the other in the same install.
+// Imports from verify-setup.mjs so this wizard shares the credential-state
+// logic instead of drifting into a second copy.
 import {
   buildWorkerEnvironment,
   workerPaths,
@@ -34,10 +24,8 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 
-// Where `gcloud auth application-default login` writes user credentials.
-// Same path as plugin/scripts/verify-setup.mjs `adcPath()` and the server's
-// `defaultAdcPath()` — three copies because none of the three can import the
-// others (different package roots, and this runs before the server is built).
+// Duplicated with verify-setup.mjs's adcPath and the server's defaultAdcPath
+// (three package roots that cannot import each other). Sync by hand.
 const ADC_FILE = join(homedir(), ".config", "gcloud", "application_default_credentials.json");
 
 // ─── small helpers ────────────────────────────────────────────────────
@@ -45,9 +33,7 @@ const c = { dim: "\x1b[2m", bold: "\x1b[1m", green: "\x1b[32m", amber: "\x1b[33m
 const ok    = (m) => console.log(`  ${c.green}✓${c.reset} ${m}`);
 const warn  = (m) => console.log(`  ${c.amber}!${c.reset} ${m}`);
 const fail  = (m) => console.log(`  ${c.red}✗${c.reset} ${m}`);
-// Steps number themselves. One of them is conditional — the Python worker is
-// only built if the user asks for the agent path — and hand-numbered headings
-// would either skip a number or lie about how many are left.
+// Steps number themselves; one is conditional (agent path).
 let stepNo = 0;
 const step  = (m) => console.log(`\n${c.bold}[${++stepNo}]${c.reset} ${m}`);
 const hint  = (m) => console.log(`  ${c.dim}${m}${c.reset}`);
@@ -101,10 +87,7 @@ if (which("claude")) {
   if (!proceed) { rl.close(); process.exit(1); }
 }
 
-// ─── API keys — availability check, not a mode-selection step ─────────
-// Auth mode is chosen per invocation via /run-sdlc-pass --auth=vendor|estimated
-// and enforced by the orchestrator (rule 6). This step only reports what
-// keys are visible so the user knows which mode is available to them.
+// Auth mode is per-run via /run-sdlc-pass --auth=. This just reports.
 step("API keys — availability");
 if (process.env.ANTHROPIC_API_KEY) {
   ok("ANTHROPIC_API_KEY is set — --auth=vendor is available.");
@@ -114,14 +97,7 @@ if (process.env.ANTHROPIC_API_KEY) {
   hint("  export ANTHROPIC_API_KEY=sk-ant-...");
   hint("--auth=estimated works without an API key when signed in to a Claude Code subscription.");
 }
-// Gemini is reachable through either of Google's two front doors, so report
-// on both. The Google Cloud door needs no key at all — `gcloud auth
-// application-default login` writes a credentials file under $HOME and the SDK
-// signs with it — which is why an absent GEMINI_API_KEY is not, on its own, a
-// problem.
-//
-// The state is computed once here and reused by the question below, so the two
-// can never disagree about what this machine has.
+// State computed once and reused by the question below.
 const vertex = vertexCredentialState({
   env: process.env,
   serviceAccountFile: process.env.GOOGLE_APPLICATION_CREDENTIALS
@@ -137,10 +113,7 @@ if (hasVertex) {
 } else if (process.env.GEMINI_API_KEY) {
   ok("GEMINI_API_KEY is set — opus-plus-flash routes Gemini through AI Studio.");
 } else if (vertex.state === "broken") {
-  // Reported ahead of "no credentials", because it is a different problem with
-  // a different fix: something IS configured, and it is the thing that is wrong.
-  // The old check called existsSync and stopped, so this machine was reported as
-  // fully set up and failed at the first Gemini call.
+  // Reported ahead of "no credentials" — different problem, different fix.
   warn("A Google credential is configured but cannot be used:");
   hint(`  ${vertex.detail}`);
   hint("  Fix that file, or run: gcloud auth application-default login");
@@ -149,43 +122,22 @@ if (hasVertex) {
   hint("  Google Cloud (no key): gcloud auth application-default login");
   hint("  AI Studio key:         https://aistudio.google.com/app/apikey");
   if (vertex.state === "project-only") {
-    // GOOGLE_CLOUD_PROJECT is set and nothing else. It is the variable every
-    // Google Cloud tutorial names first, so it is easy to believe it is enough.
     hint(`  GOOGLE_CLOUD_PROJECT is set ('${process.env.GOOGLE_CLOUD_PROJECT}'), but a project ID`);
     hint("  says where to bill, not who is asking — it is not a credential on its own.");
   }
 }
 
-// ─── how Gemini works on the mechanical tier ──────────────────────────
-// Asked here, once, because it is the only question in this wizard whose
-// answer changes what has to be INSTALLED. The agent path runs a Python
-// worker; the model path does not, and someone on the model path should
-// never be walked through a virtualenv they will not use.
-//
-// Skipped entirely when no Gemini credentials are visible: the question is
-// "which of two Gemini doors", and someone with neither is not going through
-// either. They can re-run this wizard after `gcloud auth application-default
-// login`. Also skipped for AI-Studio-key-only setups — the Antigravity SDK
-// signs with Application Default Credentials and has no API-key door, so
-// offering the agent path there would be offering something that cannot work.
+// Only asked when Vertex credentials are visible — the Antigravity SDK is
+// ADC-only, so this question cannot resolve on an AI-Studio-only install.
 step("How Gemini works on the mechanical tier");
 let geminiAsAgent = false;
 if (!hasVertex) {
-  // The Antigravity SDK signs with application default credentials and has no
-  // API-key branch, so this is not a question worth asking here — the agent
-  // path could not work whichever way it was answered.
   hint("No Google Cloud credentials, so the mechanical tier has one door for now.");
   hint("  The other one — Gemini as an agent, through the Antigravity SDK — signs with");
   hint("  Google Cloud credentials only. To open it later:");
   hint("    gcloud auth application-default login");
   hint("    npm run verify -- --enable-agent");
 } else {
-  // Both doors lead to the same Google Cloud project and the same bill. What
-  // differs is what is on the other side: a model that answers, or an agent that
-  // works. The platform is named the way Google names it today, with the old
-  // name in brackets — this repo was written when it was Vertex AI, the API
-  // surface still says `vertex`, and most people's muscle memory still says
-  // Vertex too.
   console.log(`
   Gemini can work two ways here. Both bill the same Google Cloud project.
 
@@ -205,10 +157,6 @@ if (!hasVertex) {
   The model path is the default, and it is the right answer for most work. Pick
   the agent path when you want Gemini to do the work rather than describe it.
 `);
-  // Named as a command rather than as a file to edit. The selection is spelled
-  // `slot=option` and the slot is the half nobody guesses, so every route to it
-  // that ends in "open this file and type the value" produces the same silent
-  // failure: a plausible-looking spec that no policy can resolve.
   hint("You can change this later, either way round:");
   hint("  npm run verify -- --enable-agent    # agent path (builds what it needs)");
   hint("  npm run verify -- --disable-agent   # back to the model path");
@@ -239,23 +187,13 @@ if (existsSync(nodeMods) && existsSync(join(mcpDir, "dist", "server.js"))) {
   }
 }
 
-// ─── the agent worker's Python environment ────────────────────────────
-// Only reached when the agent path was chosen above.
-//
-// The work itself lives in verify-setup.mjs, imported rather than repeated,
-// because both installation routes have to be able to build this environment
-// and only one of them can see this file: a `/plugin install` puts the plugin
-// in Claude Code's cache with no tools/ directory, so its users reach the same
-// function through `verify-setup.mjs --fix`. One implementation means the two
-// routes cannot drift into producing different environments.
+// buildWorkerEnvironment lives in verify-setup.mjs — one implementation used
+// by both install routes.
 if (geminiAsAgent) {
   step("Antigravity agent worker (Python)");
   const { venvPython } = workerPaths(join(ROOT, "plugin"));
   if (existsSync(venvPython)) {
-    // Present is not the same as working, and this wizard deliberately does not
-    // spend a subprocess finding out — `npm run verify` already does exactly
-    // that check, quotes the interpreter's error, and repairs it. Pointing
-    // there is cheaper than duplicating it, and keeps one repair path.
+    // Present ≠ working; `npm run verify` probes it and repairs.
     ok("Worker environment already present.");
     hint("If the agent path later fails to start: npm run verify -- --fix");
   } else {
@@ -267,19 +205,15 @@ if (geminiAsAgent) {
       for (const line of built.detail.split("\n").slice(1)) hint(line);
       if (built.reason === "no-python") hint("  brew install python@3.12   # then: npm run setup");
       warn("Continuing on the model path — nothing else in this wizard needs Python.");
-      // Not merely cosmetic: this flag also decides whether SDLC_SELECT is
-      // written below. Leaving it true would hand the user a config that
-      // routes every mechanical task to a worker that cannot start.
+      // Load-bearing: also gates the SDLC_SELECT write below.
       geminiAsAgent = false;
     }
   }
 }
 
 step("Project-install the slash command + all subagents");
-// Some Claude Code versions do not activate plugin-supplied commands or
-// subagents when the user launches with a plain `claude` (no --plugin-dir).
-// Project-installing everything into ./.claude/ makes both interactive and
-// headless runs discover them without the flag.
+// Copied into ./.claude/ so plain `claude` (no --plugin-dir) discovers them
+// in both interactive and headless modes.
 const projClaude = join(ROOT, ".claude");
 mkdirSync(join(projClaude, "commands"), { recursive: true });
 mkdirSync(join(projClaude, "agents"),   { recursive: true });
@@ -295,31 +229,18 @@ for (const a of ["orchestrator", "architect", "senior-reviewer", "security-revie
 }
 ok("Slash command + all subagents installed under ./.claude/");
 
-// Register the bundled MCP server so plain `claude` (no --plugin-dir flag)
-// discovers its tools. Required for vendor mode dispatch and for
-// opus-plus-flash's Gemini routing.
-//
-// The bare key below is what makes this the *clone* route: a server registered
-// through a project `.mcp.json` keeps its key verbatim, so its tools surface as
-// `mcp__gemini-flash-server__*`. The plugin route does not — Claude Code
-// namespaces a plugin-provided MCP server with the plugin's own name, so
-// `/plugin install` yields `mcp__plugin_multi-model-orchestrator_gemini-flash-server__*`
-// instead. The orchestrator's frontmatter grants both spellings for exactly
-// this reason; see "The MCP tool names depend on how the plugin was installed"
-// in plugin/agents/orchestrator.md. Do not "simplify" either side to one name.
+// Bare `gemini-flash-server` key: clone-route servers keep their key
+// verbatim (mcp__gemini-flash-server__*). Plugin route namespaces to
+// mcp__plugin_multi-model-orchestrator_gemini-flash-server__*. The
+// orchestrator's frontmatter grants both spellings.
 const mcpJsonPath = join(ROOT, ".mcp.json");
 const mcpEntry = {
   mcpServers: {
     "gemini-flash-server": {
       command: "node",
       args: [join(ROOT, "plugin", "mcp", "gemini-flash-server", "dist", "server.js")],
-      // A stdio MCP server does not inherit the full parent environment, so
-      // every variable the server reads has to be forwarded explicitly. The
-      // Google block covers the Vertex door: a service-account file, the
-      // billing project, the region, and the backend override. None is
-      // required — with a plain `gcloud auth application-default login` the
-      // server finds the credentials file under $HOME and reads the project
-      // out of it — but a service-account or multi-project setup needs them.
+      // Stdio MCP servers inherit nothing — every variable the server reads
+      // must be forwarded explicitly.
       env: {
         ...Object.fromEntries(
           [
@@ -335,16 +256,10 @@ const mcpEntry = {
             .filter((name) => process.env[name])
             .map((name) => [name, process.env[name]]),
         ),
-        // The answer to the one question above, written down rather than left
-        // in this shell. It has to outlive the wizard — the server is launched
-        // by Claude Code minutes or days later, from an environment that never
-        // saw the answer — and it belongs beside the other run settings so a
-        // reader can see which tier a run used without being told.
-        //
-        // Written only on the agent path, so the file a model-path user gets is
-        // byte-identical to the one they got before this question existed. The
-        // spread order matters: this wins over an inherited SDLC_SELECT, because
-        // the answer given ten seconds ago is the more recent statement of intent.
+        // Answer to the agent-path question, persisted for the future Claude
+        // Code session. Written only when agent selected, so model-path
+        // .mcp.json is unchanged from before this question existed. Spread
+        // order: this wins over an inherited SDLC_SELECT (more recent intent).
         ...(geminiAsAgent ? { SDLC_SELECT: "gemini-flash=flash-agsdk-worker" } : {}),
       },
     },

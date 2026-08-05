@@ -1,13 +1,9 @@
 /**
- * setup.test.mjs — guards the install path a first-time user walks.
- *
- * Two things are protected here. First, the decision table in
- * verify-setup.mjs: it decides whether a user is told their setup is ready,
- * and getting it wrong either blocks a legitimate Claude-only user or clears
- * a broken install to spend money. Second, the marketplace catalogue and the
- * names quoted in SETUP.md, which have no other check — a rename in one place
- * and not the other produces an install command that fails for everyone while
- * every file involved still looks correct on its own.
+ * Guards the install path. Two things:
+ *   1. verify-setup.mjs's decision table — wrong verdict either blocks a
+ *      legit Claude-only user or clears a broken install to spend money.
+ *   2. Marketplace catalogue + SETUP.md names — a rename in one place and
+ *      not the other produces a silently broken install command.
  */
 
 import { test } from "node:test";

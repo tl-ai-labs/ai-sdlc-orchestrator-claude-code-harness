@@ -1,26 +1,10 @@
 /**
- * Pure routing function — given a task context and a policy, returns the
- * model decision. Pure so it's trivially testable and can power the
- * dashboard's "what-if simulator" by replaying telemetry against a
- * different policy without re-running any LLMs.
+ * Pure routing: given a task context and a policy, return the model decision.
  *
- * ---------------------------------------------------------------------------
- * SELECT SLOTS
- * ---------------------------------------------------------------------------
- * A rule may name a LOGICAL slot declared in `policy.select` instead of a
- * concrete model id. `pickModel` resolves it here, at the last possible moment,
- * against the run's chosen options — so one policy file can hold every way of
- * reaching a tier and the RUN picks which one executes.
- *
- * Why it is resolved here rather than by editing the policy between runs:
- * a policy file is the record of how a run was priced and routed, and every
- * cost number already exported from it is read back against that file. Editing
- * it to switch adapter silently re-bases all of them. Resolving at routing time
- * leaves the file untouched and records the choice in the decision instead.
- *
- * The resolved `modelId` is ALWAYS concrete. Nothing downstream of this
- * function ever sees a slot name, so adapters, pricing and telemetry need no
- * knowledge of slots at all.
+ * A rule may name a logical slot from `policy.select` instead of a concrete
+ * model id; `pickModel` resolves it against the run's chosen options at
+ * dispatch time. The resolved `modelId` is always concrete — adapters,
+ * pricing, and telemetry never see a slot name.
  */
 
 import type {
@@ -39,18 +23,8 @@ export interface TaskContext {
 }
 
 /**
- * Parse a run's slot choices from the `slot=option[,slot=option...]` spelling.
- *
- * That spelling exists because this server is configured through a single
- * environment variable (see SELECT_ENV in server.ts): the plugin route passes
- * env vars through `plugin.json` and the clone route through `.mcp.json`, and
- * neither can carry structured data. One variable holding pairs keeps the
- * install surface at one line while still allowing more than one slot later.
- *
- * An empty or whitespace-only spec means "no choices", not an error — an
- * unset variable and a variable set to "" have to behave identically, since a
- * user who answers the wizard's default gets one or the other depending on
- * which route installed the server.
+ * Parse `slot=option[,slot=option...]`. Empty/whitespace → no choices.
+ * (An unset variable and one set to "" must behave identically.)
  */
 export function parseSelectOverrides(spec: string | undefined): SelectOverrides {
   const out: SelectOverrides = {};
@@ -71,12 +45,9 @@ export function parseSelectOverrides(spec: string | undefined): SelectOverrides 
 }
 
 /**
- * Check a run's slot choices against the policy BEFORE the run starts.
- *
- * Called once when the policy loads. Without it, a bad choice would first
- * surface as a throw from `pickModel` partway through a phase — after earlier
- * phases have already been paid for. Both messages name the legal values,
- * because the commonest cause by far is a typo.
+ * Check slot choices against the policy at load, before the run starts.
+ * Without this, a bad choice would first throw from `pickModel` partway
+ * through a paid phase.
  */
 export function validateSelectOverrides(policy: Policy, overrides: SelectOverrides): void {
   for (const [slot, chosen] of Object.entries(overrides)) {
@@ -99,11 +70,9 @@ export function validateSelectOverrides(policy: Policy, overrides: SelectOverrid
 }
 
 /**
- * Turn whatever a rule named into a concrete model id.
- *
- * A concrete model id passes straight through and carries no selection trace,
- * which is what keeps every policy written before slots existed resolving
- * exactly as it always did.
+ * Turn a rule's `use` target into a concrete model id. Model ids pass through
+ * unchanged (with no selection trace), so unslotted policies resolve exactly
+ * as before slots existed.
  */
 export function resolveNamed(
   policy: Policy,
@@ -115,9 +84,8 @@ export function resolveNamed(
 
   const override = overrides[named];
   if (override !== undefined && !slot.options.includes(override)) {
-    // Reachable only when the caller skipped validateSelectOverrides. Refuse
-    // rather than quietly fall back to the default: a run that ignored the
-    // tier it was asked for would produce numbers labelled as the wrong one.
+    // Reachable only when the caller skipped validateSelectOverrides.
+    // Refuse rather than fall back — numbers would be labelled wrong.
     throw new Error(
       `select ${named}=${override}: not one of that slot's options (${slot.options.join(", ")})`
     );
@@ -131,23 +99,10 @@ export function resolveNamed(
 }
 
 /**
- * Model ids this run has ruled out by choosing a different option in their slot.
- *
- * WHY THIS EXISTS. Pre-flight constructs an adapter for every model a policy
- * declares, and a constructor is deliberately strict — it throws on a missing
- * project, a missing interpreter, a missing worker script — so that those
- * failures surface once, before any money is spent, instead of crashing halfway
- * through a paid phase. That is exactly right for a model the run will dispatch
- * to, and exactly wrong for one it will not. The moment a policy holds two ways
- * of reaching the same tier, the losing option is present in `policy.models` but
- * unreachable by any rule, and halting on its prerequisites would make everyone
- * on the default path install the other path's dependencies to run at all.
- *
- * The exclusion is narrow on purpose. Only an option that LOST its slot's
- * selection is dropped, and only if nothing else can reach it — a rule naming it
- * outright, or another slot resolving to it, both keep it in. A policy with no
- * `select:` block therefore yields an empty set and pre-flight behaves exactly
- * as it did before slots existed.
+ * Model ids this run has ruled out by choosing a different option in their
+ * slot. Narrow on purpose: an option only counts as unreachable if it lost
+ * its slot's selection AND no rule names it directly. Unslotted policies
+ * return the empty set.
  */
 export function unreachableModelIds(
   policy: Policy,
@@ -163,8 +118,8 @@ export function unreachableModelIds(
     }
   }
 
-  // Anything a rule names directly is reachable whatever the slots decided, and
-  // an id chosen by one slot is reachable even if another slot rejected it.
+  // An id a rule names directly is reachable, and an id one slot chose is
+  // reachable even if another slot rejected it.
   for (const rule of policy.rules) {
     const named = "use" in rule ? rule.use : rule.default;
     if (policy.select?.[named]) {
@@ -184,7 +139,7 @@ export function pickModel(
 ): RoutingDecision {
   for (let i = 0; i < policy.rules.length; i++) {
     const rule = policy.rules[i];
-    if ("default" in rule) continue; // handle defaults last
+    if ("default" in rule) continue; // defaults handled last
     if (matches(rule.when, ctx)) {
       const resolved = resolveNamed(policy, rule.use, overrides);
       return {
@@ -242,11 +197,7 @@ function describeMatcher(m: RuleMatcher): string {
   return parts.join(", ") || "wildcard";
 }
 
-/**
- * Replay helper for the dashboard's what-if simulator.
- * Given a list of telemetry events (real run) and an alternate policy,
- * recompute what the cost would have been.
- */
+/** What-if replay: recompute cost of a real run's events under another policy. */
 export interface ReplayEvent {
   phase: string;
   task_type: string;
@@ -260,10 +211,8 @@ export interface ReplayEvent {
 export function simulatePolicyCost(
   events: ReplayEvent[],
   policy: Policy,
-  // The what-if is only honest if it replays the same slot choices the real
-  // run would make. Defaulting to none means a simulation of a slotted policy
-  // prices its defaults, which is the right answer when the caller has not
-  // said otherwise.
+  // Defaulting to no overrides prices the policy's defaults — the right
+  // answer when the caller has not said otherwise.
   overrides: SelectOverrides = {}
 ): { total_cost_usd: number; per_model: Record<string, number> } {
   const perModel: Record<string, number> = {};

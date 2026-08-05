@@ -1,48 +1,12 @@
 /**
- * geminiTransports — the two doors into Gemini, behind one interface.
+ * The two doors into Gemini, behind one interface. GeminiFlashAdapter owns
+ * everything model-agnostic (doubling loop, prompt assembly, JSON-schema mode,
+ * telemetry); this module owns request signing and endpoint choice.
  *
- * The GeminiFlashAdapter owns everything model-agnostic: the output-cap
- * doubling loop, prompt assembly, JSON-schema mode, per-attempt telemetry.
- * What differs between Google's two auth surfaces is only how a request is
- * signed and which endpoint receives it. That difference lives here, so the
- * loop exists once and every future fix lands on both doors at the same time.
+ *   api-key    — Google AI Studio. API key in an env var.
+ *   vertex-adc — Vertex AI. Application Default Credentials; bills a project.
  *
- *   api-key    — Google AI Studio. Auth is a single API key string in an env
- *                var. The path individuals use.
- *   vertex-adc — Vertex AI. No key: the SDK signs requests with Application
- *                Default Credentials — whatever `gcloud auth
- *                application-default login` wrote, a service account file
- *                named by GOOGLE_APPLICATION_CREDENTIALS, or a workload
- *                identity. Calls bill a GCP project. The path enterprises use.
- *
- * BOTH doors run on one SDK, `@google/genai`, which is Google's current and
- * only supported JavaScript client. They used to run on two different ones:
- *
- *   @google/generative-ai   (AI Studio)  — superseded by @google/genai
- *   @google-cloud/vertexai  (Vertex)     — its own deprecation notice gives a
- *                                          removal date of 2026-06-24
- *
- * Both were removed here on 2026-08-04 after the second failed outright: it
- * builds its host as `${location}-aiplatform.googleapis.com`, which for the
- * global endpoint yields `global-aiplatform.googleapis.com` — a host that does
- * not exist — and returns an HTML error page that the SDK then tries to parse
- * as JSON. The global endpoint is the one whose rates our policies pin (see
- * applyVertexSurcharge below), so that was not a corner case; it was every run.
- * Collapsing both doors onto the supported SDK also leaves one request path to
- * maintain instead of two that had already drifted apart.
- *
- * The Vertex door is ported from the `enterprise` backend of our earlier
- * internal orchestration experiments, with two deliberate changes:
- *   1. The service-account-file requirement is gone. The original threw
- *      unless GOOGLE_APPLICATION_CREDENTIALS was set, but the SDK resolves
- *      ADC on its own — user credentials from `gcloud auth application-default
- *      login` work without any key file. Demanding one was a stale guard.
- *   2. Explicit context caching is implemented (the original hardcoded
- *      `input_cached: 0`). Cache parity matters: the stable project header is
- *      re-sent with every TaskPacket, and reading it from cache at ~10% of
- *      the fresh-input rate is a large share of the multi-model saving.
- *
- * Backend selection is a pure function (`selectGeminiBackend`) so the
+ * Both run on `@google/genai`. Backend selection is a pure function so the
  * precedence rules are unit-testable without touching process state.
  */
 
@@ -72,17 +36,13 @@ export interface BackendChoice {
 }
 
 /**
- * Decide which door to use, in documented precedence order:
- *
- *   1. GEMINI_BACKEND=vertex | api-key — explicit override, always wins.
- *      Unknown values throw rather than silently picking a door.
- *   2. The policy's API-key env var is set — api-key. A key present is an
- *      explicit local decision; ADC merely existing is ambient machine state,
- *      so the key outranks it.
- *   3. Any Vertex signal — GOOGLE_APPLICATION_CREDENTIALS, a gcloud ADC
- *      file, or an explicit project env var — vertex-adc.
- *   4. Nothing — throw, naming both doors, so the failure happens at
- *      construction (before any premium-phase spend), not mid-run.
+ * Precedence:
+ *   1. GEMINI_BACKEND=vertex|api-key — explicit override.
+ *   2. Policy's API-key env var set → api-key. A key is a deliberate local
+ *      decision; ADC is often ambient machine state.
+ *   3. Any Vertex signal (GOOGLE_APPLICATION_CREDENTIALS, ADC file, or
+ *      GOOGLE_CLOUD_PROJECT) → vertex-adc.
+ *   4. Nothing → throw, naming both doors.
  */
 export function selectGeminiBackend(input: BackendSelectionInput): BackendChoice {
   const { env, keyEnvName, adcFileExists } = input;
@@ -109,9 +69,8 @@ export function selectGeminiBackend(input: BackendSelectionInput): BackendChoice
     return { backend: "vertex-adc", reason: "GOOGLE_CLOUD_PROJECT is set" };
   }
 
-  // Keep this wording aligned with the `gemini-credentials` warning in
-  // plugin/scripts/verify-setup.mjs — that script runs pre-build and cannot
-  // import this module, so the two are synced by hand.
+  // Keep aligned with verify-setup.mjs's `gemini-credentials` warning
+  // (synced by hand — that script runs pre-build).
   throw new Error(
     `No Gemini credentials found. Either authenticate to Vertex AI with ` +
       `\`gcloud auth application-default login\` (no key; the project is read from ` +
@@ -126,12 +85,10 @@ export function defaultAdcPath(home: string = homedir()): string {
 }
 
 /**
- * Resolve the GCP project that bills Vertex calls: GOOGLE_CLOUD_PROJECT (the
- * SDK's own convention) → the project recorded inside the credentials file.
- * Returns undefined when nothing resolves — generateContent still works then
- * (the SDK runs its own resolution against gcloud config and the metadata
- * server), but explicit cache creation is skipped, because the cache resource
- * name embeds the project and there is nothing to build it from.
+ * GOOGLE_CLOUD_PROJECT → the project inside the credentials file.
+ * Undefined when nothing resolves: generateContent still works (SDK runs its
+ * own resolution against gcloud config and the metadata server), but explicit
+ * cache creation is skipped because the cache name embeds the project.
  */
 export function resolveGcpProject(
   env: Record<string, string | undefined>,
@@ -149,33 +106,18 @@ export function resolveGcpProject(
 }
 
 /**
- * Region for Vertex calls.
- *
- * Defaults to Vertex's flat "global" endpoint, and that default is a PRICING
- * decision, not a latency one. Vertex bills non-global (regional) endpoints
- * +10% on every token class for Gemini 3 and later, effective 2026-07-01. The
- * rates pinned in the policy YAMLs are the flat global/AI-Studio rates, so on
- * the global endpoint the number this plugin reports is the number Google
- * bills. Defaulting to a region instead would have made every reported Gemini
- * cost 10% low — silently, and in the direction that flatters us, which is the
- * direction nobody double-checks.
- *
- * Overriding with GOOGLE_CLOUD_LOCATION is still supported (a region may have
- * quota the global endpoint lacks — that happened to us on 2026-07-16). The
- * surcharge is then applied to the reported cost rather than ignored; see
- * applyVertexSurcharge.
+ * Region for Vertex calls. Defaults to `global` — a pricing default, not
+ * latency: Vertex bills regional endpoints +10% on every token class for
+ * Gemini 3+ (effective 2026-07-01), and the policy YAMLs pin the flat global
+ * rates. Overriding with GOOGLE_CLOUD_LOCATION applies the surcharge to the
+ * reported cost — see applyVertexSurcharge.
  */
 export function resolveGcpLocation(env: Record<string, string | undefined>): string {
   return env.GOOGLE_CLOUD_LOCATION ?? "global";
 }
 
-// ─── Vertex regional surcharge ────────────────────────────────────────
-//
-// Source: https://cloud.google.com/vertex-ai/generative-ai/pricing (Standard
-// tier). The page's note reads that for non-global endpoints, pricing takes
-// effect for the generally available Gemini 3 and later families on
-// 2026-07-01. Verified 2026-08-04 against that page.
-
+// Vertex regional surcharge — Gemini 3+ non-global endpoints, effective
+// 2026-07-01. https://cloud.google.com/vertex-ai/generative-ai/pricing
 export const VERTEX_NONGLOBAL_SURCHARGE = 1.1;
 export const VERTEX_NONGLOBAL_EFFECTIVE = "2026-07-01";
 
@@ -185,13 +127,9 @@ export function isVertexNonGlobal(location: string): boolean {
 }
 
 /**
- * Whether a model is in a family the regional surcharge applies to.
- *
- * The surcharge is NOT universal — it is Gemini 3 and later only. Gemini 2.5
- * is an earlier family and carries no regional premium, so a blanket x1.10
- * would over-report it. Keyed on the family digit rather than an allow-list,
- * so a newly added 3.x/4.x id is surcharged by default: over-reporting a new
- * model's cost is the safe direction to be wrong in, under-reporting is not.
+ * Gemini 3+ only (2.5 has no regional premium). Family digit rather than
+ * allow-list, so a new 3.x/4.x id surcharges by default — over-reporting is
+ * the safe direction, under-reporting is not.
  */
 export function vertexSurchargeApplies(modelName: string): boolean {
   const m = modelName.trim().toLowerCase();
@@ -201,12 +139,8 @@ export function vertexSurchargeApplies(modelName: string): boolean {
 }
 
 /**
- * The rates actually billed, given where the call ran.
- *
- * Returns the policy's pinned rates unchanged on the AI Studio path and on
- * Vertex's global endpoint — which is every default run. Only a user who has
- * pinned a region pays the surcharge, and when they do, the cost this plugin
- * reports moves with it instead of quietly understating their bill.
+ * Pinned rates on AI Studio and Vertex's global endpoint (every default run);
+ * x1.10 on a pinned regional endpoint.
  */
 export function applyVertexSurcharge<T extends { input: number; input_cached: number; output: number }>(
   pricing: T,
@@ -227,24 +161,10 @@ export function applyVertexSurcharge<T extends { input: number; input_cached: nu
 }
 
 /**
- * The output-token count Google actually bills, from a raw usageMetadata.
- *
- * Gemini 3.x reasons before answering, and reports those reasoning tokens in
- * `thoughtsTokenCount` — a SIBLING of `candidatesTokenCount`, not a subset of
- * it. (Contrast `cachedContentTokenCount`, which IS a subset of
- * `promptTokenCount`; the two fields look alike and behave oppositely.) Google
- * bills thinking at the output rate, so the billed figure is the sum.
- *
- * Reading `candidatesTokenCount` alone is not a rounding error. A live probe
- * on 2026-08-04 against gemini-3.5-flash returned candidates=1, thoughts=97:
- * counting only candidates reports 1 output token where 98 are billed, and
- * output is the $9/M class. On a policy whose whole claim is "mechanical work
- * on Flash is cheaper", under-reporting Flash's output cost by ~99% does not
- * flatter the result by a little — it manufactures it.
- *
- * `totalTokenCount` is deliberately not used to derive this: it also counts
- * prompt tokens, and on some responses tool-use prompt tokens, so subtracting
- * our way back to output would break the moment a new field appeared.
+ * Google bills reasoning at the output rate. `thoughtsTokenCount` is a
+ * SIBLING of `candidatesTokenCount`, not a subset (contrast
+ * `cachedContentTokenCount`, which IS a subset of `promptTokenCount` — the
+ * two fields look alike and behave oppositely). Billed output = sum.
  */
 export function billedOutputTokens(usage: Record<string, number | undefined>): number {
   return (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0);
@@ -269,17 +189,9 @@ export interface GenerateOutcome {
 
 export interface GeminiTransport {
   readonly backend: GeminiBackend;
-  /**
-   * Vertex endpoint the calls actually go to ("global" or a region name).
-   * Empty on the AI Studio path, which has no notion of one. Exposed because
-   * cost depends on it — see applyVertexSurcharge.
-   */
+  /** "global" or a region name; empty on the AI Studio path. Cost depends on it. */
   readonly location: string;
-  /**
-   * Create an explicit context cache holding the stable header. Returns the
-   * server-side cache name, or undefined when caching is unavailable — the
-   * adapter then inlines the header, which costs more but always works.
-   */
+  /** Create an explicit context cache; undefined → adapter inlines the header. */
   createCache(
     modelName: string,
     displayName: string,
@@ -292,10 +204,8 @@ export interface GeminiTransport {
 // ─── the shared implementation behind both doors ──────────────────────
 
 /**
- * Everything a request does, once. The two doors differ only in how the
- * client is constructed and how the caches API wants a model addressed;
- * request assembly, response reading and usage extraction are identical, so
- * they live here and a fix to either lands on both doors at the same time.
+ * Shared request/response handling. The two doors differ only in client
+ * construction and how the caches API addresses a model.
  */
 abstract class GenAiTransport implements GeminiTransport {
   abstract readonly backend: GeminiBackend;
@@ -307,10 +217,9 @@ abstract class GenAiTransport implements GeminiTransport {
   }
 
   /**
-   * How this door names a model to the caches API, or undefined when a cache
-   * cannot be addressed at all. Vertex needs a fully-qualified resource path
-   * because the cache lives in a specific project and location; AI Studio
-   * takes the bare `models/<name>` form.
+   * Model name for the caches API. Vertex needs a fully-qualified resource
+   * path (project + location); AI Studio takes bare `models/<name>`.
+   * Undefined → cache cannot be addressed.
    */
   protected abstract cacheModelId(modelName: string): string | undefined;
 
@@ -339,17 +248,12 @@ abstract class GenAiTransport implements GeminiTransport {
       contents: [{ role: "user", parts: [{ text: args.prompt }] }],
       config: {
         ...(args.generationConfig as Record<string, unknown>),
-        // The cache is referenced by resource name alone. The predecessor SDK
-        // required the whole CachedContent object back, which forced an
-        // in-process Map and meant a cache name from anywhere else silently
-        // missed; naming it directly removes both problems.
         ...(args.cachedContentName ? { cachedContent: args.cachedContentName } : {}),
       },
     });
     return {
-      // `text` concatenates the text parts of the first candidate for us, and
-      // is "" rather than undefined when the model returned no text at all —
-      // which happens when the output cap is spent entirely on thinking.
+      // `text` is "" (not undefined) when the model returned no text —
+      // happens when the output cap is spent entirely on thinking.
       text: resp.text ?? "",
       usage: (resp.usageMetadata ?? {}) as Record<string, number | undefined>,
       finishReason: resp.candidates?.[0]?.finishReason
@@ -363,8 +267,7 @@ abstract class GenAiTransport implements GeminiTransport {
 
 export class ApiKeyTransport extends GenAiTransport {
   readonly backend: GeminiBackend = "api-key";
-  // AI Studio has no regional endpoints, so there is no location to report
-  // and the regional surcharge can never apply to this path.
+  // AI Studio has no regional endpoints.
   readonly location = "";
 
   constructor(apiKey: string) {
@@ -386,8 +289,8 @@ export class VertexAdcTransport extends GenAiTransport {
   constructor(env: Record<string, string | undefined> = process.env) {
     const project = resolveGcpProject(env);
     const location = resolveGcpLocation(env);
-    // Passing project only when we resolved one lets the SDK run its own
-    // resolution (gcloud config, metadata server) as a further fallback.
+    // Only pass project when resolved, so the SDK can fall back to its own
+    // resolution (gcloud config, metadata server).
     super(
       new GoogleGenAI({
         vertexai: true,
@@ -400,8 +303,6 @@ export class VertexAdcTransport extends GenAiTransport {
   }
 
   protected cacheModelId(modelName: string): string | undefined {
-    // The cache resource name embeds project + location; without a resolved
-    // project we cannot address it, so fall back to inlining the header.
     if (!this.project) return undefined;
     return `projects/${this.project}/locations/${this.location}/publishers/google/models/${modelName}`;
   }

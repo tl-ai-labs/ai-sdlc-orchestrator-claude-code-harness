@@ -1,36 +1,11 @@
 /**
- * AntigravityWorkerAdapter — dispatches a TaskPacket to a Gemini model running
- * as an AGENT, through the Antigravity SDK, instead of as a single completion.
+ * AntigravityWorkerAdapter — Gemini as an AGENT, via `worker/gemini_worker.py`.
+ * The worker gets a workspace and tools; it lists, reads, runs commands, and
+ * edits files itself.
  *
- * WHAT IS ACTUALLY DIFFERENT. `GeminiFlashAdapter` sends one `generateContent`
- * call: the orchestrating session has already read every file the model will
- * see, the model answers once, and the session writes the result to disk. This
- * adapter launches `worker/gemini_worker.py`, which starts an Antigravity agent
- * session with `policies=[policy.allow_all()]` and a single workspace — the
- * worker lists the directory, reads what it decides it needs, runs commands and
- * edits files itself. Same model, same Vertex project, same policy file. The
- * difference is who holds the hands.
- *
- * WHY IT IS A SEPARATE ADAPTER AND NOT A FLAG. The two produce different
- * evidence and different bills. A completion has one prompt and one answer; an
- * agent session has a tool loop whose prompt is re-sent every turn on top of
- * the SDK's own multi-thousand-token identity preamble, so a packet that costs
- * a fraction of a cent as a completion costs meaningfully more as a delegation.
- * Making it a policy leaf — `adapter: antigravity-worker` — means the choice is
- * visible in the run's manifest, priced by the same code path as every other
- * leaf, and switchable without touching TypeScript.
- *
- * WHAT THIS ADAPTER DOES NOT DO. There is no output-cap doubling loop. That
- * loop exists because a single completion can be truncated by a `max_tokens`
- * ceiling the adapter chose and can therefore raise. An agent session has no
- * such ceiling under our control — it ends when the agent decides it is done or
- * when the deadline fires — so a retry would be a fresh, fully-billed session,
- * not a cheap continuation. One attempt is reported, always.
- *
- * VERTEX ONLY. The Antigravity SDK's doorway is Vertex; there is no AI Studio
- * path. Credentials are Application Default Credentials, resolved by exactly
- * the same helpers the Vertex transport uses, so a machine that can run the
- * model tier can run this one with no extra secret.
+ * Vertex-only (Application Default Credentials; no API-key branch).
+ * No output-cap doubling loop: an agent session has no ceiling under our
+ * control, and a retry would be a fresh fully-billed session. One attempt.
  */
 
 import { spawn } from "node:child_process";
@@ -66,55 +41,31 @@ import {
   takeInventory,
 } from "../delegation/evidence.js";
 
-/**
- * The worker directory, resolved from this module's own location rather than
- * from `process.cwd()`.
- *
- * The MCP server is launched by Claude Code with a working directory that is
- * the user's project, not the plugin — so any cwd-relative path here would
- * resolve somewhere different on every run. Compiled output lives at
- * `dist/adapters/`, which puts the package root two levels up.
- */
+// Module-location relative, not cwd — the server runs in the user's project.
+// dist/adapters/ → package root two levels up.
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WORKER_DIR = join(PACKAGE_ROOT, "worker");
 const WORKER_SCRIPT = join(WORKER_DIR, "gemini_worker.py");
 
-/**
- * How much of the worker's stderr is kept when it fails.
- *
- * A Python traceback is worth reporting whole, but an agent that fails after
- * printing progress can produce a great deal of it, and the entire string ends
- * up inside a telemetry event that a human reads in a terminal. The tail is
- * kept rather than the head because the exception is at the bottom.
- */
+// Tail (exception is at the bottom of the traceback) kept when the worker fails.
 const STDERR_TAIL_CHARS = 4000;
 
 export class AntigravityWorkerAdapter implements ModelAdapter {
   readonly id: string;
   readonly modelConfig: ModelConfig;
-  /** GCP project every delegation bills to. Resolved once, at construction. */
+  /** GCP project every delegation bills to. */
   readonly project: string;
-  /** Vertex region every delegation runs in. Resolved once, at construction. */
+  /** Vertex region every delegation runs in. */
   readonly location: string;
-  /** Absolute path to the interpreter that will run the worker. */
+  /** Absolute path to the interpreter. */
   readonly python: string;
-  /**
-   * The policy's pinned rates adjusted for where the calls actually run —
-   * identical to `modelConfig.pricing` on a `global` endpoint, +10% on a
-   * regional one for Gemini 3+. Every cost this adapter reports comes from
-   * here, never from the raw pin. Same resolution the model tier does, in the
-   * same place, so the two tiers cannot drift apart on pricing.
-   */
+  /** Pricing adjusted for a pinned regional endpoint. Cost reports read from here. */
   readonly billedPricing: ModelPricing;
 
   /**
-   * EVERYTHING THAT CAN FAIL WITHOUT SPENDING MONEY FAILS HERE.
-   *
-   * `preflight_dispatch` constructs every adapter the run will use before the
-   * run dispatches anything, precisely so that a missing project, a missing
-   * Python environment or a missing worker script surfaces as one message at
-   * the start rather than as a crash after the premium phases are billed. That
-   * only works if this constructor is strict, so it is.
+   * Strict on purpose. preflight_dispatch constructs every adapter before the
+   * run starts, so a missing project / interpreter / worker script surfaces
+   * once at the start, not as a crash after premium phases are billed.
    */
   constructor(config: ModelConfig) {
     this.id = config.id;
@@ -131,11 +82,9 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     }
     this.project = project;
 
-    // The policy leaf's `region:` is the declaration of record; the ambient
-    // environment is the fallback and `global` is the last resort, which is the
-    // same order the Vertex transport uses. Whatever wins is passed to the
-    // worker explicitly, so the region in the manifest and the region on the
-    // endpoint are the same value by construction rather than by luck.
+    // Same precedence as the Vertex transport: policy leaf's `region:`, then
+    // GOOGLE_CLOUD_LOCATION, then `global`. Passed to the worker explicitly so
+    // the region in the manifest and on the endpoint match by construction.
     this.location =
       config.region ?? resolveGcpLocation(process.env as Record<string, string | undefined>);
 
@@ -158,17 +107,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     });
   }
 
-  /**
-   * `cacheContext` is accepted and ignored.
-   *
-   * Explicit context caching is a property of a completion call — you cache a
-   * stable prefix and pay a discount when the next call reuses it. An agent
-   * session builds its own conversation across turns and the SDK does not
-   * expose a cache handle to attach, so there is nothing here to key. Rather
-   * than pretend, the adapter reports `cache_hit: false` on every delegation:
-   * an honest zero is worth more than an invented discount, because the report
-   * subtracts these numbers to claim a saving.
-   */
+  /** `cacheContext` accepted and ignored — no cache handle for agent sessions. */
   async execute(
     packet: TaskPacket,
     _cacheContext?: string,
@@ -177,12 +116,8 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     const started = Date.now();
     const startedAt = new Date(started).toISOString();
 
-    // The workspace the agent may act in. `work_dir` is the explicit answer;
-    // `project_root` is the sensible default, since that is the directory the
-    // orchestrator is already generating into. With neither there is nothing
-    // to delegate — an agent with no working directory is just a slower, more
-    // expensive completion — so this refuses instead of inventing a temp dir
-    // whose edits nobody would ever look at.
+    // Workspace the agent may act in. Refused rather than defaulted to a
+    // temp dir whose edits nobody would look at.
     const workdir = runContext?.work_dir ?? runContext?.project_root;
     if (!workdir) {
       return this.failure(
@@ -192,10 +127,9 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
       );
     }
 
-    // Evidence lands beside the run's telemetry, in a `delegation/` directory,
-    // because that pass directory is what the report already reads. Falling
-    // back under the workspace keeps a hand-run invocation from writing into
-    // whatever directory the server happened to be launched from.
+    // Evidence lands beside telemetry, where the report reads. Fallback under
+    // the workspace keeps a hand-run invocation from writing into wherever
+    // the server was launched from.
     const outDir = runContext?.telemetry_path
       ? join(dirname(runContext.telemetry_path), "delegation")
       : join(workdir, ".sdlc", "delegation");
@@ -224,32 +158,23 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
       timeoutSec,
     });
 
-    // Inventory the workspace as late as possible — after the brief is staged,
-    // immediately before the worker starts — so nothing this adapter itself
-    // wrote can appear in the delta. `outDir` is excluded because it can sit
-    // inside the workspace, and the SDK writes its session transcript there
-    // while the agent runs; without the exclusion every delegation would report
-    // its own evidence as a file the agent changed.
+    // Inventoried as late as possible so nothing this adapter wrote appears
+    // in the delta. `outDir` is excluded because it sits inside the workspace
+    // and the SDK writes session state there.
     const before = takeInventory(workdir, { exclude: [outDir] });
 
     const run = await this.spawnWorker(args, workdir, timeoutSec);
 
-    // Taken before anything else is read, so the window between "the worker
-    // exited" and "we looked" is as short as it can be.
     const after = takeInventory(workdir, { exclude: [outDir] });
 
-    // The sidecar is read whatever the exit status was. A worker that finished
-    // its session and then failed to print — or was killed a moment after
-    // writing — has still spent every one of those tokens, and a failed
-    // delegation reported as free is a hole in the run's cost story.
+    // Read whatever the exit status: a failed delegation still spent tokens.
     const sidecar = readJsonIfPresent(usageFile);
     const tokens = mapSidecarTokens(sidecar);
     const cost = computeCostUsd(tokens, this.billedPricing);
     const latency = Date.now() - started;
 
-    // Written for BOTH outcomes. A delegation that failed halfway still spent
-    // money and may still have edited files, and that is exactly the case a
-    // reader most needs a receipt for.
+    // Written for BOTH outcomes — a failed delegation is what a reader most
+    // needs a receipt for.
     this.writeRecord(join(outDir, `worker-delegation-${stem}.json`), {
       packet: {
         id: packet.id,
@@ -296,11 +221,8 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
       };
     }
 
-    // The worker prints the agent's final message on stdout. Parsed as JSON
-    // because that is what the packet's schema asked for, with the same
-    // `{ raw }` fallback the model tier uses — a worker that narrated instead
-    // of answering should degrade into something the orchestrator can still
-    // look at, not throw away a session that has already been paid for.
+    // Worker prints the final message on stdout. `{ raw }` fallback matches
+    // the model tier's shape.
     const text = run.stdout.trim();
     let parsed: any;
     try {
@@ -332,17 +254,11 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
   }
 
   /**
-   * Launch the worker and wait for it.
-   *
-   * `detached: true` puts the child in its own process group. That is not
-   * cosmetic: the worker starts an Antigravity agent session which itself runs
-   * shell commands as grandchildren, and killing only the Python process would
-   * leave those running — holding the working directory, and in the worst case
-   * still talking to Vertex on a run the user believes has stopped. Signalling
-   * the negative pid takes the whole group.
-   *
-   * `shell: false` (the default) is load-bearing too: the argument vector
-   * carries user paths and a task-file path, and a shell would re-parse them.
+   * `detached: true` puts the child in its own process group; the worker
+   * spawns shell commands as grandchildren, and killing only the Python
+   * process would leave them running (holding the workdir, still talking to
+   * Vertex). Signalling the negative pid takes the whole group. `shell: false`
+   * (default) prevents re-parsing user paths in the argv.
    */
   private spawnWorker(
     args: string[],
@@ -367,18 +283,15 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
       child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
       child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
 
-      // The adapter's deadline is the worker's plus a grace window, so the
-      // worker's own timeout — which exits cleanly with a diagnosable message —
-      // always fires first. Reaching this timer means the worker itself is
-      // wedged, and there is nothing to learn by waiting longer.
+      // Deadline = worker's timeout + grace, so the worker's own timeout
+      // (which exits cleanly with a diagnosable message) fires first.
       const timer = setTimeout(
         () => {
           timedOut = true;
           try {
             if (child.pid) process.kill(-child.pid, "SIGKILL");
           } catch {
-            // Already gone between the timer firing and the signal — the
-            // 'close' handler below reports whatever it exited with.
+            // Already gone — 'close' reports whatever it exited with.
           }
         },
         (timeoutSec + WORKER_KILL_GRACE_SEC) * 1000,
@@ -420,13 +333,8 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
   }
 
   /**
-   * Write the delegation receipt, and never fail the delegation over it.
-   *
-   * The record is evidence ABOUT a run, not part of one. By the time this is
-   * called the money is spent and the agent's answer is already in hand, so a
-   * full disk or a read-only directory must cost the caller a warning on stderr
-   * and nothing else. stderr specifically: this process speaks MCP over stdout,
-   * and a stray line there corrupts the protocol frame.
+   * Never fail the delegation over the receipt. stderr, not stdout — stdout
+   * is the MCP transport.
    */
   private writeRecord(path: string, input: Parameters<typeof buildDelegationRecord>[0]): void {
     try {
@@ -439,12 +347,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     }
   }
 
-  /**
-   * A failure that happened before any subprocess ran, and therefore before any
-   * token was spent. Reported with the same shape as a vendor failure so the
-   * server's telemetry path needs no special case — zeros throughout, which is
-   * the truth here rather than a fallback.
-   */
+  /** Pre-subprocess failure. Zeros throughout — no tokens spent. */
   private failure(started: number, error: string): ExecutionResult {
     const tokens = { input: 0, input_cached: 0, output: 0 };
     const latency = Date.now() - started;
@@ -473,13 +376,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
   }
 }
 
-/**
- * Read the sidecar if the worker got as far as writing one.
- *
- * Absent and unparseable are the same answer — `null`, which
- * `mapSidecarTokens` turns into zeros. Both mean "no usage numbers survived",
- * and there is nothing an adapter can do about either except report it as such.
- */
+/** Absent and unparseable are the same answer — null → mapSidecarTokens → zeros. */
 function readJsonIfPresent(path: string): any {
   try {
     return JSON.parse(readFileSync(path, "utf8"));

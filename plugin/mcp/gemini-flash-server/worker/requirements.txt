@@ -1,28 +1,18 @@
-# Python dependencies for gemini_worker.py — the agent worker behind the
-# `antigravity-worker` adapter. Installed into a dedicated virtual environment
-# by `npm run setup`; nothing else in this repo needs Python.
-#
-# WHY A FLOOR AND NOT AN EXACT PIN. 0.1.7 is the version this worker's call
-# shape was verified against end to end on Vertex — LocalAgentConfig /
-# ModelTarget / VertexEndpoint / policy.allow_all() / resolve() / text() /
-# usage_metadata all behaved as gemini_worker.py assumes. An exact `==` pin
-# would freeze installs on a 0.1.x package that is still moving, and the worker
-# already records the version it actually ran under (`sdk_version` in every
-# usage sidecar), so a newer SDK is visible in the evidence rather than hidden.
-# If a later release breaks the call shape, that field is where you will see it.
+# Python dependencies for gemini_worker.py — the agent behind the
+# `antigravity-worker` adapter. Installed into a dedicated virtualenv by
+# verify-setup.mjs --enable-agent.
+
+# Floor, not exact pin: the worker records `sdk_version` in every usage sidecar,
+# so a newer SDK is visible in the evidence.
 google-antigravity>=0.1.7
 
-# REQUIRES PYTHON >= 3.10. On macOS this matters more than it looks: the system
-# interpreter at /usr/bin/python3 is 3.9, and `pip install google-antigravity`
-# against it fails with "no matching distribution" — which reads like a missing
-# package and is really a version floor. The plugin's setup resolves a >= 3.10
-# interpreter explicitly and records the absolute path rather than trusting
-# whatever `python3` resolves to at run time.
+# Requires Python >= 3.10. macOS ships /usr/bin/python3 as 3.9;
+# verify-setup.mjs resolves an explicit >= 3.10 interpreter by version-suffixed
+# name (python3.13, python3.12, ...) rather than trusting bare `python3`.
 #
-# One further macOS wrinkle: some Homebrew Python builds link `pyexpat` against
-# a Homebrew libexpat that is not installed, so the module fails to load and
-# takes the SDK import down with it. If `import google.antigravity` fails with
-# an expat error, install it and point the loader at it:
+# Homebrew wrinkle: some Homebrew Python builds link `pyexpat` against a
+# libexpat that is not installed. If `import google.antigravity` fails with an
+# expat error:
 #
 #   brew install expat
 #   export DYLD_LIBRARY_PATH=/opt/homebrew/opt/expat/lib

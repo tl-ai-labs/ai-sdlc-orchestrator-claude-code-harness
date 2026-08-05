@@ -1,25 +1,11 @@
 /**
- * Select slots — the mechanism that lets one policy file hold more than one way
- * of reaching a tier, with the RUN choosing which one executes.
+ * Select slots. Two invariants:
+ *   1. Golden: with no selection made, opus-plus-flash resolves to exactly
+ *      what it did before slots existed (same adapter, model, rates).
+ *   2. Selections are obeyed only on phases the slot governs, and the
+ *      routing decision carries a trace saying the run asked (not defaulted).
  *
- * Two things are being protected here, and they pull in opposite directions.
- *
- * The first is that adding the slot changed nothing. `opus-plus-flash` is the
- * policy every published run of this plugin has used; its rules still name
- * `gemini-flash`, and with no selection made that name has to resolve to the
- * same adapter, the same model and the same rates it always did. A golden test
- * is the only honest way to say that, because "I did not mean to change it" is
- * not evidence. If the shipped default ever drifts, the first assertion below
- * fails and names the field that moved.
- *
- * The second is that when a selection IS made, it is obeyed exactly — the right
- * leaf, only on the phases the slot governs, with a trace saying the run asked
- * for it rather than inherited it. A delegation costs several times a
- * completion call on the same packet, so "which tier ran" is a question the
- * telemetry has to answer months later without the operator's memory.
- *
- * Everything here is offline and free: policy loading, parsing and pure routing.
- * No adapter is constructed and no credential is read.
+ * Offline; policy loading, parsing, and pure routing only.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";

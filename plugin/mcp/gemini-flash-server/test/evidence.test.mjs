@@ -1,30 +1,13 @@
 /**
- * evidence.test.mjs — the delegation receipt, checked from outside.
+ * Delegation receipt. Silent failure modes worth pinning:
+ *   - inventory walks its own output dir → every delegation "changes" its
+ *     own brief and sidecar;
+ *   - walks node_modules after an install → real edits buried under 40k;
+ *   - mtime-based modification → formatter fills receipt with non-changes;
+ *   - count read from capped sample list → long sessions understated.
  *
- * WHAT IS BEING PROTECTED. The receipt exists to answer one question a reader
- * cannot otherwise answer — did the delegated agent actually do anything, and
- * what? Every way this can go wrong produces a plausible-looking file rather
- * than an error:
- *
- *   - the inventory walks the worker's own output directory, so every
- *     delegation "changes" its own brief and sidecar;
- *   - it walks node_modules after the agent runs an install, so twelve real
- *     edits are buried under forty thousand;
- *   - modification is judged by mtime, so a formatter that rewrote nothing
- *     fills the receipt with changes nobody made;
- *   - the tool-call count is read from the capped sample list, so every long
- *     session is understated by exactly the amount that makes it interesting.
- *
- * None of those throw. They yield a receipt that is confidently wrong, which is
- * worse than no receipt at all.
- *
- * REAL DIRECTORIES, NOT A MOCKED `fs`. The walking tests build an actual
- * temporary tree. A mock would happily agree with an implementation that
- * follows a symlink into its own ancestor or trips over a file that vanishes
- * mid-walk, and those are the failures worth catching. Temp directories are
- * free and offline, so there is no reason to fake them.
- *
- * $0, offline.
+ * Uses real temp trees, not a mocked fs (symlink loops, vanishing files —
+ * failures a mock would agree with).
  */
 
 import { test } from "node:test";

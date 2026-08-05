@@ -1,13 +1,8 @@
 /**
- * Tests for the pre-flight reachability assessment.
- *
- * These run against the compiled `dist/preflight.js` rather than `dist/server.js`
- * because the server connects a stdio transport at import time and would hang the
- * test runner. That separation is the reason preflight.ts exists as its own module.
- *
- * Every test here runs with no credentials on the machine: the adapter factory is
- * injected, so "this model cannot be constructed" is expressed by a stub that throws
- * rather than by an unset environment variable.
+ * Runs against dist/preflight.js — server.ts opens a stdio transport at
+ * import and would hang the test runner. Adapter factory is injected so
+ * "this model cannot be constructed" is expressed by a throwing stub, not
+ * by an unset env var.
  */
 import test from "node:test";
 import assert from "node:assert/strict";

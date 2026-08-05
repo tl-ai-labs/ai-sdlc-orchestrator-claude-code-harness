@@ -1,15 +1,7 @@
 /**
- * geminiTransports.test.mjs — guards the credential-detection rules.
- *
- * These decide which of Google's two front doors a run goes through, and a
- * wrong answer is expensive in a specific way: the adapter is constructed
- * during setup validation, but a *misdetected* backend only fails at the
- * first Gemini dispatch — after the premium-tier phases have already been
- * billed. The precedence table therefore gets tests of its own, one fact
- * varied at a time, with no network and no process state.
- *
- * Runs against dist/, because that is what the plugin manifest actually
- * executes; `npm test` in this package builds first.
+ * Guards the credential-detection precedence. One misdetected backend
+ * only fails at the first Gemini dispatch, after premium phases are
+ * billed — so precedence is tested one fact at a time, offline.
  */
 
 import { test } from "node:test";

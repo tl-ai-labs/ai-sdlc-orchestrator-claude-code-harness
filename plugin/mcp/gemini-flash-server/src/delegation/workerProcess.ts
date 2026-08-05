@@ -1,85 +1,41 @@
 /**
- * workerProcess.ts — the pure half of the Antigravity agent worker.
- *
- * WHAT THIS IS. `AntigravityWorkerAdapter` delegates a TaskPacket by launching
- * `worker/gemini_worker.py` as a subprocess: one process per delegated call,
- * given a working directory it may act inside, and read back through a usage
- * sidecar it writes on the way out. Everything about that launch that can be
- * decided WITHOUT touching the filesystem, the clock or the network lives here
- * — which interpreter to use, what the argument vector is, what environment the
- * child sees, what the task brief says, and how the sidecar's token counts map
- * onto the orchestrator's `ExecutionResult`.
- *
- * WHY IT IS SPLIT OUT. The interesting failures in a delegation are all in
- * these decisions, not in `spawn()`: a project that silently comes from the
- * wrong place, a region the receipt claims but the call never used, an API key
- * leaking into a child that is supposed to prove it went through Vertex, a
- * cached-token count double-billed because the vendor's `prompt_token_count`
- * already includes it. A test that has to launch Python, hold Google
- * credentials and spend money to check any of that will not be run. Every
- * function below is a plain input-to-output mapping, so the whole contract is
- * pinned offline for $0 in `test/workerProcess.test.mjs`.
- *
- * WHAT IS DELIBERATELY NOT HERE: the spawn itself, the timeout kill, and the
- * reading of files. Those are in the adapter, which is the only part that
- * needs a real machine.
+ * Pure half of the Antigravity agent worker launch — decisions that don't
+ * touch the filesystem, clock, or network. Interpreter resolution, argv,
+ * child env, task brief, and sidecar-to-tokens mapping. The spawn, timeout
+ * kill, and file reads live in AntigravityWorkerAdapter (the real-machine
+ * half); everything here is unit-tested offline.
  */
 
 import { join } from "node:path";
 import type { ReasoningConfig, TaskPacket } from "../types.js";
 
 /**
- * Seconds the worker gives its own `asyncio.wait_for` before abandoning the
- * agent session. Matches the Python side's `--timeout` default so the two
- * halves do not disagree about how long "too long" is. A policy leaf overrides
- * it with `worker_timeout_sec:`.
- *
- * Nine minutes is a long ceiling on purpose. This is not one model call: the
- * worker explores a directory, runs commands and edits files, and the SDK only
- * returns at the END of the whole agentic session. A ceiling tuned to a
- * single-turn completion would kill healthy work.
+ * Worker's own asyncio deadline; matches the Python `--timeout` default so
+ * the two halves agree. 9 minutes — an agent explores, runs commands, and
+ * only returns at the end of the whole session. Override with policy
+ * leaf's `worker_timeout_sec:`.
  */
 export const DEFAULT_WORKER_TIMEOUT_SEC = 540;
 
 /**
- * Extra seconds the adapter waits beyond the worker's own deadline before
- * killing the process group.
- *
- * The two deadlines are deliberately unequal. When the worker hits ITS timeout
- * it raises inside `run()`, prints a reason on stderr and exits non-zero —
- * a diagnosable failure. When the ADAPTER's deadline fires we SIGKILL a process
- * group and learn nothing. So the worker must always get there first, and this
- * grace window is what guarantees it does even on a loaded machine.
+ * Extra seconds the adapter waits before SIGKILL. Deliberately non-zero so
+ * the worker's own timeout — which exits cleanly with a diagnosable message —
+ * always fires first, even on a loaded machine.
  */
 export const WORKER_KILL_GRACE_SEC = 30;
 
-/**
- * Environment variable naming an explicit interpreter for the worker.
- *
- * Escape hatch, not the normal path: `npm run setup` builds a virtual
- * environment next to the worker and that is what the adapter finds by itself.
- * This exists for the case where a user has already got a >= 3.10 interpreter
- * with `google-antigravity` installed and does not want a second copy of it.
- */
+/** Explicit interpreter for the worker. Escape hatch; the normal path is the built venv. */
 export const WORKER_PYTHON_ENV = "GEMINI_WORKER_PYTHON";
 
-/** Where `npm run setup` puts the worker's virtual environment. */
 export function workerVenvPython(workerDir: string): string {
   return join(workerDir, ".venv", "bin", "python");
 }
 
 /**
- * Decide which Python runs the worker, or refuse and say how to fix it.
- *
- * WHY THERE IS NO `python3` FALLBACK. On macOS `/usr/bin/python3` is 3.9 and
- * `google-antigravity` requires >= 3.10, so falling back to whatever `python3`
- * resolves to would turn a missing-setup problem into an import error thrown
- * from inside a subprocess several paid phases into a run. Refusing here — at
- * adapter construction, which `preflight_dispatch` exercises before the run
- * spends anything — costs the user one clear sentence instead.
- *
- * `exists` is injected so the resolution order can be tested without a
- * filesystem.
+ * No `python3` fallback: on macOS that resolves to 3.9, and google-antigravity
+ * needs ≥ 3.10 — the fallback would turn a setup problem into a subprocess
+ * import error paid phases into a run. Refuse here instead.
+ * `exists` is injected for offline testing.
  */
 export function resolveWorkerPython(opts: {
   env: Record<string, string | undefined>;
@@ -108,13 +64,8 @@ export function resolveWorkerPython(opts: {
 }
 
 /**
- * Translate the policy's `reasoning:` block into the worker's `--thinking`
- * flag.
- *
- * The worker takes an uppercase `types.ThinkingLevel` member name and treats
- * `NONE` as "no thinking config at all". `tier` is the field Gemini models
- * already use elsewhere in this repo, so a policy leaf that moves between the
- * model adapter and the agent adapter keeps the same vocabulary.
+ * Policy `reasoning:` → worker's `--thinking` flag. `NONE` = no thinking config.
+ * `tier` is the same field the model adapter reads.
  */
 export function workerThinkingLevel(reasoning?: ReasoningConfig): string {
   const tier = reasoning?.tier;
@@ -123,38 +74,21 @@ export function workerThinkingLevel(reasoning?: ReasoningConfig): string {
 }
 
 export interface WorkerArgsInput {
-  /** Absolute path to gemini_worker.py. */
   script: string;
-  /** File holding the task brief the worker reads as its first message. */
   taskFile: string;
-  /** Model id from the policy leaf — the worker pins none of its own. */
   model: string;
-  /** Vertex region, always passed explicitly. See buildWorkerArgs. */
   region: string;
-  /** The single directory the worker may read, edit and run commands in. */
   workdir: string;
-  /** Where the sidecar and the SDK's own save directory go. */
   outDir: string;
-  /** The sidecar this invocation writes. */
   usageFile: string;
   thinking: string;
   timeoutSec: number;
 }
 
 /**
- * Build the worker's argument vector.
- *
- * `--region` is passed on EVERY invocation even though the worker will fall
- * back to `GOOGLE_CLOUD_LOCATION` when it is absent. The fallback exists for
- * humans running the script by hand; for the adapter it would be a hazard,
- * because then the region in the run's manifest (the policy's) and the region
- * that served the call (the ambient environment's) could differ with no
- * artifact disagreeing. Passing it explicitly makes those two the same value by
- * construction.
- *
- * Returned as an array and handed to `spawn` without a shell, so a path
- * containing spaces or a quote needs no escaping and cannot be re-parsed as
- * more arguments.
+ * `--region` is passed on every invocation. The worker has its own env
+ * fallback for hand runs, but here we want the region in the manifest and
+ * the region on the endpoint to match by construction.
  */
 export function buildWorkerArgs(i: WorkerArgsInput): string[] {
   return [
@@ -171,29 +105,18 @@ export function buildWorkerArgs(i: WorkerArgsInput): string[] {
 }
 
 /**
- * API-key variables removed from the child environment.
- *
- * The whole claim this adapter exists to make is "the Antigravity SDK reached
- * a Gemini model through Vertex on project P in region R". An API key visible
- * to the child is a second, unrecorded door: Google's libraries prefer it in
- * several code paths, and if one of them took it the sidecar would still say
- * "vertex_project: P" because the worker writes what it was TOLD, not what the
- * transport chose. Deleting the keys makes that divergence impossible rather
- * than merely unlikely.
+ * API-key variables removed from the child env. The whole claim this adapter
+ * makes is "reached Vertex on project P in region R". Google's libraries
+ * prefer an API key in several code paths — if one took it, the sidecar
+ * would still say `vertex_project: P` because the worker writes what it was
+ * TOLD, not what the transport chose.
  */
 export const WORKER_STRIPPED_ENV = ["GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
 
 /**
- * Build the environment the worker subprocess sees.
- *
- * Starts from the parent's — the child needs PATH, HOME (Application Default
- * Credentials live under it), and on macOS the DYLD_LIBRARY_PATH that some
- * Homebrew Pythons need to load pyexpat — then pins the two variables that
- * decide who gets billed and where, and strips the API-key door.
- *
- * The parent environment reaching here has already been through
- * `sanitizePluginEnv`, so an unexpanded `${GOOGLE_CLOUD_PROJECT}` placeholder
- * cannot be forwarded as if it were a project id.
+ * Child env. Starts from the parent's (child needs PATH, HOME for ADC, and
+ * on macOS DYLD_LIBRARY_PATH for pyexpat), pins project + location, strips
+ * API-key doors. Parent env has already been through sanitizePluginEnv.
  */
 export function buildWorkerEnv(
   parent: Record<string, string | undefined>,
@@ -207,27 +130,16 @@ export function buildWorkerEnv(
   for (const key of WORKER_STRIPPED_ENV) delete child[key];
   child.GOOGLE_CLOUD_PROJECT = pins.project;
   child.GOOGLE_CLOUD_LOCATION = pins.location;
-  // Unbuffered stdio: the worker's failure diagnostics are printed to stderr
-  // right before a non-zero exit, and a killed process never flushes a buffer.
-  // Without this, the one line explaining a timeout is the line most likely to
-  // be lost.
+  // Unbuffered so a killed process's last stderr line — often the timeout
+  // diagnostic — isn't lost.
   child.PYTHONUNBUFFERED = "1";
   return child;
 }
 
 /**
- * Filesystem-safe stem for this packet's evidence files.
- *
- * Packet ids are authored by the orchestrator (`tp_codegen_042`) and are already
- * unique within a run, which is why the evidence is keyed on the id rather than
- * on a phase plus a counter the adapter would have to keep. The substitution is
- * defensive: an id is a string from a model-authored plan, and a `/` in one
- * would silently write the sidecar into a different directory.
- *
- * Leading and trailing dots go too. Not a traversal defence — the separators
- * are already gone by then — but a stem beginning with a dot produces a HIDDEN
- * evidence file, and evidence a reader has to know to look for is not doing its
- * job.
+ * Filesystem-safe stem. Substitution is defensive: an id is a string from a
+ * model-authored plan, and a `/` would write the sidecar into a different
+ * directory. Leading/trailing dots go so evidence is never hidden.
  */
 export function evidenceStem(packet: TaskPacket): string {
   const raw = packet.id || `${packet.phase}-untitled`;
@@ -235,22 +147,10 @@ export function evidenceStem(packet: TaskPacket): string {
 }
 
 /**
- * Render the brief the worker reads as its opening message.
- *
- * DIFFERENT FROM THE MODEL PROMPT ON PURPOSE. `GeminiFlashAdapter` builds a
- * prompt for one completion: everything the model could possibly need has to be
- * inlined, because the model cannot go and look. This worker is an agent with a
- * working directory — it can list, read, edit and run commands. So the packet's
- * file slices are presented as EXCERPTS with their real paths named, and the
- * worker is told it may open the originals. That is the entire difference
- * between the two tiers, and it is why the same packet costs more here: the
- * worker will spend turns looking around.
- *
- * The output contract is restated in the imperative at the end because an agent
- * that has just run six tools is far more likely to narrate what it did than a
- * model that only ever produced one message. The adapter parses stdout as JSON
- * and falls back to `{ raw }`, so a narrating worker degrades rather than
- * fails — but the run's downstream phases want the JSON.
+ * Brief the worker reads as its opening message. Different from a completion
+ * prompt: file slices are EXCERPTS with real paths, and the worker is told
+ * it may open the originals. The output contract is restated at the end
+ * because an agent that has run tools is more likely to narrate.
  */
 export function workerTaskMarkdown(
   packet: TaskPacket,
@@ -309,27 +209,13 @@ export function workerTaskMarkdown(
 }
 
 /**
- * The token counts a worker sidecar carries, mapped onto the orchestrator's
- * DISJOINT convention.
- *
- * TWO TRAPS LIVE HERE, both of which have cost real money elsewhere:
- *
- * 1. THE KEYS ARE PYTHON'S. The sidecar is `usage_metadata.model_dump()` from
- *    the Python SDK, so the fields are snake_case — `prompt_token_count`, not
- *    the `promptTokenCount` the JavaScript Gemini SDK returns. Reading the
- *    camelCase names here yields `undefined`, which floors to zero, which
- *    reports a delegation that cost dollars as having cost nothing.
- *
- * 2. `prompt_token_count` INCLUDES the cached portion. `computeCostUsd`
- *    requires fresh and cached to be disjoint (fresh at the full rate, cached
- *    at the discounted one), so the cached count is subtracted out. Skipping
- *    the subtraction bills every cached token twice and makes an effective
- *    cache look more expensive than no cache at all. `Math.max` guards the
- *    vendor edge case where the reported cached count exceeds the prompt count.
- *
- * Thoughts are billed at the output rate, so they are folded into `output` for
- * costing and ALSO reported separately in `output_reasoning`, which is
- * reporting-only — `computeCostUsd` never reads it, so there is no double count.
+ * Map worker-sidecar tokens onto the orchestrator's disjoint convention.
+ * TWO TRAPS:
+ *  1. Sidecar keys are snake_case (Python SDK), not camelCase.
+ *  2. `prompt_token_count` INCLUDES the cached portion — subtract before
+ *     handing to computeCostUsd, which needs disjoint counts.
+ * Thoughts fold into `output` for costing and duplicate to `output_reasoning`
+ * for reporting only (computeCostUsd never reads that field).
  */
 export function mapSidecarTokens(sidecar: any): {
   input: number;
@@ -351,12 +237,8 @@ export function mapSidecarTokens(sidecar: any): {
 }
 
 /**
- * How many tool calls the worker made.
- *
- * Read from `tool_call_count`, which the worker writes as the true length of
- * the drained list, rather than from `tool_calls.length`, which stops at the
- * worker's own recording cap. The count is the honest number; the list is a
- * bounded sample of it, and `tool_calls_truncated` says when the two differ.
+ * True tool-call count, not the sampled list length. `tool_call_count` is
+ * the honest number; `tool_calls_truncated` says when the list is bounded.
  */
 export function sidecarToolCallCount(sidecar: any): number {
   const n = Number(sidecar?.tool_call_count ?? 0);

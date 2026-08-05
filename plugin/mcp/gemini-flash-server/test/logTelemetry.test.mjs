@@ -1,15 +1,8 @@
 /**
- * Regression tests for direct-tier telemetry normalization.
- *
- * Background: `log_telemetry` is the path used by the orchestrator to report phases it
- * ran itself (the direct tier — Opus phases executed inside Claude Code). Until this fix
- * the server appended whatever event the model handed it, verbatim. A model has no clock,
- * so the 2026-08-04 live run wrote every direct-tier event with a placeholder
- * `2026-08-04T00:00:00.000Z` and `latency_ms: 0`. That corrupts the manifest's run
- * duration, because buildManifest derives started_at/ended_at by sorting on `ts`.
- *
- * These tests pin the two guarantees: the timestamp is always server-stamped, and latency
- * is always null (not zero) for events this server did not itself measure.
+ * Regression tests for direct-tier telemetry normalization. Pins:
+ * timestamp always server-stamped; latency always null (not zero) for
+ * events this server did not itself measure. A model has no clock;
+ * placeholder timestamps would corrupt manifest.duration_sec.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";

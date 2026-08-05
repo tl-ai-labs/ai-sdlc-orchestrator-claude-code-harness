@@ -1,16 +1,7 @@
 /**
- * report-delegation.test.mjs — the one section of the report that is the demo.
- *
- * A connector run and an ordinary run produce the same phases, the same gates
- * and the same artifacts. The only externally visible difference is that some
- * packets were answered by an agent working in the directory instead of by a
- * single completion — and if the report does not say so, nothing does. That
- * makes this section load-bearing in a way the rest of the report is not.
- *
- * The failures worth guarding are all quiet ones:
- *
- *   - the section prints on runs that never delegated, inventing a distinction
- *     the run did not make;
+ * Guards the "Delegated to an agent worker" report section — the only
+ * externally visible sign a run went through the agent door. Quiet failures:
+ *   - the section prints on runs that never delegated (invents a distinction);
  *   - it prints nothing on runs that DID delegate, because the receipts moved
  *     or the filenames drifted;
  *   - the delegated and non-delegated costs do not add up to the run total, so
