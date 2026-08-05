@@ -143,11 +143,13 @@ if (!hasAdc) {
     ${c.bold}As a model${c.reset}  — Claude reads your code and sends it over, Gemini sends text back.
                   Cheap and predictable: one request, one answer, per task.
 
-    ${c.bold}As an agent${c.reset} — Gemini opens the folder itself, runs commands and edits files,
-                  and Claude reviews the result. It needs Python 3.10+ and the
-                  Antigravity SDK, and it costs several times more per task: an
-                  agent re-sends the whole conversation on every tool call, on top
-                  of a fixed multi-thousand-token preamble it carries every turn.
+    ${c.bold}As an agent${c.reset} — through Google's ${c.bold}Antigravity SDK${c.reset}. Gemini opens the folder
+                  itself, runs commands and edits files, and Claude reviews the
+                  result. It needs Python 3.10+ and the Antigravity SDK, a Python
+                  package this wizard installs for you. It costs several times more
+                  per task: an agent re-sends the whole conversation on every tool
+                  call, on top of a fixed multi-thousand-token preamble it carries
+                  every turn.
 `);
   // Named as a command rather than as a file to edit. The selection is spelled
   // `slot=option` and the slot is the half nobody guesses, so every route to it
@@ -156,9 +158,9 @@ if (!hasAdc) {
   hint("You can change this later, either way round:");
   hint("  npm run verify -- --enable-agent    # agent path (builds what it needs)");
   hint("  npm run verify -- --disable-agent   # back to the model path");
-  geminiAsAgent = await askYesNo("Set up the agent path as well?", false);
+  geminiAsAgent = await askYesNo("Set up the Antigravity SDK agent path as well?", false);
   if (geminiAsAgent) {
-    ok("Agent path selected — this wizard will build the Python worker environment.");
+    ok("Antigravity SDK agent path selected — this wizard will build the Python worker environment.");
   } else {
     ok("Model path selected — no Python needed.");
   }

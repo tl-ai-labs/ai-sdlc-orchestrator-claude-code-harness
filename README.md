@@ -160,10 +160,10 @@ report at the end shows what the run spent.
 
 `opus-plus-flash` can reach that mechanical tier two ways. By default Gemini is
 a **model**: Claude reads the files, sends the text, and writes the answer back.
-It can instead be an **agent** — Gemini opens the working folder itself, runs
-commands and edits files, and Claude reviews the result. The agent path needs
-Google Cloud credentials and Python 3.10+, and costs several times more per
-task, so it is off unless you ask for it. Both installation routes ask, and
+It can instead be an **agent**, through Google's Antigravity SDK — Gemini opens
+the working folder itself, runs commands and edits files, and Claude reviews the
+result. The agent path needs Google Cloud credentials and Python 3.10+, and costs
+several times more per task, so it is off unless you ask for it. Both installation routes ask, and
 either way the answer is one command — `npm run verify -- --enable-agent`, or
 the same flag on the installed plugin's verify script, which records the choice
 and builds what it needs. A run that took the agent path leaves the evidence

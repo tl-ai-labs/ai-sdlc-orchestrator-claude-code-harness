@@ -926,7 +926,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 
     log(
       enableAgent
-        ? `  ✓ Mechanical tier set to the agent path (SDLC_SELECT=${written.spec}) in ${written.path}.`
+        ? `  ✓ Mechanical tier set to the Antigravity SDK agent path (SDLC_SELECT=${written.spec}) in ${written.path}.`
         : `  ✓ Mechanical tier set back to the model path in ${written.path}.`
     );
     // Said plainly because the two scopes fail differently and both failures are

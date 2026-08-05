@@ -128,12 +128,13 @@ Ask in these words:
 > **As a model** — Claude reads your code and sends it over, Gemini sends text back. Cheap and
 > predictable: one request, one answer, per task. This is the default.
 >
-> **As an agent** — Gemini opens the folder itself, runs commands and edits files, and Claude
-> reviews the result. It needs Python 3.10 or newer, and it costs several times more per task: an
-> agent re-sends the whole conversation on every tool call, on top of a fixed multi-thousand-token
-> preamble it carries every turn.
+> **As an agent, through Google's Antigravity SDK** — Gemini opens the folder itself, runs
+> commands and edits files, and Claude reviews the result. It needs Python 3.10 or newer and the
+> Antigravity SDK, a Python package this step installs for you. It costs several times more per
+> task: an agent re-sends the whole conversation on every tool call, on top of a fixed
+> multi-thousand-token preamble it carries every turn.
 >
-> Set up the agent path as well? (default: no)
+> Set up the Antigravity SDK agent path as well? (default: no)
 
 On **no**, say nothing further about it and continue. Nothing needs to be written — the model path
 is what an untouched install already does.
