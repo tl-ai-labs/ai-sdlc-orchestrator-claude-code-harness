@@ -113,6 +113,20 @@ Claude Code could see, and the server received the literal text `${GEMINI_API_KE
 value. The plugin now discards those and falls back to the credentials file, so the run is not
 silently wrong — but the credential the user thought they had set is not in play.
 
+**Do not offer the Antigravity agent path here.** The multi-model policy can route its mechanical
+phases to Gemini as an *agent* — working in the folder directly, running commands and editing
+files — instead of as a model. It needs Python 3.10 or newer and costs several times more per
+task, and it is deliberately off unless someone asks for it by name. Set up the default path,
+finish the handover, and point anyone who raises it at
+[docs/setup.md](docs/setup.md#gemini-as-a-model-or-gemini-as-an-agent). If the user has already
+set `SDLC_SELECT` themselves, the `--fix` in step 3 builds that environment as part of its normal
+work and reports `agent-worker-python` or `agent-worker-sdk` if it could not. In that case the
+script also ends by offering `scripts/probe-agent-worker.mjs` — pass that on as it is written.
+Everything step 3 checks is offline, and the agent path's commonest failures are not missing files
+but a missing Model Garden entitlement or a region that does not serve the model; both first appear
+at the run's first delegated packet, once the premium phases are already billed. The probe is one
+trivial delegation, about two cents, and it is the only thing here that settles them.
+
 ## 5. Hand over
 
 State plainly what is installed, which policies are available given the credentials present, and

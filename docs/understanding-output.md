@@ -6,6 +6,10 @@ After a pass finishes, three things live under `examples/<study-id>/passes/<run-
 - `manifest.json` — a rollup of the telemetry into totals, per-phase breakdown, and metadata.
 - Generated source under `app/` (or similar, per the phase-writer) — the actual code the run produced.
 
+A fourth appears only on runs that delegated to the agent worker (`SDLC_SELECT=flash-agsdk-worker`):
+
+- `delegation/` — three files per delegated packet: the brief the worker was given, the usage sidecar it wrote, and a receipt describing what it did. See [the delegation directory](#the-delegation-directory).
+
 And the report emitted by `node tools/report.mjs examples/<study-id>/passes/<run-id>` is a rendered view of the manifest.
 
 ## The report, section by section
@@ -25,6 +29,33 @@ A table with one row per SDLC phase. Columns:
 The row order follows the SDLC state machine — requirements first, then design, planning, codegen, tests, docs, senior review, security review.
 
 The **"SDLC task total"** at the bottom is the sum of the Cost column. This is what the study is measuring: the cost of doing the software development work.
+
+### Delegated to an agent worker
+
+Printed only when the run delegated. On every other run the section is absent rather than empty — an all-Opus pass made no such distinction, and a table of zeroes would suggest it did.
+
+It opens with the division of labour, because that is the one fact this mode changes and the one a reader is most likely to get wrong:
+
+| Tag | Who |
+|---|---|
+| `[C]` | Claude Code — the harness. Plans, gates, integrates. Writes no shipped code. |
+| `[C→G]` | the handoff — a brief written to disk, then a worker subprocess in the working directory. |
+| `[G]` | the Antigravity SDK worker — an agent with tools, which writes the code. |
+
+Then one row per delegated packet:
+
+- **Tools** — how many tool calls the worker made. This is the number that shows an agent was really working rather than answering once; a trailing `+` means the worker's own recording cap was hit and the figure is a floor.
+- **Files** — `+` added, `~` modified, `-` removed. See the caveat below.
+- **Time** — wall-clock for that worker process.
+- **Cost** — from telemetry, so it covers every attempt at the packet.
+
+Three markers can follow a packet id. `*` — the packet was retried; the cost covers all attempts, but tools, files and time describe the last one, because a retry overwrites the receipt. `!` — the worker did not finish; it was still billed and may still have edited files. `?` — no telemetry event carries this task id, so the cost shown is the receipt's own figure.
+
+The last two rows are the point: the delegated subtotal, and a `[C]` line for everything else in the run. They add up to the SDLC + overhead total.
+
+**What "Files" does and does not claim.** The server takes a content digest of every file in the working directory immediately before the worker starts and again immediately after it exits, and compares them. Modification means the *content* changed — a formatter that rewrote a file byte-for-byte, or an `npm install` that rewrote a lockfile identically, does not count. `.git`, `node_modules`, `dist`, `.venv` and similar are not walked, and the worker's own output directory is excluded so a delegation cannot report its own evidence as a change.
+
+That gives you what changed *while the worker held the directory*. It is not proof the worker was the only thing writing there, and it cannot attribute any one change to any one tool call. If you need that, read the receipt's tool-call list.
 
 ### Run stats
 
@@ -64,6 +95,7 @@ One JSON object per line. Key fields:
   "task_id": "tp_codegen_012",
   "module": "auth",
   "model": "claude-opus-4-7",
+  "model_id": "opus",
   "input_tokens": 3421,
   "input_tokens_cached": 0,
   "output_tokens": 2103,
@@ -75,6 +107,8 @@ One JSON object per line. Key fields:
 ```
 
 Fields the report reads: `phase`, `input_tokens`, `input_tokens_cached`, `output_tokens`, `cost_usd`, `success`. Everything else is available for downstream analysis.
+
+`model` is the vendor's model name and `model_id` is the policy leaf that dispatched. They are usually redundant, and there is one case where they are not: a policy can offer two ways of reaching the same model — Gemini as a completion call or as an Antigravity agent — and both carry `"model": "gemini-3.5-flash"`. `model_id` (`flash-completion` or `flash-agsdk-worker`) is the only field that says which, and a `routing.select` object alongside it records the choice that led there. Group by `model_id`, not `model`, when the distinction matters. See [methodology.md](methodology.md#two-doors-to-the-mechanical-tier-and-how-the-report-tells-them-apart).
 
 `latency_ms` is `null` on phases that ran on the direct tier — those execute inside Claude Code rather than being dispatched through the MCP server, so nothing ever timed them. `null` means "not measured", as distinct from a real measured `0`. Phases dispatched to a mechanical-tier model (Gemini) carry a real wall-clock figure. To compare tiers on speed, use the gaps between consecutive `ts` values, which are stamped server-side for every event.
 
@@ -93,6 +127,30 @@ Aggregated form of the telemetry. Useful fields:
 - `phase_breakdown`, `module_breakdown`, `task_type_breakdown` — sub-rollups
 - `duration_sec`
 - `pass`, `policy_name`
+
+### The delegation directory
+
+Present only on runs that delegated. Three files per delegated packet, all named after the packet's task id:
+
+- **`worker-task-<packet>.md`** — the brief the worker was given, exactly as it was written to disk. This is the prompt: what the packet asked for, which files it excerpted, and the output contract. Nothing was added to it out of band.
+- **`worker-usage-<packet>.json`** — written by the worker process itself, in its own words: the model it reached, the SDK version, the Vertex project and region, its token usage, and its tool calls.
+- **`worker-delegation-<packet>.json`** — the receipt, written by the server. Joins the two above to what changed on disk.
+
+The receipt carries `schema: "delegation-record/1"` and these fields:
+
+| Field | Meaning |
+|---|---|
+| `task_id`, `phase`, `task_type`, `module` | the packet, and the join key back to `telemetry.jsonl` |
+| `cable` | sdk, sdk_version, vertex_project, vertex_location, thinking — **copied from the worker's sidecar**, so it records what the run used rather than what it intended. All null if the worker died before writing one. |
+| `duration_ms`, `success`, `error` | the worker process's outcome |
+| `cost_usd`, `tokens` | this delegation's own spend |
+| `tool_calls` | `count` (the full total), `truncated`, and `sample` (capped) |
+| `files` | `added`, `modified`, `removed` as path lists, plus `unchanged`, `scanned`, `truncated`, `unreadable` |
+| `artifacts` | filenames of the brief and the sidecar |
+
+A receipt is written for failed delegations too — that is the case a reader most needs one for. Writing it can never fail the delegation: if the file cannot be written, the server warns on stderr and the run continues.
+
+A retried packet overwrites all three files, so what survives describes the final attempt. The report marks those rows with `*`.
 
 ### The Claude Code session transcript
 

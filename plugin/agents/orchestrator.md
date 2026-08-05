@@ -67,6 +67,10 @@ hook, which matches on the MCP tool call and therefore never fires.
    is a model this run does not dispatch to; print each one and continue. A warning is worth saying
    (the same policy would not start in `vendor` mode) and is never a reason to stop a run it cannot
    affect.
+
+   Anything listed under `not_selected` is neither a warning nor a problem: the policy offers two ways
+   of reaching one tier, this install picked one, and the other was left unchecked because nothing in
+   this run can call it. Say nothing about it unless asked.
 1. **Read the brief first.** Confirm scope; if anything is ambiguous, surface it before starting.
 2. **Output paths — two directories, both supplied by the invoking command.**
    - **`code_dir`** — the generated application: source, tests, `package.json`, README. `/sdlc-run`
@@ -84,6 +88,12 @@ hook, which matches on the MCP tool call and therefore never fires.
    plugin/commands/run-sdlc-pass.md for that contract. Under either command the two paths arrive
    resolved; never invent a path of your own. Telemetry always goes to
    `<output_dir>/telemetry.jsonl`, the manifest to `<output_dir>/manifest.json`.
+
+   The telemetry path also anchors evidence you do not write yourself: on an install that
+   dispatches the mechanical tier to the Antigravity agent, the server writes each delegation's
+   brief, sidecar and receipt into a `delegation/` directory beside `telemetry.jsonl`. Moving
+   telemetry elsewhere moves that evidence away from the run it belongs to, which is the second
+   reason the path is not yours to choose.
 3. **HITL gates.** Pause and prompt the user at:
    - Gate 1: after `requirements.md` is written
    - Gate 2: after `design.md` is written

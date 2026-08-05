@@ -1,11 +1,11 @@
 {
   "name": "multi-model-orchestrator",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "Multi-model SDLC orchestration plugin for Claude Code. Reads a project brief and routes SDLC phases to configured models per policy.",
   "author": { "name": "Tilicho Labs" },
   "license": "MIT",
   "homepage": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness",
-  "keywords": ["sdlc", "orchestration", "multi-model", "gemini", "opus"],
+  "keywords": ["sdlc", "orchestration", "multi-model", "gemini", "opus", "antigravity"],
   "commands": "./commands",
   "skills": "./skills",
   "mcpServers": {
@@ -18,7 +18,9 @@
         "GOOGLE_APPLICATION_CREDENTIALS": "${GOOGLE_APPLICATION_CREDENTIALS}",
         "GOOGLE_CLOUD_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
         "GOOGLE_CLOUD_LOCATION": "${GOOGLE_CLOUD_LOCATION}",
-        "GEMINI_BACKEND": "${GEMINI_BACKEND}"
+        "GEMINI_BACKEND": "${GEMINI_BACKEND}",
+        "SDLC_SELECT": "${SDLC_SELECT}",
+        "GEMINI_WORKER_PYTHON": "${GEMINI_WORKER_PYTHON}"
       }
     }
   }

@@ -65,18 +65,70 @@ function validatePolicy(raw: any): Policy {
     throw new Error("Policy: 'rules' (non-empty array) required");
   }
   for (const m of raw.models) validateModel(m);
-  // Cross-check: every rule references a known model id
-  const modelIds = new Set(raw.models.map((m: ModelConfig) => m.id));
+  const modelIds = new Set<string>(raw.models.map((m: ModelConfig) => m.id));
+  const slotNames = validateSelect(raw, modelIds);
+  // Cross-check: every rule references a known model id or a declared slot.
+  // Both are legal targets and both are checked here, at load, so a policy that
+  // would fail to route can never reach a paid dispatch.
   raw.rules.forEach((r: any, i: number) => {
     const used = r.use ?? r.default;
     if (!used) throw new Error(`Policy rule ${i}: needs 'use' or 'default'`);
-    if (!modelIds.has(used)) {
+    if (!modelIds.has(used) && !slotNames.has(used)) {
+      const known = [...modelIds, ...slotNames].join(", ");
       throw new Error(
-        `Policy rule ${i}: references unknown model id '${used}'. Known: ${Array.from(modelIds).join(", ")}`
+        `Policy rule ${i}: references unknown model id '${used}'. Known: ${known}`
       );
     }
   });
   return raw as Policy;
+}
+
+/**
+ * Validate the optional `select:` block and return the slot names it declares.
+ *
+ * Every failure here is one that would otherwise surface mid-run, after money
+ * has been spent, as an unknown-model throw from the adapter factory. The
+ * collision check earns its place separately: if a slot and a model shared a
+ * name, `use: <name>` would be genuinely ambiguous, and the reader of the
+ * policy — not just the code — would have no way to tell which was meant.
+ */
+function validateSelect(raw: any, modelIds: Set<string>): Set<string> {
+  const names = new Set<string>();
+  if (raw.select === undefined) return names;
+  if (typeof raw.select !== "object" || raw.select === null || Array.isArray(raw.select)) {
+    throw new Error("Policy: 'select' must be a map of slot name → { default, options }");
+  }
+  for (const [name, slot] of Object.entries<any>(raw.select)) {
+    if (modelIds.has(name)) {
+      throw new Error(
+        `Policy select '${name}': collides with a model id — a rule naming it would be ` +
+          `ambiguous. Rename the slot or the model.`
+      );
+    }
+    if (!slot || typeof slot !== "object" || Array.isArray(slot)) {
+      throw new Error(`Policy select '${name}': must be an object with 'default' and 'options'`);
+    }
+    if (!Array.isArray(slot.options) || slot.options.length === 0) {
+      throw new Error(`Policy select '${name}': 'options' (non-empty array of model ids) required`);
+    }
+    for (const opt of slot.options) {
+      if (!modelIds.has(opt)) {
+        throw new Error(
+          `Policy select '${name}': option '${opt}' is not a model id in this policy. ` +
+            `Known: ${[...modelIds].join(", ")}`
+        );
+      }
+    }
+    if (typeof slot.default !== "string" || !slot.options.includes(slot.default)) {
+      throw new Error(
+        `Policy select '${name}': 'default' must be one of its own options ` +
+          `(${slot.options.join(", ")}). A default outside the option list is a routing ` +
+          `target no run could ever have chosen deliberately.`
+      );
+    }
+    names.add(name);
+  }
+  return names;
 }
 
 function validateModel(m: any) {

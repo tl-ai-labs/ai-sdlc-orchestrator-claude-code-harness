@@ -16,6 +16,11 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
+// The plugin's own setup checker. Plain ESM with no build step and no
+// side effects on import, so this wizard can borrow its logic instead of
+// growing a second copy that drifts.
+import { buildWorkerEnvironment, workerPaths } from "../plugin/scripts/verify-setup.mjs";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 
@@ -30,7 +35,11 @@ const c = { dim: "\x1b[2m", bold: "\x1b[1m", green: "\x1b[32m", amber: "\x1b[33m
 const ok    = (m) => console.log(`  ${c.green}✓${c.reset} ${m}`);
 const warn  = (m) => console.log(`  ${c.amber}!${c.reset} ${m}`);
 const fail  = (m) => console.log(`  ${c.red}✗${c.reset} ${m}`);
-const step  = (n, m) => console.log(`\n${c.bold}[${n}]${c.reset} ${m}`);
+// Steps number themselves. One of them is conditional — the Python worker is
+// only built if the user asks for the agent path — and hand-numbered headings
+// would either skip a number or lie about how many are left.
+let stepNo = 0;
+const step  = (m) => console.log(`\n${c.bold}[${++stepNo}]${c.reset} ${m}`);
 const hint  = (m) => console.log(`  ${c.dim}${m}${c.reset}`);
 
 const rl = createInterface({ input, output });
@@ -56,7 +65,7 @@ function nodeMajor() {
 console.log(`\n${c.bold}AI-SDLC orchestrator — setup${c.reset}`);
 console.log(`${c.dim}This wizard checks prerequisites and prepares your machine to run the pipeline.${c.reset}`);
 
-step(1, "Node.js version");
+step("Node.js version");
 const nv = nodeMajor();
 if (nv >= 20) {
   ok(`Node ${process.versions.node}`);
@@ -66,7 +75,7 @@ if (nv >= 20) {
   process.exit(1);
 }
 
-step(2, "Claude Code CLI");
+step("Claude Code CLI");
 if (which("claude")) {
   try {
     const v = execSync("claude --version", { encoding: "utf8" }).trim();
@@ -86,7 +95,7 @@ if (which("claude")) {
 // Auth mode is chosen per invocation via /run-sdlc-pass --auth=vendor|estimated
 // and enforced by the orchestrator (rule 6). This step only reports what
 // keys are visible so the user knows which mode is available to them.
-step(3, "API keys — availability");
+step("API keys — availability");
 if (process.env.ANTHROPIC_API_KEY) {
   ok("ANTHROPIC_API_KEY is set — --auth=vendor is available.");
 } else {
@@ -109,7 +118,47 @@ if (process.env.GEMINI_API_KEY) {
   hint("  AI Studio key:      https://aistudio.google.com/app/apikey");
 }
 
-step(4, "Bundled MCP server dependencies");
+// ─── how Gemini works on the mechanical tier ──────────────────────────
+// Asked here, once, because it is the only question in this wizard whose
+// answer changes what has to be INSTALLED. The agent path runs a Python
+// worker; the model path does not, and someone on the model path should
+// never be walked through a virtualenv they will not use.
+//
+// Skipped entirely when no Gemini credentials are visible: the question is
+// "which of two Gemini doors", and someone with neither is not going through
+// either. They can re-run this wizard after `gcloud auth application-default
+// login`. Also skipped for AI-Studio-key-only setups — the Antigravity SDK
+// signs with Application Default Credentials and has no API-key door, so
+// offering the agent path there would be offering something that cannot work.
+step("How Gemini works on the mechanical tier");
+const hasAdc = existsSync(ADC_FILE) || Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+let geminiAsAgent = false;
+if (!hasAdc) {
+  hint("No Google Cloud credentials, so the mechanical tier has one door for now.");
+  hint("  Re-run this wizard after `gcloud auth application-default login` to see the other.");
+} else {
+  console.log(`
+  Gemini can work two ways here.
+
+    ${c.bold}As a model${c.reset}  — Claude reads your code and sends it over, Gemini sends text back.
+                  Cheap and predictable: one request, one answer, per task.
+
+    ${c.bold}As an agent${c.reset} — Gemini opens the folder itself, runs commands and edits files,
+                  and Claude reviews the result. It needs Python 3.10+ and the
+                  Antigravity SDK, and it costs several times more per task: an
+                  agent re-sends the whole conversation on every tool call, on top
+                  of a fixed multi-thousand-token preamble it carries every turn.
+`);
+  hint("You can change this later — it is one line in .mcp.json (SDLC_SELECT).");
+  geminiAsAgent = await askYesNo("Set up the agent path as well?", false);
+  if (geminiAsAgent) {
+    ok("Agent path selected — this wizard will build the Python worker environment.");
+  } else {
+    ok("Model path selected — no Python needed.");
+  }
+}
+
+step("Bundled MCP server dependencies");
 const mcpDir = join(ROOT, "plugin", "mcp", "gemini-flash-server");
 const nodeMods = join(mcpDir, "node_modules");
 if (existsSync(nodeMods) && existsSync(join(mcpDir, "dist", "server.js"))) {
@@ -128,7 +177,43 @@ if (existsSync(nodeMods) && existsSync(join(mcpDir, "dist", "server.js"))) {
   }
 }
 
-step(5, "Project-install the slash command + all subagents");
+// ─── the agent worker's Python environment ────────────────────────────
+// Only reached when the agent path was chosen above.
+//
+// The work itself lives in verify-setup.mjs, imported rather than repeated,
+// because both installation routes have to be able to build this environment
+// and only one of them can see this file: a `/plugin install` puts the plugin
+// in Claude Code's cache with no tools/ directory, so its users reach the same
+// function through `verify-setup.mjs --fix`. One implementation means the two
+// routes cannot drift into producing different environments.
+if (geminiAsAgent) {
+  step("Antigravity agent worker (Python)");
+  const { venvPython } = workerPaths(join(ROOT, "plugin"));
+  if (existsSync(venvPython)) {
+    // Present is not the same as working, and this wizard deliberately does not
+    // spend a subprocess finding out — `npm run verify` already does exactly
+    // that check, quotes the interpreter's error, and repairs it. Pointing
+    // there is cheaper than duplicating it, and keeps one repair path.
+    ok("Worker environment already present.");
+    hint("If the agent path later fails to start: npm run verify -- --fix");
+  } else {
+    const built = buildWorkerEnvironment(join(ROOT, "plugin"), (m) => console.log(m));
+    if (built.ok) {
+      ok(`Antigravity SDK installed into the worker's own environment — ${built.detail}.`);
+    } else {
+      fail(built.detail.split("\n")[0]);
+      for (const line of built.detail.split("\n").slice(1)) hint(line);
+      if (built.reason === "no-python") hint("  brew install python@3.12   # then: npm run setup");
+      warn("Continuing on the model path — nothing else in this wizard needs Python.");
+      // Not merely cosmetic: this flag also decides whether SDLC_SELECT is
+      // written below. Leaving it true would hand the user a config that
+      // routes every mechanical task to a worker that cannot start.
+      geminiAsAgent = false;
+    }
+  }
+}
+
+step("Project-install the slash command + all subagents");
 // Some Claude Code versions do not activate plugin-supplied commands or
 // subagents when the user launches with a plain `claude` (no --plugin-dir).
 // Project-installing everything into ./.claude/ makes both interactive and
@@ -173,25 +258,44 @@ const mcpEntry = {
       // required — with a plain `gcloud auth application-default login` the
       // server finds the credentials file under $HOME and reads the project
       // out of it — but a service-account or multi-project setup needs them.
-      env: Object.fromEntries(
-        [
-          "ANTHROPIC_API_KEY",
-          "GEMINI_API_KEY",
-          "GOOGLE_APPLICATION_CREDENTIALS",
-          "GOOGLE_CLOUD_PROJECT",
-          "GOOGLE_CLOUD_LOCATION",
-          "GEMINI_BACKEND",
-        ]
-          .filter((name) => process.env[name])
-          .map((name) => [name, process.env[name]]),
-      ),
+      env: {
+        ...Object.fromEntries(
+          [
+            "ANTHROPIC_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_CLOUD_LOCATION",
+            "GEMINI_BACKEND",
+            "SDLC_SELECT",
+            "GEMINI_WORKER_PYTHON",
+          ]
+            .filter((name) => process.env[name])
+            .map((name) => [name, process.env[name]]),
+        ),
+        // The answer to the one question above, written down rather than left
+        // in this shell. It has to outlive the wizard — the server is launched
+        // by Claude Code minutes or days later, from an environment that never
+        // saw the answer — and it belongs beside the other run settings so a
+        // reader can see which tier a run used without being told.
+        //
+        // Written only on the agent path, so the file a model-path user gets is
+        // byte-identical to the one they got before this question existed. The
+        // spread order matters: this wins over an inherited SDLC_SELECT, because
+        // the answer given ten seconds ago is the more recent statement of intent.
+        ...(geminiAsAgent ? { SDLC_SELECT: "gemini-flash=flash-agsdk-worker" } : {}),
+      },
     },
   },
 };
 writeFileSync(mcpJsonPath, JSON.stringify(mcpEntry, null, 2) + "\n");
 ok(".mcp.json written — plain `claude` will discover the MCP server.");
+if (geminiAsAgent) {
+  ok("Mechanical tier set to the agent path (SDLC_SELECT=gemini-flash=flash-agsdk-worker).");
+  hint("  Delete that line from .mcp.json to go back to the model path.");
+}
 
-step(6, "Ready");
+step("Ready");
 console.log(`
   ${c.bold}Setup complete.${c.reset} Pick an auth mode per run via --auth on /run-sdlc-pass.
 

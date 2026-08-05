@@ -95,6 +95,19 @@ Two consequences worth knowing when reading a report:
 - **Thinking tokens count against the packet's output ceiling.** A packet can spend its whole ceiling reasoning and return no text, which the vendor reports as `MAX_TOKENS`. That is a genuine truncation and the doubling loop handles it as one — the attempt is billed, because the reasoning happened.
 - **Gemini also caches implicitly, without being asked.** A packet resembling one sent minutes earlier can come back with a non-zero cached count under no explicit cache. Costs stay correct either way, since the cached count is read from the response rather than inferred from whether a cache was requested. But it means a cold-vs-warm pair measured back to back understates the gap: the "cold" call may already be partly warm.
 
+## Two doors to the mechanical tier, and how the report tells them apart
+
+`opus-plus-flash` declares two ways of reaching Gemini 3.5 Flash. The default calls it as a **model**: one request per packet, with the orchestrator reading the files and writing the answer back. The alternative runs it as an **agent** through the Antigravity SDK, working in the directory itself. Which one an install uses is set once, outside the policy file, via `SDLC_SELECT` — see [setup.md](setup.md#gemini-as-a-model-or-gemini-as-an-agent).
+
+Both leaves declare the same `pricing:` block, because they reach the same model at the same published rates. That is deliberate, and it is the reason the vendor model name alone cannot tell you which one ran — `gemini-3.5-flash` appears on both. Two fields on every event carry the distinction:
+
+- **`model_id`** — the policy leaf that executed: `flash-completion` or `flash-agsdk-worker`. This is the field to group by when comparing the two.
+- **`routing.select`** — the slot that resolved, what it resolved to, and whether the run asked (`overridden: true`) or inherited the default. Absent entirely on policies that declare no slots, so events from `opus-only` are byte-for-byte what they were before slots existed.
+
+Those two fields are for querying. For reading, `node tools/report.mjs` renders a **Delegated to an agent worker** section on any run that used the agent door — one row per delegated packet with its tool-call count, its wall-clock, and what changed in the working directory while it held it, against a `[C]` line for everything the harness did itself. The section is absent on runs that did not delegate. Its inputs are the per-delegation receipts under `delegation/`, described in [understanding-output.md](understanding-output.md#the-delegation-directory).
+
+**Identical rates do not mean identical cost, and the difference is not small.** An agent re-sends the accumulated conversation on every tool call, and each of its turns carries the SDK's own multi-thousand-token instruction preamble. A packet that a single completion call answers in one request can cost an agent several times as much for the same deliverable — entirely in token volume, at unchanged rates. The costs on the report are still exact: an agent dispatch is priced from the token counts the Antigravity SDK's `usage_metadata` reports, read through the same disjoint cached/fresh arithmetic described above, with the same `provenance: "vendor"`. A run comparing the two doors is measuring how many tokens each approach needs, which is the honest question.
+
 ## Pricing table provenance
 
 The rates that turn tokens into dollars live in the `pricing:` block of each policy YAML under `plugin/config/policies/`. Each block also carries:

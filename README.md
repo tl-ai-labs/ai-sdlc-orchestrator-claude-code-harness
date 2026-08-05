@@ -158,6 +158,18 @@ Do **not** use `--permission-mode bypassPermissions` — that mode can skip the 
 Cost depends on model output length, caching, and current vendor pricing. The
 report at the end shows what the run spent.
 
+`opus-plus-flash` can reach that mechanical tier two ways. By default Gemini is
+a **model**: Claude reads the files, sends the text, and writes the answer back.
+It can instead be an **agent** — Gemini opens the working folder itself, runs
+commands and edits files, and Claude reviews the result. The agent path needs
+Google Cloud credentials and Python 3.10+, and costs several times more per
+task, so it is off unless you ask for it. The setup wizard asks; on an installed
+plugin it is one variable. A run that took the agent path leaves the evidence
+for it: a **Delegated to an agent worker** section on the report, and a
+`delegation/` directory holding the brief each worker was given and a receipt
+for what it did. See
+[docs/setup.md](docs/setup.md#gemini-as-a-model-or-gemini-as-an-agent).
+
 ## Documentation
 
 - [docs/setup.md](docs/setup.md) — detailed setup and troubleshooting

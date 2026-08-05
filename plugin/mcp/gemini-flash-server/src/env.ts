@@ -76,6 +76,20 @@ export const PLUGIN_DECLARED_ENV = [
   "GOOGLE_CLOUD_PROJECT",
   "GOOGLE_CLOUD_LOCATION",
   "GEMINI_BACKEND",
+  // The run's answers to the policy's select slots, e.g.
+  // "gemini-flash=flash-agsdk-worker". It belongs on this list for the same
+  // reason as the rest: left unexpanded it arrives as the literal
+  // "${SDLC_SELECT}", which is a truthy string that parses as neither a valid
+  // slot spec nor an empty one — so every dispatch would die at policy load
+  // on a machine where the variable was simply never set.
+  "SDLC_SELECT",
+  // An operator-supplied interpreter for the Antigravity agent worker, for
+  // people who already maintain a Python >= 3.10 with the SDK installed and
+  // would rather not have a second one built inside the plugin. Unexpanded it
+  // is a path that does not exist, and resolveWorkerPython() refuses a
+  // non-existent override outright — a clear failure, but for the wrong
+  // reason, on a machine whose own virtualenv was sitting there working.
+  "GEMINI_WORKER_PYTHON",
 ] as const;
 
 /**

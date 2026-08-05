@@ -14,6 +14,8 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, basename, dirname } from "node:path";
 import { homedir } from "node:os";
 
+import { ACTOR, ACTOR_LEGEND, gutter } from "./logfmt.mjs";
+
 const argv = process.argv.slice(2);
 const asMarkdown = argv.includes("--markdown");
 const passDir = resolve(argv.filter((a) => !a.startsWith("--"))[0] ?? "");
@@ -228,6 +230,197 @@ if (asMarkdown) {
   console.log(`  ${"─".repeat(24 + 6 + 7 + 22 + 11)}`);
   console.log(`  ${"SDLC task total".padEnd(59)}${fmtUSD(sdlcCost).padStart(11)}\n`);
   console.log(`  Prov key: V = vendor-authoritative, E = estimated, M = mixed, ? = legacy\n`);
+}
+
+// ─── Delegated to an agent worker ─────────────────────────────────────
+// Printed only when this run actually delegated. Without it a connector run
+// reads exactly like an ordinary one — same phases, same gates, same totals —
+// and the one thing that changed leaves no trace in the report.
+//
+// TWO SOURCES, DELIBERATELY JOINED. Each receipt describes ONE worker process:
+// its tool calls, its wall-clock, and what changed in the workspace while it
+// held it. Telemetry describes every ATTEMPT at the packet. They are joined on
+// `task_id` because a retried packet writes its receipt under the same
+// filename each time — so the receipt is the last attempt while the cost is
+// all of them, and the row says so with a marker rather than quietly showing
+// one attempt's cost as the packet's.
+const delegationDir = join(passDir, "delegation");
+const delegationFiles = existsSync(delegationDir)
+  ? readdirSync(delegationDir).filter((n) => n.startsWith("worker-delegation-") && n.endsWith(".json")).sort()
+  : [];
+
+let unreadableReceipts = 0;
+const receipts = delegationFiles
+  .map((n) => {
+    try {
+      return JSON.parse(readFileSync(join(delegationDir, n), "utf8"));
+    } catch {
+      // A truncated receipt — the run was killed mid-write — is counted and
+      // named below rather than dropped. A delegation missing from the table
+      // with no explanation is the one failure mode this section cannot afford.
+      unreadableReceipts += 1;
+      return null;
+    }
+  })
+  .filter(Boolean)
+  .sort((a, b) => String(a.started_at).localeCompare(String(b.started_at)));
+
+if (receipts.length || unreadableReceipts) {
+  // Per-task telemetry, recomputed here rather than threaded through the
+  // aggregation above: this whole block is self-contained, and re-walking a
+  // few dozen in-memory events costs nothing.
+  const byTask = new Map();
+  for (const e of events) {
+    if (!e.task_id) continue;
+    const r = byTask.get(e.task_id) ?? { calls: 0, cost: 0 };
+    r.calls += 1;
+    r.cost += e.cost_usd ?? 0;
+    byTask.set(e.task_id, r);
+  }
+
+  const rows = receipts.map((d) => {
+    const tel = byTask.get(d.task_id);
+    return {
+      d,
+      tries: tel?.calls ?? 1,
+      // Telemetry's figure covers every attempt; the receipt's covers the one
+      // it describes. Preferring telemetry is what makes the column sum to the
+      // run total instead of undercounting a retried packet.
+      cost: tel ? tel.cost : (d.cost_usd ?? 0),
+      joined: Boolean(tel),
+    };
+  });
+
+  const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
+  const delegatedCalls = sum((r) => (r.joined ? r.tries : 0));
+  const delegatedCost = sum((r) => (r.joined ? r.cost : 0));
+  const otherCalls = events.length - delegatedCalls;
+  const otherCost = totalCost - delegatedCost;
+
+  const toolTotal = sum((r) => r.d.tool_calls?.count ?? 0);
+  const fileTotal = { added: 0, modified: 0, removed: 0 };
+  for (const r of rows) {
+    fileTotal.added += r.d.files?.added?.length ?? 0;
+    fileTotal.modified += r.d.files?.modified?.length ?? 0;
+    fileTotal.removed += r.d.files?.removed?.length ?? 0;
+  }
+
+  // `+` added, `~` modified, `-` removed. Zero terms are omitted rather than
+  // printed as `+0`, so a row with real edits stands out from one without.
+  const fmtFiles = (f) =>
+    [
+      f.added ? `+${f.added}` : "",
+      f.modified ? `~${f.modified}` : "",
+      f.removed ? `-${f.removed}` : "",
+    ].filter(Boolean).join(" ") || "none";
+  const filesOf = (d) =>
+    fmtFiles({
+      added: d.files?.added?.length ?? 0,
+      modified: d.files?.modified?.length ?? 0,
+      removed: d.files?.removed?.length ?? 0,
+    });
+
+  // Markers, explained under the table. Each one exists because the row would
+  // otherwise state something slightly untrue.
+  const marks = (r) =>
+    (r.tries > 1 ? "*" : "") + (r.d.success === false ? "!" : "") + (r.joined ? "" : "?");
+
+  const anyRetry = rows.some((r) => r.tries > 1);
+  const anyFailure = rows.some((r) => r.d.success === false);
+  const anyUnjoined = rows.some((r) => !r.joined);
+  const anyTruncated = rows.some((r) => r.d.files?.truncated);
+  const anyUnreadablePath = rows.some((r) => (r.d.files?.unreadable?.length ?? 0) > 0);
+
+  const lead =
+    `${delegatedCalls} of this run's ${events.length} model calls were delegations: the packet went to ` +
+    `an agent running inside the working directory, with tools, instead of being answered in one completion.`;
+
+  const notes = [
+    "Files compares a content digest of the working directory taken immediately",
+    "before the worker starts against one taken immediately after it exits, with",
+    "the worker's own output directory excluded. It reports what changed while the",
+    "worker held the directory — not proof that nothing else was running in it, and",
+    "not an attribution of any one change to any one tool call.",
+  ];
+  if (anyRetry) notes.push("* retried — cost covers every attempt; tools, files and time are the last one.");
+  if (anyFailure) notes.push("! the worker did not finish; it was still billed, and may still have edited files.");
+  if (anyUnjoined) notes.push("? no telemetry event carries this task id, so cost is the receipt's own figure.");
+  if (anyTruncated) notes.push(`A file scan hit its cap; those counts are a floor, not a total.`);
+  if (anyUnreadablePath) notes.push("Some paths could not be read during a scan; they are listed in the receipt.");
+  if (unreadableReceipts) {
+    notes.push(
+      `${unreadableReceipts} receipt${unreadableReceipts === 1 ? "" : "s"} in ${basename(delegationDir)}/ could not be parsed ` +
+        `and ${unreadableReceipts === 1 ? "is" : "are"} missing from this table.`,
+    );
+  }
+  notes.push(`One receipt per delegation: ${basename(delegationDir)}/worker-delegation-<packet>.json`);
+
+  // The notes and the markers are written once, for a terminal, and reused in
+  // the Markdown branch — where three of those characters are syntax. `<packet>`
+  // is swallowed as an HTML tag and disappears entirely, taking the receipt
+  // filename with it, and a lone `*` pairs with the next one to italicise
+  // everything in between. Escaped here rather than avoided in the prose,
+  // because the terminal is the primary reader and it wants the plain glyphs.
+  const md = (s) =>
+    String(s).replace(/[*<>]/g, (c) => (c === "<" ? "&lt;" : c === ">" ? "&gt;" : "\\*"));
+
+  if (asMarkdown) {
+    console.log(`## Delegated to an agent worker\n`);
+    console.log(`${lead}\n`);
+    for (const [tag, meaning] of ACTOR_LEGEND) console.log(`- \`${tag}\` — ${meaning}`);
+    console.log("");
+    // The header carries the handoff tag because that is what every line under
+    // it is: one packet leaving the harness for a worker. It keeps the third
+    // legend entry from being a symbol the table never uses.
+    console.log(`| \`${ACTOR.handoff}\` | Phase | Packet | Tool calls | Files | Time | Cost |`);
+    console.log(`|---|---|---|---:|---|---:|---:|`);
+    for (const r of rows) {
+      console.log(
+        `| \`${ACTOR.worker}\` | \`${r.d.phase ?? "—"}\` | \`${r.d.task_id}\`${md(marks(r))} | ` +
+          `${r.d.tool_calls?.count ?? 0}${r.d.tool_calls?.truncated ? "+" : ""} | ${filesOf(r.d)} | ` +
+          `${fmtDuration((r.d.duration_ms ?? 0) / 1000)} | ${fmtUSD(r.cost)} |`,
+      );
+    }
+    console.log(
+      `| | **${rows.length} delegation${rows.length === 1 ? "" : "s"}** | | **${toolTotal}** | ` +
+        `**${fmtFiles(fileTotal)}** | | **${fmtUSD(delegatedCost)}** |`,
+    );
+    console.log(`| \`${ACTOR.driver}\` | everything else in this run | ${otherCalls} calls | | | | ${fmtUSD(otherCost)} |\n`);
+    for (const n of notes) console.log(`_${md(n)}_  `);
+    console.log("");
+  } else {
+    const w = 74;
+    console.log(`Delegated to an agent worker\n`);
+    console.log(`  ${lead.replace(/(.{1,70})(\s|$)/g, "$1\n  ").trimEnd()}\n`);
+    for (const [tag, meaning] of ACTOR_LEGEND) console.log(`  ${gutter(tag)}${meaning}`);
+    console.log("");
+    // The header carries the handoff tag because that is what every line under
+    // it is: one packet leaving the harness for a worker. It keeps the third
+    // legend entry from being a symbol the table never uses.
+    console.log(
+      `  ${gutter(ACTOR.handoff)}${"Phase".padEnd(14)}${"Packet".padEnd(20)}${"Tools".padStart(6)}${"Files".padStart(10)}${"Time".padStart(8)}${"Cost".padStart(10)}`,
+    );
+    console.log(`  ${"─".repeat(w)}`);
+    for (const r of rows) {
+      const tools = `${r.d.tool_calls?.count ?? 0}${r.d.tool_calls?.truncated ? "+" : ""}`;
+      console.log(
+        `  ${gutter(ACTOR.worker)}${String(r.d.phase ?? "—").padEnd(14)}` +
+          `${(r.d.task_id + marks(r)).padEnd(20)}${tools.padStart(6)}${filesOf(r.d).padStart(10)}` +
+          `${fmtDuration((r.d.duration_ms ?? 0) / 1000).padStart(8)}${fmtUSD(r.cost).padStart(10)}`,
+      );
+    }
+    console.log(`  ${"─".repeat(w)}`);
+    console.log(
+      `  ${" ".repeat(6)}${`${rows.length} delegation${rows.length === 1 ? "" : "s"}`.padEnd(34)}` +
+        `${String(toolTotal).padStart(6)}${fmtFiles(fileTotal).padStart(10)}${"".padStart(8)}${fmtUSD(delegatedCost).padStart(10)}`,
+    );
+    console.log(
+      `  ${gutter(ACTOR.driver)}${"everything else in this run".padEnd(34)}` +
+        `${"".padStart(6)}${`${otherCalls} calls`.padStart(10)}${"".padStart(8)}${fmtUSD(otherCost).padStart(10)}\n`,
+    );
+    for (const n of notes) console.log(`  ${n}`);
+    console.log("");
+  }
 }
 
 // Run stats
