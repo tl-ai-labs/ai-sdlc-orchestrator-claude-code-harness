@@ -179,6 +179,8 @@ for what it did. See
 - [docs/brief-template.md](docs/brief-template.md) — the section layout the pipeline expects in a brief file
 - [docs/understanding-output.md](docs/understanding-output.md) — reading the report and the raw files
 - [docs/methodology.md](docs/methodology.md) — how tokens and costs are recorded, what is measured vs estimated
+- [docs/gemini-paths-findings.md](docs/gemini-paths-findings.md) — the two Gemini doors compared on the same brief: tokens, cost, what the delegation evidence gives you, and where the agent path is awkward
+- [docs/walkthroughs/](docs/walkthroughs/) — the same two runs frame by frame: [model-path.html](docs/walkthroughs/model-path.html), [agent-path.html](docs/walkthroughs/agent-path.html). Open them in a browser; each is self-contained.
 - [examples/quick-demo/](examples/quick-demo/) — the smallest brief: one endpoint, no database, minutes to run. Two complete runs of it are recorded under `passes/` — [model-path](examples/quick-demo/passes/model-path/) and [agent-path](examples/quick-demo/passes/agent-path/) — the same brief down each Gemini door, so the cost and time difference is a number rather than a claim.
 - [examples/workforce-ops/](examples/workforce-ops/) — the reference brief and any recorded passes
 - [examples/travel-ops/](examples/travel-ops/) — a second brief: booking, cancellation and refund handling
