@@ -1,0 +1,242 @@
+{
+  "run": {
+    "pass_id": "pass1",
+    "brief_path": "/workspace/ping-service/brief.md",
+    "code_dir": "/workspace/ping-service/src",
+    "output_dir": "/workspace/ping-service/.sdlc",
+    "policy_name": "opus-plus-flash",
+    "policy_version": 1,
+    "auth_mode": "estimated",
+    "started_at": "2026-08-04T18:34:26.949Z",
+    "ended_at": "2026-08-04T19:02:40.972Z",
+    "duration_ms": 1694023,
+    "status": "complete",
+    "gates": {
+      "gate_1_requirements": "approved",
+      "gate_2_architecture": "approved",
+      "gate_3_security": "approved",
+      "gate_4_final": "accepted"
+    }
+  },
+  "models": [
+    {
+      "id": "opus",
+      "model_name": "claude-opus-4-7",
+      "adapter": "builtin-anthropic",
+      "transport": "in-session (auth_mode=estimated)",
+      "pricing_usd_per_1m": { "input": 5, "input_cached": 0.5, "output": 25 }
+    },
+    {
+      "id": "gemini-flash",
+      "model_name": "gemini-3.5-flash",
+      "adapter": "mcp:gemini-flash-server",
+      "transport": "vertex-adc (project your-project-id, location global)",
+      "pricing_usd_per_1m": { "input": 1.5, "input_cached": 0.15, "output": 9 }
+    }
+  ],
+  "totals": {
+    "input_tokens": 43027,
+    "input_tokens_cached": 0,
+    "input_tokens_fresh": 43027,
+    "output_tokens": 33647,
+    "total_tokens": 76674,
+    "cost_usd": 0.84132,
+    "llm_calls": 11,
+    "packets_dispatched": 5,
+    "retries": 1
+  },
+  "by_phase": [
+    {
+      "phase": "requirements_analysis",
+      "model": "claude-opus-4-7",
+      "rule_index": 0,
+      "rule_reason": "Judgment-heavy, low volume",
+      "calls": 1,
+      "input_tokens_cached": 0,
+      "input_tokens_fresh": 7150,
+      "output_tokens": 1481,
+      "cost_usd": 0.072775,
+      "provenance": "estimated"
+    },
+    {
+      "phase": "architecture_design",
+      "model": "claude-opus-4-7",
+      "rule_index": 1,
+      "rule_reason": "Foundational, decision-bearing",
+      "calls": 1,
+      "input_tokens_cached": 0,
+      "input_tokens_fresh": 3245,
+      "output_tokens": 6326,
+      "cost_usd": 0.174375,
+      "provenance": "estimated"
+    },
+    {
+      "phase": "plan_task_packets",
+      "model": "claude-opus-4-7",
+      "rule_index": 2,
+      "rule_reason": "Needs full context to slice work cleanly",
+      "calls": 1,
+      "input_tokens_cached": 0,
+      "input_tokens_fresh": 6615,
+      "output_tokens": 3677,
+      "cost_usd": 0.125,
+      "provenance": "estimated"
+    },
+    {
+      "phase": "codegen",
+      "model": "gemini-3.5-flash",
+      "rule_index": 5,
+      "rule_reason": "Schema-driven boilerplate",
+      "calls": 3,
+      "input_tokens_cached": 0,
+      "input_tokens_fresh": 2493,
+      "output_tokens": 4332,
+      "cost_usd": 0.042729,
+      "provenance": "vendor"
+    },
+    {
+      "phase": "tests",
+      "model": "gemini-3.5-flash",
+      "rule_index": 6,
+      "rule_reason": "Scaffold-heavy, pattern-based",
+      "calls": 2,
+      "input_tokens_cached": 0,
+      "input_tokens_fresh": 2568,
+      "output_tokens": 6160,
+      "cost_usd": 0.059292,
+      "provenance": "vendor",
+      "note": "1 packet, 2 attempts: attempt 1 terminated MAX_TOKENS at ceiling 3000; adapter auto-doubled to 6000 and attempt 2 succeeded."
+    },
+    {
+      "phase": "docs",
+      "model": "gemini-3.5-flash",
+      "rule_index": 7,
+      "rule_reason": "Volume work",
+      "calls": 1,
+      "input_tokens_cached": 0,
+      "input_tokens_fresh": 763,
+      "output_tokens": 1671,
+      "cost_usd": 0.016184,
+      "provenance": "vendor"
+    },
+    {
+      "phase": "senior_code_review",
+      "model": "claude-opus-4-7",
+      "rule_index": 3,
+      "rule_reason": "Cross-file reasoning + judgment",
+      "calls": 1,
+      "input_tokens_cached": 0,
+      "input_tokens_fresh": 9386,
+      "output_tokens": 2500,
+      "cost_usd": 0.10943,
+      "provenance": "estimated"
+    },
+    {
+      "phase": "security_review",
+      "model": "claude-opus-4-7",
+      "rule_index": 4,
+      "rule_reason": "Risk-bearing, low volume",
+      "calls": 1,
+      "input_tokens_cached": 0,
+      "input_tokens_fresh": 10807,
+      "output_tokens": 7500,
+      "cost_usd": 0.241535,
+      "provenance": "estimated"
+    }
+  ],
+  "by_model": [
+    {
+      "model": "claude-opus-4-7",
+      "phases": 5,
+      "calls": 5,
+      "input_tokens_cached": 0,
+      "input_tokens_fresh": 37203,
+      "output_tokens": 21484,
+      "cost_usd": 0.723115,
+      "share_of_cost": 0.8595,
+      "provenance": "estimated"
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "phases": 3,
+      "calls": 6,
+      "input_tokens_cached": 0,
+      "input_tokens_fresh": 5824,
+      "output_tokens": 12163,
+      "cost_usd": 0.118205,
+      "share_of_cost": 0.1405,
+      "provenance": "vendor"
+    }
+  ],
+  "routing_counterfactual": {
+    "note": "Token-equivalence estimate only. Reprices the mechanical-tier tokens actually observed at premium-tier rates. It does NOT claim the premium model would have emitted the same token counts, so treat it as directional rather than measured.",
+    "mechanical_tokens_at_premium_rates_usd": 0.333195,
+    "mechanical_actual_usd": 0.118205,
+    "delta_usd": 0.21499,
+    "hypothetical_all_premium_total_usd": 1.056315,
+    "actual_total_usd": 0.84132,
+    "reduction_pct": 20.4
+  },
+  "artifacts": {
+    "application": {
+      "root": "/workspace/ping-service/src",
+      "files": [
+        { "path": "app.js", "bytes": 501, "phase": "codegen", "model": "gemini-3.5-flash", "task_id": "tp_codegen_002" },
+        { "path": "server.js", "bytes": 153, "phase": "codegen", "model": "gemini-3.5-flash", "task_id": "tp_codegen_003" },
+        { "path": "package.json", "bytes": 471, "phase": "codegen", "model": "gemini-3.5-flash", "task_id": "tp_codegen_001" },
+        { "path": "__tests__/ping.test.js", "bytes": 1339, "phase": "tests", "model": "gemini-3.5-flash", "task_id": "tp_tests_001" },
+        { "path": "README.md", "bytes": 632, "phase": "docs", "model": "gemini-3.5-flash", "task_id": "tp_docs_001" },
+        { "path": ".gitignore", "bytes": 24, "phase": "docs", "model": "gemini-3.5-flash", "task_id": "tp_docs_001" }
+      ]
+    },
+    "run_record": {
+      "root": "/workspace/ping-service/.sdlc",
+      "files": [
+        "requirements.md",
+        "design.md",
+        "packets.json",
+        "security_review.md",
+        "telemetry.jsonl",
+        "manifest.json"
+      ]
+    }
+  },
+  "verification": {
+    "npm_install": "exit 0",
+    "npm_test": "2 passed, 2 total; 1 suite passed; Jest exited cleanly with no open handles",
+    "npm_start": "boots and listens on port 3000",
+    "curl_ping": "200, application/json; charset=utf-8, {\"status\":\"ok\",\"time\":\"2026-08-04T19:02:28.019Z\"}",
+    "curl_unknown_path": "404, application/json, {\"error\":\"not found\"} (21 bytes, no HTML)",
+    "curl_wrong_method": "POST /ping -> 404, application/json, {\"error\":\"not found\"}",
+    "npm_audit": "0 vulnerabilities (both --omit=dev and full)",
+    "env_fixture": "not applicable - no ConfigModule, no validation schema, no .env* by design (ADR-003)"
+  },
+  "reviews": {
+    "senior_code_review": {
+      "verdict": "approved",
+      "findings": 0,
+      "refinement_packets": 0
+    },
+    "security_review": {
+      "overall_risk": "LOW",
+      "blockers": 0,
+      "findings": [
+        { "id": "F-01", "title": "Unvalidated err.status can unwind to Express's HTML default handler and leak a stack trace", "severity": "low", "status": "accepted by human at Gate 3 - latent, unreachable in current codebase" },
+        { "id": "F-02", "title": "X-Powered-By: Express on every response", "severity": "low", "status": "accepted by human at Gate 3" },
+        { "id": "F-03", "title": "Express 4.x maintenance line", "severity": "informational", "status": "accepted" },
+        { "id": "F-04", "title": "No server.on('error'); Express 4 does not catch async rejections", "severity": "informational", "status": "accepted" },
+        { "id": "F-05", "title": ".gitignore scope (.env*, .DS_Store)", "severity": "informational", "status": "accepted" }
+      ],
+      "accepted_risks_out_of_scope": [
+        "No logging - probing leaves zero trace and F-01 would fire silently",
+        "No TLS - a green /ping is spoofable and cannot be trusted as a health signal",
+        "No authentication - /ping is intentionally public",
+        "No rate limiting, no helmet, no CORS policy"
+      ],
+      "not_applicable": [
+        "PII encryption - the service handles no PII",
+        "Audit logging / field masking - nothing is persisted or masked"
+      ]
+    }
+  }
+}

@@ -28,7 +28,7 @@ If `examples/<study-id>/passes/<run-id>/` already exists, its contents will be o
 **Policy resolution:** the orchestrator loads the policy YAML from `plugin/config/policies/<policy>.yaml` and uses it for every routing decision in this run.
 
 **Requirements before starting:**
-- Gemini credentials must be present when the policy uses any Gemini model — either Google Cloud credentials for Vertex AI (`gcloud auth application-default login`, no key) or `GEMINI_API_KEY` for AI Studio. If neither is available, abort with a clear message naming both.
+- Gemini credentials must be present when the policy uses any Gemini model — either Google Cloud credentials for Gemini Enterprise Agent Platform, formerly Vertex AI (`gcloud auth application-default login`, no key), or `GEMINI_API_KEY` for AI Studio. If neither is available, abort with a clear message naming both.
 - `ANTHROPIC_API_KEY` env var must be set when `--auth=vendor`. If signed in to a Claude Code subscription under `--auth=estimated`, Claude Code provides direct-tier auth and the variable does not need to be exported. It IS required for `claude --print` (headless) invocations under `--auth=vendor`.
 - The MCP server `gemini-flash-server` must be registered (it is, via the plugin manifest).
 

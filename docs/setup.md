@@ -47,7 +47,7 @@ Required **only** if you plan to run the `opus-plus-flash` policy — the mechan
 
 Google exposes Gemini through two front doors. Either one works; the server detects which credentials are present and uses that door.
 
-**Vertex AI — if you have a Google Cloud project.** No API key. Authenticate once and the SDK signs every request with those credentials; the calls bill your project.
+**Gemini Enterprise Agent Platform — if you have a Google Cloud project.** This is the service Google renamed from Vertex AI. Both names are still in circulation and you will meet the old one constantly, because the API surface, the client libraries and the pricing pages all still say `vertex` — so does this repo's own configuration, deliberately, since renaming a field name would break every existing install for a cosmetic gain. No API key is involved: authenticate once and the SDK signs every request with those credentials, and the calls bill your project.
 
 ```bash
 gcloud auth application-default login
@@ -59,7 +59,7 @@ The billing project is read from the credentials file that command writes. If yo
 export GOOGLE_CLOUD_PROJECT=my-project
 ```
 
-`GOOGLE_CLOUD_LOCATION` selects the Vertex endpoint. It defaults to `global`, and that default is deliberate: Vertex bills regional endpoints **+10% on every token class** for Gemini 3 and later ([Vertex pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing), effective 2026-07-01), while the rates pinned in the policy files are the flat global ones. On the default the cost this plugin reports is the cost Google bills.
+`GOOGLE_CLOUD_LOCATION` selects the platform endpoint. It defaults to `global`, and that default is deliberate: Google bills regional endpoints **+10% on every token class** for Gemini 3 and later ([pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing), effective 2026-07-01), while the rates pinned in the policy files are the flat global ones. On the default the cost this plugin reports is the cost Google bills.
 
 Pin a region if you need quota or latency the global endpoint cannot give you — the surcharge is then included in the reported cost rather than ignored, so your numbers stay honest either way.
 
@@ -73,7 +73,32 @@ If both are present the API key wins, on the reasoning that exporting one is a d
 
 If you only plan to run the `opus-only` policy, you can skip Gemini entirely.
 
-**Where you export matters if you installed the plugin rather than cloning.** The `export` lines above assume you launch `claude` from that same shell, which is the clone route. Claude Code started from the desktop app inherits no login shell, so nothing exported in a terminal or written to `~/.zshrc` reaches it. On that route, put the variables in the `env` block of `~/.claude/settings.json`, which Claude Code reads at startup and passes through to the bundled server — or use the Vertex door, which involves no variable at all: `gcloud auth application-default login` writes a credentials file at a fixed path that the server reads directly, taking the project from that file's quota project.
+**Where you export matters if you installed the plugin rather than cloning.** The `export` lines above assume you launch `claude` from that same shell, which is the clone route. Claude Code started from the desktop app inherits no login shell, so nothing exported in a terminal or written to `~/.zshrc` reaches it. On that route, put the variables in the `env` block of `~/.claude/settings.json`, which Claude Code reads at startup and passes through to the bundled server — or use the Google Cloud door, which involves no variable at all: `gcloud auth application-default login` writes a credentials file at a fixed path that the server reads directly, taking the project from that file's quota project.
+
+### Every credential combination, and what the check says about each
+
+The setup check reads five things — `GEMINI_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, the credentials file `gcloud` writes, `GOOGLE_CLOUD_PROJECT`, and `SDLC_SELECT` — and there are only so many ways they can combine. This is all of them. Rows 5, 6 and 8 are the ones worth knowing by name: each was a **green report on a broken install** before the checks were hardened, and each cost its money at the first Gemini call rather than at setup.
+
+To walk a row, set what its second column names and run the check. Nothing here spends anything.
+
+```bash
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)"
+```
+
+| # | What is set | Finding | Runs? |
+|---|---|---|---|
+| 1 | Nothing | `gemini-credentials` (warning) | Claude-only policies run. The multi-model policy has no door open. |
+| 2 | `GEMINI_API_KEY` | — | Model path, through AI Studio. The agent question is not asked: that path cannot use a key. |
+| 3 | `gcloud auth application-default login` | — | Model path, through the platform. The agent path is available and offered. |
+| 4 | `GOOGLE_APPLICATION_CREDENTIALS` → a complete service-account file | — | Same as row 3. |
+| 5 | **`GOOGLE_CLOUD_PROJECT` only** | `gemini-credentials` (warning) | A project ID says where to bill, not who is asking. Inside Google Cloud the credential arrives from the metadata server and this works; on a laptop it does not, and nothing offline can tell the two apart — hence a warning rather than a block. |
+| 6 | **`GOOGLE_APPLICATION_CREDENTIALS` → a file that is missing, truncated, or not a credential** | `gemini-credentials-broken` (blocking) | Nothing. This variable outranks the `gcloud` file, so a broken one hides a perfectly good login sitting right behind it. |
+| 7 | `GEMINI_API_KEY` **and** Google Cloud credentials | — | Model path through AI Studio — the key wins, on the reasoning that setting one is deliberate while cloud credentials are often ambient. `GEMINI_BACKEND` overrides. The agent path is still available. |
+| 8 | **`SDLC_SELECT=gemini-flash=flash-agsdk-worker` with only `GEMINI_API_KEY`** | `agent-worker-credentials` (blocking) | Nothing. The run is routed to the agent path and the key cannot reach it — the wrong door, not a partial credential. |
+
+Two combinations are deliberately absent from the table because they are not credential states. A variable that arrived as the literal `${NAME}` is reported separately as `env-placeholders` and treated as unset. And row 8 with a *named project but no credential* downgrades to a warning, `agent-worker-credentials-unproven`, for the same reason row 5 does.
+
+What none of these rows can tell you is whether a well-formed credential is still live, whether the project carries the Antigravity entitlement, or whether the region serves the model. Those need one real call — see [Confirming it works, before a run finds out](#confirming-it-works-before-a-run-finds-out).
 
 ## Gemini as a model, or Gemini as an agent
 
@@ -87,11 +112,13 @@ Three things are worth knowing before choosing it:
 
 - **It costs several times more per task.** An agent re-sends the whole conversation on every tool call, on top of a fixed preamble of several thousand tokens it carries every turn. Same published per-token rates; many more tokens.
 - **It needs Python 3.10 or newer.** The Antigravity SDK declares that minimum, and macOS ships `/usr/bin/python3` as 3.9 — so the interpreter your machine reaches for by default is the one that will not work. The setup script looks for a usable one by asking each candidate its own version rather than trusting its name.
-- **Vertex only.** The Antigravity SDK signs with Application Default Credentials and has no API-key door, so `GEMINI_API_KEY` cannot reach this path. `gcloud auth application-default login` is a prerequisite, not an alternative.
+- **Google Cloud only.** The Antigravity SDK signs with Application Default Credentials against the same project the model path uses, and has no API-key door, so `GEMINI_API_KEY` cannot reach this path. `gcloud auth application-default login` is a prerequisite, not an alternative.
 
 ### Choosing it
 
 Both installation routes ask, and neither asks unless it finds Google Cloud credentials — without them this path is unavailable, so offering it would be offering something that cannot work.
+
+That leaves a gap worth knowing about, because the question is asked once and credentials arrive whenever they arrive: if you run `gcloud auth application-default login` a week after installing, nothing prompts you to install again, and the second door opens without anyone mentioning it. So the verify script watches for exactly that — on an install that is on the model path and now has real credentials, it ends with the `--enable-agent` line. It is a one-line note, not a nag: the model path is the cheaper default and staying on it is a perfectly good answer.
 
 On the clone route, `node tools/setup.mjs` asks as part of the wizard. On the plugin route, the setup instructions ask, and a yes runs the verify script with `--enable-agent`. You can run that yourself at any time, on either route:
 
@@ -134,9 +161,9 @@ If neither appears, the run went through the model path regardless of what the v
 
 Everything the setup and verify scripts check is offline — files, versions, variables. Three things they cannot see decide whether this path works at all, because none of them is a missing file:
 
-- whether the billing project carries the **Gemini Enterprise / Model Garden entitlement** the SDK needs and the plain Vertex path does not (a 403 without it);
+- whether the billing project carries the **Gemini Enterprise / Model Garden entitlement** the SDK needs and the plain model path does not (a 403 without it);
 - whether the **region actually serves the model** — `gemini-3.5-flash-lite` in particular is not deployed everywhere (a 404 where it isn't);
-- whether Application Default Credentials are not just present but **still valid**, on a project with the Vertex API on.
+- whether Application Default Credentials are not just present but **still valid**, on a project with the platform API enabled.
 
 All three surface at the same moment: the first delegated packet, after requirements, design and task planning have already been billed to the premium tier. One trivial delegation settles them at second zero instead:
 
@@ -190,7 +217,7 @@ The build output goes to `dist/server.js`; if that exists, you are good.
 
 **`select-spec` from the verify script** — `SDLC_SELECT` is set to something no policy can resolve. The value is a `slot=option` pair, comma-separated for more than one, and the commonest way to get it wrong is to write the option on its own: `flash-agsdk-worker` instead of `gemini-flash=flash-agsdk-worker`. The option is the half that carries the meaning, which is why it is the half people write, and it reads like a complete answer. Before this check existed, that spelling produced a green setup report and then a throw at policy load, with the premium phases of the run already billed. Re-run the verify script with `--enable-agent` to have the pair written correctly, or `--disable-agent` to clear it.
 
-**`agent-worker-credentials` from the verify script** — `SDLC_SELECT` routes the mechanical tier to the agent worker, and this install has no Vertex credentials. The Antigravity SDK signs with Application Default Credentials and has no API-key branch, so a `GEMINI_API_KEY` does not help here — it is the other door, and the message says so when it finds one. Run `gcloud auth application-default login` (and set `GOOGLE_CLOUD_PROJECT` if the account has several projects), or run the verify script with `--disable-agent` to go back to the model path, which does work with an AI Studio key. This is offline-checkable and therefore checked; the entitlement and region problems below are not, which is what the probe is for.
+**`agent-worker-credentials` from the verify script** — `SDLC_SELECT` routes the mechanical tier to the agent worker, and this install has no Google Cloud credentials. The Antigravity SDK signs with Application Default Credentials and has no API-key branch, so a `GEMINI_API_KEY` does not help here — it is the other door, and the message says so when it finds one. Run `gcloud auth application-default login` (and set `GOOGLE_CLOUD_PROJECT` if the account has several projects), or run the verify script with `--disable-agent` to go back to the model path, which does work with an AI Studio key. This is offline-checkable and therefore checked; the entitlement and region problems below are not, which is what the probe is for.
 
 **`agent-worker-python` or `agent-worker-sdk` from the verify script** — `SDLC_SELECT` routes the mechanical tier to the Antigravity agent, but the Python environment that path needs is missing (`agent-worker-python`) or exists and cannot import the SDK (`agent-worker-sdk`, which quotes the interpreter's own error). Both are blocking, and both have the same two exits: build the environment with `--enable-agent` or `--fix` on the verify script (or `node tools/setup.mjs` on a clone), or run `--disable-agent` and go back to the model path, which needs no Python at all. The second failure usually means the environment was built against an interpreter that has since been upgraded or removed; both flags rebuild with `venv --clear`, so they replace the broken environment rather than patching it, and there is nothing to delete by hand.
 

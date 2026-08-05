@@ -1,0 +1,185 @@
+{
+  "model": "gemini-3.5-flash",
+  "thinking": "NONE",
+  "sdk": "google-antigravity",
+  "sdk_version": "0.1.9",
+  "vertex_project": "your-project-id",
+  "vertex_location": "global",
+  "usage": {
+    "prompt_token_count": 464291,
+    "cached_content_token_count": 379548,
+    "candidates_token_count": 3766,
+    "thoughts_token_count": 4990,
+    "total_token_count": 473047
+  },
+  "tool_call_count": 19,
+  "tool_calls_truncated": false,
+  "tool_calls": [
+    {
+      "name": "list_directory",
+      "args": {
+        "directory_path": "/workspace/ping-service/src"
+      },
+      "canonical_path": "/workspace/ping-service/src",
+      "args_clipped": false
+    },
+    {
+      "name": "view_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/package.json",
+        "start_line": "0",
+        "end_line": "799"
+      },
+      "canonical_path": "/workspace/ping-service/src/package.json",
+      "args_clipped": false
+    },
+    {
+      "name": "edit_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/app.js"
+      },
+      "canonical_path": "/workspace/ping-service/src/app.js",
+      "args_clipped": false
+    },
+    {
+      "name": "list_directory",
+      "args": {
+        "directory_path": "/workspace/ping-service/src"
+      },
+      "canonical_path": "/workspace/ping-service/src",
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "npm install",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    },
+    {
+      "name": "list_directory",
+      "args": {
+        "directory_path": "/workspace/ping-service/src"
+      },
+      "canonical_path": "/workspace/ping-service/src",
+      "args_clipped": false
+    },
+    {
+      "name": "find_file",
+      "args": {
+        "directory_path": "/workspace/ping-service/src",
+        "query": "*.js"
+      },
+      "canonical_path": "/workspace/ping-service/src",
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "npm test",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    },
+    {
+      "name": "edit_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/app.test.js"
+      },
+      "canonical_path": "/workspace/ping-service/src/app.test.js",
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "npm test",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    },
+    {
+      "name": "edit_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/app.test.js"
+      },
+      "canonical_path": "/workspace/ping-service/src/app.test.js",
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "npm test",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "node -e \"const app = require('./app'); console.log(Object.keys(app));\"",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "node -e \"const app = require('./app'); console.log(app.router);\"",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    },
+    {
+      "name": "edit_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/app.test.js"
+      },
+      "canonical_path": "/workspace/ping-service/src/app.test.js",
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "npm test",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "rm app.test.js",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    },
+    {
+      "name": "list_directory",
+      "args": {
+        "directory_path": "/workspace/ping-service/src"
+      },
+      "canonical_path": "/workspace/ping-service/src",
+      "args_clipped": false
+    },
+    {
+      "name": "view_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/app.js",
+        "start_line": "0",
+        "end_line": "799"
+      },
+      "canonical_path": "/workspace/ping-service/src/app.js",
+      "args_clipped": false
+    }
+  ],
+  "text": "yesyes{\n  \"artifact_path\": \"/workspace/ping-service/src/app.js\",\n  \"content\": \"'use strict';\\n\\nconst express = require('express');\\nconst app = express();\\n\\napp.get('/ping', (req, res) => {\\n  res.status(200).json({\\n    status: 'ok',\\n    time: new Date().toISOString()\\n  });\\n});\\n\\napp.use((req, res) => {\\n  res.status(404).json({\\n    error: 'not found'\\n  });\\n});\\n\\napp.use((err, req, res, next) => {\\n  if (res.headersSent) {\\n    return next(err);\\n  }\\n  res.status(500).json({\\n    error: 'internal server error'\\n  });\\n});\\n\\nmodule.exports = app;\\n\"\n}"
+}

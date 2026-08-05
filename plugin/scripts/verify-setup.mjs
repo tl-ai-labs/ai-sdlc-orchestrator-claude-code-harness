@@ -133,26 +133,180 @@ export function unexpandedDeclaredEnv(env = {}) {
 }
 
 /**
+ * Where a variable has to be set for the plugin to actually see it.
+ *
+ * One constant rather than a sentence repeated in four fix strings, because the
+ * four had drifted into contradicting each other and the file's own
+ * `env-placeholders` warning: three of them said `export NAME=...` while that
+ * one explained, correctly, that a shell export is exactly what does not reach a
+ * plugin launched from the desktop app. A user following the fix text was being
+ * sent to do the thing the report elsewhere told them would not work.
+ *
+ * Note the asymmetry this makes visible: `gcloud auth application-default login`
+ * needs none of this, because it writes a FILE that the SDK finds on its own. The
+ * contradiction only ever bit the two routes that set a variable.
+ */
+export const ENV_ADVICE =
+  "the `env` block of ~/.claude/settings.json — a shell export is not enough, because " +
+  "Claude Code launched from the desktop app inherits no login shell";
+
+/**
+ * The credential types Google's auth libraries accept in an ADC-shaped JSON file,
+ * and the fields each one is useless without.
+ *
+ * Used to answer a question the previous checks never asked: not "is a credential
+ * configured" but "is the configured credential a credential". A truncated
+ * download, a half-written service-account key, a file emptied by a full disk —
+ * all of them satisfy `existsSync` and none of them can sign a request.
+ *
+ * Hand-maintained against google-auth-library's `fromJSON` handling. Types not
+ * listed here are treated as USABLE rather than broken, deliberately: this list
+ * is a way to be certain something is wrong, never a way to guess that it is.
+ */
+export const CREDENTIAL_REQUIRED_FIELDS = {
+  authorized_user: ["client_id", "client_secret", "refresh_token"],
+  service_account: ["client_email", "private_key"],
+  external_account: ["audience", "subject_token_type", "token_url"],
+  impersonated_service_account: ["service_account_impersonation_url", "source_credentials"],
+};
+
+/**
+ * Read a credential file and say what it actually is.
+ *
+ * Returns `{ present, usable, type, detail }`. `usable: false` is only ever
+ * returned when this function is CERTAIN — the file is absent, is not JSON, has
+ * no `type`, or is a recognised type missing a field it cannot work without.
+ * Anything it does not recognise comes back usable, with the reason it could not
+ * be checked in `detail`, because a setup checker that invents failures is worse
+ * than one that misses them: the whole value of this script is that people trust
+ * a green light.
+ *
+ * Expiry is deliberately not checked. A refresh token has no offline expiry to
+ * read, and a revoked one is indistinguishable from a live one without a network
+ * call. That gap is real, and it is what `probe-agent-worker.mjs` is for.
+ *
+ * The readers are injectable so the whole decision table is testable without
+ * writing credential-shaped files to a real disk.
+ */
+export function inspectCredentialFile(path, { exists = existsSync, read = readFileSync } = {}) {
+  if (!path) return { present: false, usable: false, type: null, detail: null };
+  if (!exists(path)) {
+    return { present: false, usable: false, type: null, detail: `${path} does not exist` };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(read(path, "utf8"));
+  } catch (err) {
+    return { present: true, usable: false, type: null, detail: `${path} is not valid JSON (${err.message})` };
+  }
+
+  const type = typeof parsed?.type === "string" ? parsed.type.trim() : null;
+  if (!type) {
+    return {
+      present: true,
+      usable: false,
+      type: null,
+      detail: `${path} has no "type" field, so no Google auth library can tell what kind of credential it is`,
+    };
+  }
+
+  const required = CREDENTIAL_REQUIRED_FIELDS[type];
+  if (!required) {
+    return { present: true, usable: true, type, detail: `credential type '${type}' is not one this check knows how to verify` };
+  }
+
+  const missing = required.filter((field) => !parsed[field]);
+  if (missing.length > 0) {
+    return {
+      present: true,
+      usable: false,
+      type,
+      detail: `${path} is a '${type}' credential but is missing ${missing.join(", ")}`,
+    };
+  }
+
+  return { present: true, usable: true, type, detail: null };
+}
+
+/**
+ * What this machine can prove about its Vertex / Gemini Enterprise Agent Platform
+ * credentials, in four states rather than a yes/no.
+ *
+ *   credential   — a real signing credential was found and looks complete.
+ *   broken       — one was configured and is definitely unusable. Certain.
+ *   project-only — GOOGLE_CLOUD_PROJECT is set and nothing else is. This is a
+ *                  project ID, not a credential. It works on a Google-hosted
+ *                  machine, where ADC comes from the metadata server and there is
+ *                  nothing on disk to find; on a laptop it authenticates nothing.
+ *   none         — no door at all.
+ *
+ * The middle two states are the whole point. The previous check was a single
+ * boolean that counted GOOGLE_CLOUD_PROJECT as a credential, so the commonest way
+ * to get this wrong — export the project ID, assume that is the login step —
+ * passed every offline check, reported green, and then failed at the first
+ * delegated packet, which is after requirements, design and planning have already
+ * been billed to the premium tier.
+ *
+ * Precedence matches google-auth: an explicit GOOGLE_APPLICATION_CREDENTIALS wins
+ * outright, and a broken one is fatal rather than falling back to the gcloud file,
+ * because the library does not fall back either.
+ */
+export function vertexCredentialState({ env = {}, serviceAccountFile = null, adcFile = null } = {}) {
+  if (env.GOOGLE_APPLICATION_CREDENTIALS) {
+    if (serviceAccountFile?.usable) {
+      return { state: "credential", source: "GOOGLE_APPLICATION_CREDENTIALS", detail: serviceAccountFile.detail };
+    }
+    return {
+      state: "broken",
+      source: "GOOGLE_APPLICATION_CREDENTIALS",
+      detail:
+        serviceAccountFile?.detail ??
+        `GOOGLE_APPLICATION_CREDENTIALS points at ${env.GOOGLE_APPLICATION_CREDENTIALS}, which cannot be read`,
+    };
+  }
+
+  if (adcFile?.usable) return { state: "credential", source: "gcloud ADC file", detail: adcFile.detail };
+  if (adcFile?.present) return { state: "broken", source: "gcloud ADC file", detail: adcFile.detail };
+  if (env.GOOGLE_CLOUD_PROJECT) return { state: "project-only", source: "GOOGLE_CLOUD_PROJECT", detail: null };
+  return { state: "none", source: null, detail: null };
+}
+
+/**
+ * The state implied by the coarse fact older callers pass — a boolean "is there an
+ * ADC file". Existence was all those callers ever knew, so this reads an existing
+ * file as a working one, which is exactly the assumption they were already making.
+ * Real callers pass a real inspection; this keeps `evaluate()` meaningful for
+ * anything that has not been taught the finer distinction.
+ */
+function assumedVertexState(env, hasAdcFile) {
+  return vertexCredentialState({
+    env,
+    serviceAccountFile: env.GOOGLE_APPLICATION_CREDENTIALS
+      ? { present: true, usable: true, type: null, detail: null }
+      : null,
+    adcFile: { present: hasAdcFile, usable: hasAdcFile, type: null, detail: null },
+  });
+}
+
+/**
  * Whether ANY door into Gemini is open, mirroring the precedence in
- * geminiTransports.ts `selectGeminiBackend`: an API key, an explicit service
- * account file, a gcloud ADC file, or a GCP project named in the environment.
+ * geminiTransports.ts `selectGeminiBackend`: an API key, or a real Vertex
+ * credential.
  *
  * Callers must pass an env that has already been through usableEnv() — this
  * function trusts every value it is given, by design, so that the "what counts as
  * a real value" rule lives in exactly one place.
  *
- * Split out because the previous check only looked at GEMINI_API_KEY and
+ * Split out originally because the check only looked at GEMINI_API_KEY and
  * GOOGLE_APPLICATION_CREDENTIALS, so the ordinary enterprise setup — a plain
- * `gcloud auth application-default login`, which sets no environment variable
- * at all — was reported as "no credentials" even though runs work fine.
+ * `gcloud auth application-default login`, which sets no environment variable at
+ * all — was reported as "no credentials" even though runs work fine. It now
+ * defers the Google half to vertexCredentialState(), so a named project no longer
+ * counts as a login.
  */
-export function hasGeminiCredentials({ env = {}, hasAdcFile = false } = {}) {
-  return Boolean(
-    env.GEMINI_API_KEY ||
-      env.GOOGLE_APPLICATION_CREDENTIALS ||
-      hasAdcFile ||
-      env.GOOGLE_CLOUD_PROJECT
-  );
+export function hasGeminiCredentials({ env = {}, vertex = null } = {}) {
+  return Boolean(env.GEMINI_API_KEY || vertex?.state === "credential");
 }
 
 /** The three paths that decide whether the MCP dispatch path is real. */
@@ -305,11 +459,14 @@ export function selectSpecProblem(env = {}) {
  * authentication error, having been told at no point that the combination it
  * chose cannot work.
  *
- * Callers must pass an env already through usableEnv(), same contract as
- * hasGeminiCredentials().
+ * Takes the state computed by vertexCredentialState() rather than raw facts, so
+ * that "what counts as a Vertex credential" is decided in exactly one place.
+ * Only the `credential` state is a yes: `project-only` is a project ID that
+ * authenticates nothing on a machine outside Google's own fleet, and `broken` is
+ * a credential we are certain cannot sign.
  */
-export function hasVertexCredentials({ env = {}, hasAdcFile = false } = {}) {
-  return Boolean(env.GOOGLE_APPLICATION_CREDENTIALS || hasAdcFile || env.GOOGLE_CLOUD_PROJECT);
+export function hasVertexCredentials(vertex = null) {
+  return vertex?.state === "credential";
 }
 
 /**
@@ -328,6 +485,18 @@ export function evaluate({
   hasDist,
   hasAdcFile = false,
   env = {},
+  /**
+   * What vertexCredentialState() made of the credentials on this machine, or
+   * null to have it inferred from `hasAdcFile` alone — see assumedVertexState().
+   */
+  vertex = null,
+  /**
+   * Whether `gcloud` is on PATH. Defaults to true because almost every fix
+   * string below recommends it, and a checker that assumes the tool is missing
+   * would nag every correctly-set-up machine. Only an observed absence is worth
+   * saying out loud, and only when we are about to send someone to run it.
+   */
+  hasGcloud = true,
   /**
    * What was found when the agent worker's Python environment was probed, or
    * `null` when it was not probed because this install did not ask for it.
@@ -383,6 +552,17 @@ export function evaluate({
   // that once, here, so no individual check can be fooled by a placeholder.
   const declaredPlaceholders = unexpandedDeclaredEnv(env);
   const realEnv = usableEnv(env);
+  const vertexState = vertex ?? assumedVertexState(realEnv, hasAdcFile);
+
+  // Every fix below that recommends gcloud says so through this, so that a
+  // machine without gcloud is told once, at the moment it is being sent to run
+  // it, instead of being handed a command that will not be found. Inlined rather
+  // than raised as its own problem because a missing gcloud is only a problem for
+  // someone who needs it — an AI Studio install never touches it.
+  const gcloudLogin = hasGcloud
+    ? "`gcloud auth application-default login`"
+    : "`gcloud auth application-default login` — but gcloud is not on this machine's PATH, " +
+      "so install it first: https://cloud.google.com/sdk/docs/install";
 
   if (declaredPlaceholders.length > 0) {
     problems.push({
@@ -408,21 +588,70 @@ export function evaluate({
       message:
         "ANTHROPIC_API_KEY is not set. Vendor-billed runs need it; a Claude Code subscription covers " +
         "subscription-auth runs without it.",
-      fix: "export ANTHROPIC_API_KEY=... (https://console.anthropic.com/settings/keys)",
+      fix: `Get a key at https://console.anthropic.com/settings/keys and put it in ${ENV_ADVICE}.`,
     });
   }
 
-  if (!hasGeminiCredentials({ env: realEnv, hasAdcFile })) {
+  // A credential we are CERTAIN is broken, reported before the "have you got one"
+  // question below, because the answer to that question would be "yes" and the
+  // user would be left looking at a green light over a file that cannot sign.
+  if (vertexState.state === "broken") {
+    problems.push({
+      id: "gemini-credentials-broken",
+      severity: "blocking",
+      message:
+        `A Google credential is configured but is not usable: ${vertexState.detail}. ` +
+        "This is not a missing credential — it is a present one that no Google auth library can load, " +
+        "so every Gemini dispatch would fail at the moment it tries to sign.",
+      fix:
+        (realEnv.GOOGLE_APPLICATION_CREDENTIALS
+          ? `Point GOOGLE_APPLICATION_CREDENTIALS at a complete service-account key, or unset it and run ${gcloudLogin} instead. ` +
+            "An explicit GOOGLE_APPLICATION_CREDENTIALS takes precedence over the gcloud file, so leaving a broken one set " +
+            "hides a working login."
+          : `Run ${gcloudLogin} to write a fresh credentials file over the unusable one.`) +
+        // The AI Studio door is named here because this problem now stands in for
+        // the generic "no credentials" warning, which is where that alternative
+        // would otherwise have been offered.
+        ` The AI Studio path is the other way in, if you would rather not fix this one: get a key at ` +
+        `https://aistudio.google.com/app/apikey and put it in ${ENV_ADVICE}.`,
+    });
+  }
+
+  // `state === "broken"` is excluded rather than allowed to fall through. A broken
+  // credential fails hasGeminiCredentials(), so without this the same machine
+  // collects two findings for one cause, and the second one — "No Gemini
+  // credentials found" — flatly contradicts the first, which just said a
+  // credential is present and unusable. The blocking problem above already
+  // carries both doors in its fix, so nothing is lost by staying quiet here.
+  if (
+    vertexState.state !== "broken" &&
+    !hasGeminiCredentials({ env: realEnv, vertex: vertexState })
+  ) {
+    // Two distinct situations, and telling them apart is the point. Someone with
+    // nothing set has not started; someone with only GOOGLE_CLOUD_PROJECT set
+    // believes they have finished, and is the one who gets hurt — that variable
+    // names a billing project and authenticates nothing, but it is truthy, it is
+    // the variable every Google Cloud tutorial mentions first, and until this
+    // check told them apart it counted as a credential here.
+    const projectOnly = vertexState.state === "project-only";
     problems.push({
       id: "gemini-credentials",
       severity: "warning",
-      message:
-        "No Gemini credentials found. Policies that route mechanical phases to Gemini will abort at the " +
-        "first dispatch; Claude-only policies are unaffected.",
+      message: projectOnly
+        ? `GOOGLE_CLOUD_PROJECT is set to '${realEnv.GOOGLE_CLOUD_PROJECT}' but no credential was found. ` +
+          "A project ID says where to bill, not who is asking. On a Google-hosted machine the credential comes " +
+          "from the metadata server and this check cannot see it, so this may be fine; anywhere else, policies " +
+          "that route mechanical phases to Gemini will abort at the first dispatch."
+        : "No Gemini credentials found. Policies that route mechanical phases to Gemini will abort at the " +
+          "first dispatch; Claude-only policies are unaffected.",
       fix:
-        "Either `gcloud auth application-default login` for Vertex AI on a Google Cloud project " +
-        "(no key; set GOOGLE_CLOUD_PROJECT if the account has several), or " +
-        "export GEMINI_API_KEY=... for the AI Studio path (https://aistudio.google.com/app/apikey).",
+        `Either run ${gcloudLogin} for Gemini Enterprise Agent Platform (formerly Vertex AI) — it writes a ` +
+        "credentials file, so it needs no environment variable at all, and GOOGLE_CLOUD_PROJECT only if the " +
+        `account has several projects. Or, for the AI Studio path, get a key at ` +
+        `https://aistudio.google.com/app/apikey and put it in ${ENV_ADVICE}.` +
+        (projectOnly
+          ? " If this machine runs inside Google Cloud, settle it for about two cents with scripts/probe-agent-worker.mjs rather than guessing."
+          : ""),
     });
   }
 
@@ -438,22 +667,37 @@ export function evaluate({
   // API-key branch at all, so an AI-Studio-only install fails at the first
   // delegated packet — after the premium phases are billed — with an auth error
   // that says nothing about the choice that caused it.
-  if (selectsAgentWorker(realEnv) && !hasVertexCredentials({ env: realEnv, hasAdcFile })) {
+  if (selectsAgentWorker(realEnv) && !hasVertexCredentials(vertexState)) {
+    // `project-only` is separated out and left non-blocking on purpose. It is the
+    // one state this script genuinely cannot resolve offline: inside Google Cloud
+    // it is a working setup whose credential lives on a metadata server, and on a
+    // laptop it is a dead end. Failing the exit code would break every legitimate
+    // Cloud Build and Cloud Run install; passing it silently is what #170 is
+    // about. So it is said out loud, and pointed at the one cheap thing that
+    // actually settles it.
+    const unproven = vertexState.state === "project-only";
     problems.push({
-      id: "agent-worker-credentials",
-      severity: "blocking",
+      id: unproven ? "agent-worker-credentials-unproven" : "agent-worker-credentials",
+      severity: unproven ? "warning" : "blocking",
       message:
         `SDLC_SELECT routes the mechanical tier to '${AGENT_WORKER_MODEL_ID}', which reaches Gemini ` +
-        "through Vertex AI and application default credentials only. This install has no Vertex " +
-        "credentials" +
-        (realEnv.GEMINI_API_KEY
-          ? " — GEMINI_API_KEY is the AI Studio path, and the agent worker has no way to use it."
-          : ".") +
-        " Every delegated task would fail to authenticate.",
-      fix:
-        "Run `gcloud auth application-default login` (and set GOOGLE_CLOUD_PROJECT if the account " +
-        "has several projects). To stay on the model path instead, which does work with an AI " +
-        "Studio key, re-run this script with --disable-agent.",
+        "through Gemini Enterprise Agent Platform (formerly Vertex AI) and application default " +
+        "credentials only. " +
+        (unproven
+          ? `This install names a project ('${realEnv.GOOGLE_CLOUD_PROJECT}') but has no credential this ` +
+            "check can see. If it is not running inside Google Cloud, every delegated task will fail to " +
+            "authenticate — after the premium phases are billed."
+          : "This install has no credential for it" +
+            (realEnv.GEMINI_API_KEY
+              ? " — GEMINI_API_KEY is the AI Studio path, and the agent worker has no way to use it."
+              : ".") +
+            " Every delegated task would fail to authenticate."),
+      fix: unproven
+        ? "Settle it for about two cents before a real run: node scripts/probe-agent-worker.mjs. " +
+          `If it fails to authenticate, run ${gcloudLogin}.`
+        : `Run ${gcloudLogin}, and set GOOGLE_CLOUD_PROJECT if the account has several projects. ` +
+          "To stay on the model path instead, which does work with an AI Studio key, re-run this " +
+          "script with --disable-agent.",
     });
   }
 
@@ -550,12 +794,26 @@ function observeAgentWorker(pluginRoot, env) {
  */
 function observe(pluginRoot, env = process.env) {
   const { nodeModules, distEntry } = mcpPaths(pluginRoot);
+  // The credential files are opened and read, not merely stat-ed. Every state
+  // this distinguishes — a truncated key, a service-account path left pointing at
+  // a deleted file, a project ID mistaken for a login — passes an existence check
+  // and fails a real request, which is the gap this whole function closes.
+  const realEnv = usableEnv(env);
+  const adcFile = adcPath();
   return {
     nodeMajor: nodeMajorFrom(process.versions.node),
     hasClaudeCli: onPath("claude"),
+    hasGcloud: onPath("gcloud"),
     hasNodeModules: existsSync(nodeModules),
     hasDist: existsSync(distEntry),
-    hasAdcFile: existsSync(adcPath()),
+    hasAdcFile: existsSync(adcFile),
+    vertex: vertexCredentialState({
+      env: realEnv,
+      serviceAccountFile: realEnv.GOOGLE_APPLICATION_CREDENTIALS
+        ? inspectCredentialFile(realEnv.GOOGLE_APPLICATION_CREDENTIALS)
+        : null,
+      adcFile: inspectCredentialFile(adcFile),
+    }),
     env,
     agentWorker: observeAgentWorker(pluginRoot, env),
   };
@@ -674,12 +932,17 @@ export function buildWorkerEnvironment(pluginRoot, log = () => {}) {
  *
  * Everything above is offline by design, and on the model path that is the
  * whole story: a green report there really does mean the next run will
- * dispatch. On the agent path it does not. Two failure modes are invisible to
- * every check in this file, because neither is a missing file — the billing
- * project's Antigravity entitlement (403) and whether the resolved region
- * actually serves the model (404). Both surface at the FIRST delegated packet,
- * which is after requirements, design and task planning have been billed to the
- * premium tier.
+ * dispatch. On the agent path it does not. Three failure modes are invisible to
+ * every check in this file, because none of them is a missing file — the billing
+ * project's Antigravity entitlement (403), whether the resolved region actually
+ * serves the model (404), and whether the credential that looks complete on disk
+ * has since been revoked or expired (401). All three surface at the FIRST
+ * delegated packet, which is after requirements, design and task planning have
+ * been billed to the premium tier.
+ *
+ * That third one is the honest limit of the credential inspection above. Reading
+ * a file can prove a credential is malformed; nothing offline can prove a
+ * well-formed refresh token is still live.
  *
  * So a green report is told to say so. Returns null on the model path, and on
  * any install that is not yet green — someone still fixing a blocking problem
@@ -690,11 +953,45 @@ export function agentProbeHint(pluginRoot, env = {}, ok = true) {
   if (!ok || !selectsAgentWorker(env)) return null;
   return (
     `\n  This install selects the agent path, and the checks above are all offline.\n` +
-    `  They cannot tell whether this project carries the Antigravity entitlement, or\n` +
-    `  whether its region serves the model — both fail at the first delegated packet,\n` +
-    `  after the premium phases are already billed. One trivial delegation settles\n` +
-    `  both for about two cents:\n` +
+    `  They cannot tell whether this project carries the Antigravity entitlement,\n` +
+    `  whether its region serves the model, or whether a well-formed credential is\n` +
+    `  still live — each fails at the first delegated packet, after the premium\n` +
+    `  phases are already billed. One trivial delegation settles all three for about\n` +
+    `  two cents:\n` +
     `    node ${join(pluginRoot, "scripts", "probe-agent-worker.mjs")}`
+  );
+}
+
+/**
+ * Tell an install that the agent path has become available since it was set up.
+ *
+ * The gap this closes: the setup wizard asks the agent-path question only when it
+ * can see Google credentials, because the Antigravity SDK signs with ADC and has
+ * no API-key door — offering it to an AI-Studio-only machine would be offering
+ * something that cannot work. That is right at install time and wrong forever
+ * after. Somebody who installs first and runs `gcloud auth application-default
+ * login` a week later has the door open and is never told: the wizard is a
+ * one-time command they have no reason to run again, and this check — the command
+ * they DO run again — said nothing about it.
+ *
+ * Deliberately not a `problem`. Nothing is broken; the model path is a legitimate
+ * choice and most installs should stay on it. It is one line of information, shown
+ * only when the door is genuinely open (a real credential, not a named project)
+ * and the install is not already through it.
+ */
+export function agentPathAvailableHint(pluginRoot, vertex = null, env = {}) {
+  if (!hasVertexCredentials(vertex)) return null;
+  if (selectsAgentWorker(env)) return null;
+  // The script's own resolved path, exactly as agentProbeHint does it. A bare
+  // `node verify-setup.mjs` is only correct if the reader happens to be standing
+  // in the scripts directory, which on the plugin route is a cache path nobody
+  // has ever cd'd into.
+  return (
+    `\n  This machine now has credentials for the Antigravity SDK agent path, which\n` +
+    `  the mechanical tier is not using. The model path is the cheaper default and\n` +
+    `  staying on it is fine — but if you want Gemini to open the folder and run\n` +
+    `  commands itself:\n` +
+    `    node ${join(pluginRoot, "scripts", "verify-setup.mjs")} --enable-agent`
   );
 }
 
@@ -952,14 +1249,21 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   // command has to clear, which is the two-step dance this flag exists to end.
   const repairing = shouldFix || enableAgent;
 
-  let state = evaluate(observe(pluginRoot, env));
+  // The observation is kept, not just the verdict derived from it: the hints
+  // printed at the end need the credential state, and re-deriving it there would
+  // mean reading the same files twice and risking two different answers.
+  let observed = observe(pluginRoot, env);
+  let state = evaluate(observed);
   const needsRepair = state.problems.some(
     (p) => p.id === "mcp-dependencies" || p.id === "mcp-build"
   );
 
   if (needsRepair && repairing) {
     log("  The bundled MCP server needs building. Repairing:");
-    if (repair(pluginRoot, log)) state = evaluate(observe(pluginRoot, env));
+    if (repair(pluginRoot, log)) {
+      observed = observe(pluginRoot, env);
+      state = evaluate(observed);
+    }
   }
 
   // Repairable for the same reason the build is: this install asked for the
@@ -972,13 +1276,22 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (needsWorker && repairing) {
     log("  The agent worker needs a Python environment. Repairing:");
     const built = buildWorkerEnvironment(pluginRoot, log);
-    if (built.ok) state = evaluate(observe(pluginRoot, env));
-    else log(`  ✗ ${built.detail}`);
+    if (built.ok) {
+      observed = observe(pluginRoot, env);
+      state = evaluate(observed);
+    } else log(`  ✗ ${built.detail}`);
   }
 
   const passed = report(state, log);
-  const hint = agentProbeHint(pluginRoot, env, passed);
-  if (hint) log(hint);
+  for (const hint of [
+    agentProbeHint(pluginRoot, env, passed),
+    // Shown last, and only to installs that are on the model path with the agent
+    // door open. It is the one thing this check can tell someone that no problem
+    // in the list above ever will, because nothing about it is wrong.
+    agentPathAvailableHint(pluginRoot, observed.vertex, env),
+  ]) {
+    if (hint) log(hint);
+  }
 
   process.exit(passed ? 0 : 1);
 }

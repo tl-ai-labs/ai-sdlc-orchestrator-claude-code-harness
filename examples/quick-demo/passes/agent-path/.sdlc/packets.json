@@ -1,0 +1,194 @@
+[
+  {
+    "id": "tp_codegen_001",
+    "phase": "codegen",
+    "task_type": "module_wiring",
+    "module": "manifest",
+    "artifact_path": "package.json",
+    "depends_on": [],
+    "instruction": "Create package.json for a minimal Express ping service. Requirements, all mandatory: name \"ping-service\", version \"1.0.0\", \"private\": true, \"description\" one line, \"main\": \"app.js\", \"license\": \"MIT\". Do NOT include a \"type\" field (CommonJS is the default and \"type\": \"module\" is forbidden). \"engines\": { \"node\": \">=20\" }. Scripts: EXACTLY two entries, \"start\": \"node server.js\" and \"test\": \"jest\" — no build, lint, dev, or prepare script. \"dependencies\": exactly one entry, { \"express\": \"^5.1.0\" }. \"devDependencies\": exactly two entries, { \"jest\": \"^29.7.0\", \"supertest\": \"^7.1.1\" }. Do NOT add a \"jest\" configuration key — Jest's defaults already find app.test.js and already default testEnvironment to node. Do not add any other dependency for any reason. Emit valid JSON only.",
+    "inputs": [
+      {
+        "path": ".sdlc/design.md#6.4",
+        "content": "package.json contract: private true, no \"type\" field, main app.js, scripts start=node server.js and test=jest only, dependencies {express ^5.1.0}, devDependencies {jest ^29.7.0, supertest ^7.1.1}, no jest key, engines node >=20.",
+        "reason": "Exact manifest contract; dependency counts are capped by NFR-9."
+      }
+    ],
+    "outputSchema": {
+      "type": "object",
+      "required": ["artifact_path", "content"],
+      "properties": {
+        "artifact_path": { "type": "string" },
+        "content": { "type": "string" }
+      }
+    },
+    "acceptance": [
+      "File parses as valid JSON.",
+      "dependencies has exactly one key: express.",
+      "devDependencies has exactly two keys: jest and supertest.",
+      "scripts has exactly two keys: start and test.",
+      "No \"type\" key is present anywhere in the file.",
+      "No \"jest\" key is present at the top level.",
+      "engines.node is \">=20\"."
+    ],
+    "budget": { "maxInputTokens": 4000, "maxOutputTokens": 3000 },
+    "retry_count": 0,
+    "pass_id": "pass1"
+  },
+  {
+    "id": "tp_codegen_002",
+    "phase": "codegen",
+    "task_type": "controller_handler",
+    "module": "ping",
+    "artifact_path": "app.js",
+    "depends_on": ["tp_codegen_001"],
+    "instruction": "Create app.js — the Express application module. Start with 'use strict';. CommonJS only. Require express and NOTHING else. Construct the app, then register EXACTLY three handlers in THIS EXACT ORDER, because the order is load-bearing:\n(1) app.get('/ping', (req, res) => ...) responding res.status(200).json({ status: 'ok', time: new Date().toISOString() }). The timestamp MUST be computed inside the handler at call time, never at module load.\n(2) A catch-all 404: app.use((req, res) => { res.status(404).json({ error: 'not found' }); }); — with NO path argument. Do NOT write app.all('*', ...) or app.use('*', ...): under Express 5 / path-to-regexp v8 a bare '*' throws TypeError: Missing parameter name at module load and kills the process.\n(3) A terminal error handler registered LAST: app.use((err, req, res, next) => { if (res.headersSent) { return next(err); } res.status(500).json({ error: 'internal server error' }); }); — it MUST declare all four parameters, because Express identifies error middleware solely by fn.length === 4. Never include err.message, err.stack, or any HTML in the body.\nEnd with module.exports = app;. This file must NOT call listen(), must NOT read process.env, must NOT mount a body parser, and must NOT console.log.",
+    "inputs": [
+      {
+        "path": ".sdlc/design.md#3.2",
+        "content": "Registration order: (1) app.get('/ping') (2) path-less app.use() 404 catch-all (3) 4-arity error handler LAST. Catch-all after route or it swallows GET /ping. Error handler last so a throw inside the 404 handler still lands on JSON. Arity 4 is the detection mechanism.",
+        "reason": "Ordering and arity are the two failure modes that silently break FR-1 and AC-8."
+      },
+      {
+        "path": ".sdlc/design.md#4",
+        "content": "GET /ping -> 200 {\"status\":\"ok\",\"time\":\"<ISO-8601 UTC>\"} exactly two keys. Catch-all -> 404 {\"error\":\"not found\"}. Unexpected error -> 500 {\"error\":\"internal server error\"}, fixed literal, no stack trace.",
+        "reason": "Exact response bodies and status codes."
+      }
+    ],
+    "outputSchema": {
+      "type": "object",
+      "required": ["artifact_path", "content"],
+      "properties": {
+        "artifact_path": { "type": "string" },
+        "content": { "type": "string" }
+      }
+    },
+    "acceptance": [
+      "File begins with 'use strict';.",
+      "Requires express and no other module.",
+      "app.get('/ping', ...) is registered before the catch-all.",
+      "The catch-all is app.use(fn) with no path argument; the literal '*' appears nowhere as a route path.",
+      "The error handler is the last registration and declares exactly four parameters (err, req, res, next).",
+      "The error handler guards on res.headersSent and delegates via next(err).",
+      "new Date().toISOString() is evaluated inside the /ping handler, not at module scope.",
+      "The file contains no listen( call, no process.env reference, and no console call.",
+      "The file ends with module.exports = app;."
+    ],
+    "budget": { "maxInputTokens": 4000, "maxOutputTokens": 3000 },
+    "retry_count": 0,
+    "pass_id": "pass1"
+  },
+  {
+    "id": "tp_codegen_003",
+    "phase": "codegen",
+    "task_type": "module_wiring",
+    "module": "server",
+    "artifact_path": "server.js",
+    "depends_on": ["tp_codegen_002"],
+    "instruction": "Create server.js — the process entrypoint, four statements total. Start with 'use strict';. CommonJS. const app = require('./app'); then const port = process.env.PORT || 3000; then app.listen(port, () => { console.log(`listening on port ${port}`); });. This is the ONLY file in the project permitted to read process.env, and it reads exactly one variable: PORT, defaulting to 3000, unvalidated. Do NOT add dotenv, do NOT add a validation schema, do NOT add signal handlers or graceful shutdown, do NOT export anything.",
+    "inputs": [
+      {
+        "path": ".sdlc/design.md#6.1",
+        "content": "PORT: read by src/server.js in one line, not validated, not coerced, not required at boot, default 3000. Resolution is exactly: const port = process.env.PORT || 3000;",
+        "reason": "The complete environment inventory for the project — one variable."
+      }
+    ],
+    "outputSchema": {
+      "type": "object",
+      "required": ["artifact_path", "content"],
+      "properties": {
+        "artifact_path": { "type": "string" },
+        "content": { "type": "string" }
+      }
+    },
+    "acceptance": [
+      "File begins with 'use strict';.",
+      "Requires ./app.",
+      "Reads process.env.PORT with a default of 3000.",
+      "Calls app.listen(port, callback).",
+      "Exports nothing and adds no dependency."
+    ],
+    "budget": { "maxInputTokens": 4000, "maxOutputTokens": 3000 },
+    "retry_count": 0,
+    "pass_id": "pass1"
+  },
+  {
+    "id": "tp_tests_001",
+    "phase": "tests",
+    "task_type": "test_integration",
+    "module": "ping",
+    "artifact_path": "app.test.js",
+    "depends_on": ["tp_codegen_001", "tp_codegen_002"],
+    "instruction": "Create app.test.js — the single Jest + supertest suite. 'use strict'; CommonJS. Require supertest and ./app. NEVER require ./server and NEVER call app.listen() — supertest mounts the exported app on an ephemeral port so no handle leaks.\nWrite exactly three it() blocks:\nBLOCK 1, GET /ping returns 200: capture const before = Date.now() immediately before the request and const after = Date.now() immediately after, then assert (a) status is 200; (b) res.headers['content-type'] matches the REGEX /application\\/json/ — res.json() emits 'application/json; charset=utf-8', so a strict equality assertion against 'application/json' WILL FAIL; (c) res.body.status is exactly 'ok' via toBe; (d) Object.keys(res.body).sort() toEqual ['status','time'] proving exactly two keys; (e) typeof res.body.time is 'string'; (f) Number.isNaN(Date.parse(res.body.time)) is false; (g) res.body.time equals new Date(res.body.time).toISOString() proving canonical ISO-8601; (h) res.body.time.endsWith('Z') is true; (i) Date.parse(res.body.time) is >= before - 1000 and <= after + 1000, proving the timestamp is per-request not module-load.\nBLOCK 2, unknown path returns 404 JSON: GET /nope, assert status 404, content-type matches /application\\/json/, res.body toEqual { error: 'not found' }, and res.text.trim().startsWith('<') is false — this last assertion proves the body is JSON and not Express's HTML error page.\nBLOCK 3, wrong method returns 404: POST /ping with no body, assert status 404 and res.body toEqual { error: 'not found' }. Add a comment naming FR-9 so nobody later 'fixes' this to 405.",
+    "inputs": [
+      {
+        "path": ".sdlc/design.md#7.2",
+        "content": "Three it blocks with the assertion lists above. Supertest mounts the exported app rather than a listening server so the suite binds no fixed port and Jest exits cleanly.",
+        "reason": "The full assertion specification."
+      },
+      {
+        "path": ".sdlc/design.md#4-note",
+        "content": "res.json() emits Content-Type: application/json; charset=utf-8. Assert with a regex. Strict equality against 'application/json' will fail.",
+        "reason": "The single most likely way this generated test breaks."
+      }
+    ],
+    "outputSchema": {
+      "type": "object",
+      "required": ["artifact_path", "content"],
+      "properties": {
+        "artifact_path": { "type": "string" },
+        "content": { "type": "string" }
+      }
+    },
+    "acceptance": [
+      "Exactly three it() blocks are present.",
+      "The suite requires ./app and supertest; it never requires ./server and never calls listen(.",
+      "Every Content-Type assertion uses a regex, never strict equality against 'application/json'.",
+      "Block 1 asserts status toBe('ok'), exactly two body keys, canonical ISO-8601 round-trip, trailing Z, and per-request freshness bounds.",
+      "Block 2 asserts res.text.trim().startsWith('<') is false.",
+      "Block 3 asserts 404 for POST /ping and cites FR-9 in a comment."
+    ],
+    "budget": { "maxInputTokens": 4000, "maxOutputTokens": 3000 },
+    "retry_count": 0,
+    "pass_id": "pass1"
+  },
+  {
+    "id": "tp_docs_001",
+    "phase": "docs",
+    "task_type": "readme_section",
+    "module": "docs",
+    "artifact_path": "README.md",
+    "depends_on": ["tp_codegen_001", "tp_codegen_002", "tp_codegen_003", "tp_tests_001"],
+    "instruction": "Create README.md for the ping service. Required sections in order: (1) title and a one-line description; (2) Prerequisites — Node.js 20 or newer; (3) Install — a fenced bash block with `npm install`; (4) Test — a fenced bash block with `npm test`; (5) Run — a fenced bash block with `npm start`, noting the service listens on port 3000 by default and that PORT overrides it; (6) an Endpoints markdown table with two rows: `GET /ping` -> 200 and everything else -> 404; (7) Examples — a worked `curl localhost:3000/ping` fenced block showing the exact response {\"status\":\"ok\",\"time\":\"2026-08-05T14:23:07.412Z\"}, and a second `curl localhost:3000/nope` fenced block showing the exact response {\"error\":\"not found\"}; (8) a short 'Not included' list: no database, no authentication, no logging, no rate limiting, no Docker. Keep it tight — this is a five-file project. Do not document environment variables other than PORT. Do not invent endpoints.",
+    "inputs": [
+      {
+        "path": ".sdlc/design.md#4",
+        "content": "GET /ping -> 200 {\"status\":\"ok\",\"time\":\"<ISO-8601 UTC>\"}. Any other method/path -> 404 {\"error\":\"not found\"}. Content-Type application/json; charset=utf-8.",
+        "reason": "The exact contract the README must document."
+      },
+      {
+        "path": "acceptance",
+        "content": "AC-7: the README documents npm install, npm test, npm start, and one curl example.",
+        "reason": "The acceptance criterion this artifact satisfies."
+      }
+    ],
+    "outputSchema": {
+      "type": "object",
+      "required": ["artifact_path", "content"],
+      "properties": {
+        "artifact_path": { "type": "string" },
+        "content": { "type": "string" }
+      }
+    },
+    "acceptance": [
+      "Documents npm install, npm test, and npm start each in a fenced code block.",
+      "Contains at least one worked curl example with its exact JSON response.",
+      "Contains an endpoints table covering GET /ping and the 404 catch-all.",
+      "Mentions the 3000 default port and the PORT override.",
+      "Documents no endpoint that does not exist and no environment variable other than PORT."
+    ],
+    "budget": { "maxInputTokens": 4000, "maxOutputTokens": 3000 },
+    "retry_count": 0,
+    "pass_id": "pass1"
+  }
+]

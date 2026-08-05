@@ -1,0 +1,55 @@
+{
+  "model": "gemini-3.5-flash",
+  "thinking": "NONE",
+  "sdk": "google-antigravity",
+  "sdk_version": "0.1.9",
+  "vertex_project": "your-project-id",
+  "vertex_location": "global",
+  "usage": {
+    "prompt_token_count": 85584,
+    "cached_content_token_count": 68180,
+    "candidates_token_count": 918,
+    "thoughts_token_count": 10512,
+    "total_token_count": 97014
+  },
+  "tool_call_count": 4,
+  "tool_calls_truncated": false,
+  "tool_calls": [
+    {
+      "name": "list_directory",
+      "args": {
+        "directory_path": "/workspace/ping-service/src"
+      },
+      "canonical_path": "/workspace/ping-service/src",
+      "args_clipped": false
+    },
+    {
+      "name": "view_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/package.json",
+        "start_line": "0",
+        "end_line": "799"
+      },
+      "canonical_path": "/workspace/ping-service/src/package.json",
+      "args_clipped": false
+    },
+    {
+      "name": "edit_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/README.md"
+      },
+      "canonical_path": "/workspace/ping-service/src/README.md",
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "npm test",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    }
+  ],
+  "text": "I'll start by listing the contents of the working directory to understand the project structure and see if there are any existing README or markdown files.I'll view `package.json` and `app.js` to understand the details of the service.I will create the `README.md` file in the working directory containing all the requested sections, formatted exactly as specified.I will run the tests to verify everything is in working order.{\n  \"artifact_path\": \"README.md\",\n  \"content\": \"# Ping Service\\n\\nA minimal Express ping service.\\n\\n## Prerequisites\\n\\nNode.js 20 or newer.\\n\\n## Install\\n\\n```bash\\nnpm install\\n```\\n\\n## Test\\n\\n```bash\\nnpm test\\n```\\n\\n## Run\\n\\n```bash\\nnpm start\\n```\\n\\nThe service listens on port 3000 by default. The `PORT` environment variable overrides it.\\n\\n## Endpoints\\n\\n| Endpoint | Status |\\n| :--- | :--- |\\n| `GET /ping` | 200 |\\n| Everything else | 404 |\\n\\n## Examples\\n\\n```bash\\ncurl localhost:3000/ping\\n```\\n\\nResponse:\\n```json\\n{\\\"status\\\":\\\"ok\\\",\\\"time\\\":\\\"2026-08-05T14:23:07.412Z\\\"}\\n```\\n\\n```bash\\ncurl localhost:3000/nope\\n```\\n\\nResponse:\\n```json\\n{\\\"error\\\":\\\"not found\\\"}\\n```\\n\\n## Not Included\\n\\n* no database\\n* no authentication\\n* no logging\\n* no rate limiting\\n* no Docker\\n\"\n}"
+}

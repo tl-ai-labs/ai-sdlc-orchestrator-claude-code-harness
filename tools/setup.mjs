@@ -19,7 +19,17 @@ import { stdin as input, stdout as output } from "node:process";
 // The plugin's own setup checker. Plain ESM with no build step and no
 // side effects on import, so this wizard can borrow its logic instead of
 // growing a second copy that drifts.
-import { buildWorkerEnvironment, workerPaths } from "../plugin/scripts/verify-setup.mjs";
+// `vertexCredentialState` and `inspectCredentialFile` are borrowed rather than
+// re-implemented for a specific reason: this wizard used to decide the same
+// question with its own one-line `existsSync(ADC) || GOOGLE_APPLICATION_CREDENTIALS`,
+// which disagreed with the checker's version, so a machine could be told it had
+// credentials by one script and not the other in the same install.
+import {
+  buildWorkerEnvironment,
+  workerPaths,
+  vertexCredentialState,
+  inspectCredentialFile,
+} from "../plugin/scripts/verify-setup.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -105,17 +115,45 @@ if (process.env.ANTHROPIC_API_KEY) {
   hint("--auth=estimated works without an API key when signed in to a Claude Code subscription.");
 }
 // Gemini is reachable through either of Google's two front doors, so report
-// on both. Vertex needs no key at all — `gcloud auth application-default
-// login` writes a credentials file under $HOME and the SDK signs with it —
-// which is why an absent GEMINI_API_KEY is not, on its own, a problem.
-if (process.env.GEMINI_API_KEY) {
+// on both. The Google Cloud door needs no key at all — `gcloud auth
+// application-default login` writes a credentials file under $HOME and the SDK
+// signs with it — which is why an absent GEMINI_API_KEY is not, on its own, a
+// problem.
+//
+// The state is computed once here and reused by the question below, so the two
+// can never disagree about what this machine has.
+const vertex = vertexCredentialState({
+  env: process.env,
+  serviceAccountFile: process.env.GOOGLE_APPLICATION_CREDENTIALS
+    ? inspectCredentialFile(process.env.GOOGLE_APPLICATION_CREDENTIALS)
+    : null,
+  adcFile: inspectCredentialFile(ADC_FILE),
+});
+const hasVertex = vertex.state === "credential";
+
+if (hasVertex) {
+  ok(`Google Cloud credentials found (${vertex.source}) — opus-plus-flash routes Gemini`);
+  hint("  through Gemini Enterprise Agent Platform, the service formerly called Vertex AI.");
+} else if (process.env.GEMINI_API_KEY) {
   ok("GEMINI_API_KEY is set — opus-plus-flash routes Gemini through AI Studio.");
-} else if (existsSync(ADC_FILE) || process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-  ok("Google Cloud credentials found — opus-plus-flash routes Gemini through Vertex AI.");
+} else if (vertex.state === "broken") {
+  // Reported ahead of "no credentials", because it is a different problem with
+  // a different fix: something IS configured, and it is the thing that is wrong.
+  // The old check called existsSync and stopped, so this machine was reported as
+  // fully set up and failed at the first Gemini call.
+  warn("A Google credential is configured but cannot be used:");
+  hint(`  ${vertex.detail}`);
+  hint("  Fix that file, or run: gcloud auth application-default login");
 } else {
   hint("No Gemini credentials. Only needed for the opus-plus-flash policy.");
-  hint("  Vertex AI (no key): gcloud auth application-default login");
-  hint("  AI Studio key:      https://aistudio.google.com/app/apikey");
+  hint("  Google Cloud (no key): gcloud auth application-default login");
+  hint("  AI Studio key:         https://aistudio.google.com/app/apikey");
+  if (vertex.state === "project-only") {
+    // GOOGLE_CLOUD_PROJECT is set and nothing else. It is the variable every
+    // Google Cloud tutorial names first, so it is easy to believe it is enough.
+    hint(`  GOOGLE_CLOUD_PROJECT is set ('${process.env.GOOGLE_CLOUD_PROJECT}'), but a project ID`);
+    hint("  says where to bill, not who is asking — it is not a credential on its own.");
+  }
 }
 
 // ─── how Gemini works on the mechanical tier ──────────────────────────
@@ -131,25 +169,41 @@ if (process.env.GEMINI_API_KEY) {
 // signs with Application Default Credentials and has no API-key door, so
 // offering the agent path there would be offering something that cannot work.
 step("How Gemini works on the mechanical tier");
-const hasAdc = existsSync(ADC_FILE) || Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS);
 let geminiAsAgent = false;
-if (!hasAdc) {
+if (!hasVertex) {
+  // The Antigravity SDK signs with application default credentials and has no
+  // API-key branch, so this is not a question worth asking here — the agent
+  // path could not work whichever way it was answered.
   hint("No Google Cloud credentials, so the mechanical tier has one door for now.");
-  hint("  Re-run this wizard after `gcloud auth application-default login` to see the other.");
+  hint("  The other one — Gemini as an agent, through the Antigravity SDK — signs with");
+  hint("  Google Cloud credentials only. To open it later:");
+  hint("    gcloud auth application-default login");
+  hint("    npm run verify -- --enable-agent");
 } else {
+  // Both doors lead to the same Google Cloud project and the same bill. What
+  // differs is what is on the other side: a model that answers, or an agent that
+  // works. The platform is named the way Google names it today, with the old
+  // name in brackets — this repo was written when it was Vertex AI, the API
+  // surface still says `vertex`, and most people's muscle memory still says
+  // Vertex too.
   console.log(`
-  Gemini can work two ways here.
+  Gemini can work two ways here. Both bill the same Google Cloud project.
 
-    ${c.bold}As a model${c.reset}  — Claude reads your code and sends it over, Gemini sends text back.
-                  Cheap and predictable: one request, one answer, per task.
+    ${c.bold}As a model${c.reset}  — through ${c.bold}Gemini Enterprise Agent Platform${c.reset} (formerly Vertex AI),
+                  Google's own API for the model. Claude reads your code and sends
+                  it over, Gemini sends text back. Cheap and predictable: one
+                  request, one answer, per task. Nothing to install.
 
-    ${c.bold}As an agent${c.reset} — through Google's ${c.bold}Antigravity SDK${c.reset}. Gemini opens the folder
-                  itself, runs commands and edits files, and Claude reviews the
-                  result. It needs Python 3.10+ and the Antigravity SDK, a Python
-                  package this wizard installs for you. It costs several times more
-                  per task: an agent re-sends the whole conversation on every tool
-                  call, on top of a fixed multi-thousand-token preamble it carries
-                  every turn.
+    ${c.bold}As an agent${c.reset} — through Google's ${c.bold}Antigravity SDK${c.reset}, signing against that same
+                  project. Gemini opens the folder itself, runs commands and edits
+                  files, and Claude reviews the result. It needs Python 3.10+ and
+                  the Antigravity SDK, a Python package this wizard installs for
+                  you. It costs several times more per task: an agent re-sends the
+                  whole conversation on every tool call, on top of a fixed
+                  multi-thousand-token preamble it carries every turn.
+
+  The model path is the default, and it is the right answer for most work. Pick
+  the agent path when you want Gemini to do the work rather than describe it.
 `);
   // Named as a command rather than as a file to edit. The selection is spelled
   // `slot=option` and the slot is the half nobody guesses, so every route to it

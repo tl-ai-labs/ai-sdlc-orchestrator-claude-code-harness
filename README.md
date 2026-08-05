@@ -1,6 +1,6 @@
 # AI-SDLC Orchestrator — Claude Code Harness
 
-**Requires:** Node 20+, [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), and either an Anthropic API key or a Claude Code subscription. Gemini access — either Vertex AI on a Google Cloud project (no key) or an AI Studio API key — is needed only by the multi-model policy.
+**Requires:** Node 20+, [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), and either an Anthropic API key or a Claude Code subscription. Gemini access — either Gemini Enterprise Agent Platform (formerly Vertex AI) on a Google Cloud project, which needs no key, or an AI Studio API key — is needed only by the multi-model policy.
 
 ## Overview
 
@@ -179,7 +179,7 @@ for what it did. See
 - [docs/brief-template.md](docs/brief-template.md) — the section layout the pipeline expects in a brief file
 - [docs/understanding-output.md](docs/understanding-output.md) — reading the report and the raw files
 - [docs/methodology.md](docs/methodology.md) — how tokens and costs are recorded, what is measured vs estimated
-- [examples/quick-demo/](examples/quick-demo/) — the smallest brief: one endpoint, no database, minutes to run
+- [examples/quick-demo/](examples/quick-demo/) — the smallest brief: one endpoint, no database, minutes to run. Two complete runs of it are recorded under `passes/` — [model-path](examples/quick-demo/passes/model-path/) and [agent-path](examples/quick-demo/passes/agent-path/) — the same brief down each Gemini door, so the cost and time difference is a number rather than a claim.
 - [examples/workforce-ops/](examples/workforce-ops/) — the reference brief and any recorded passes
 - [examples/travel-ops/](examples/travel-ops/) — a second brief: booking, cancellation and refund handling
 

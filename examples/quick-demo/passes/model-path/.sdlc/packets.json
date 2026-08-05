@@ -1,0 +1,194 @@
+[
+  {
+    "id": "tp_codegen_001",
+    "phase": "codegen",
+    "task_type": "module_wiring",
+    "module": "bootstrap",
+    "artifact_path": "package.json",
+    "instruction": "Emit the exact package.json specified in design.md section 5 for a CommonJS Express ping service. Reproduce it verbatim: name ping-service, version 1.0.0, description \"An HTTP service with one endpoint that answers GET /ping.\", main app.js, private true, license MIT, engines.node \">=20\", scripts.start \"node server.js\", scripts.test \"jest\", dependencies express ^4.19.2, devDependencies jest ^29.7.0 and supertest ^7.0.0, and a jest block with testEnvironment \"node\". Do NOT add \"type\": \"module\" — its absence is what makes .js files CommonJS. Do NOT add nodemon, dotenv, eslint, prettier, cross-env, or any @types package. Do NOT add flags to the test script. Return the file content as a single JSON string.",
+    "inputs": [
+      {
+        "path": ".sdlc/design.md#5",
+        "content": "The package.json block in design.md section 5, verbatim, plus the binding details list: no \"type\": \"module\"; Express 4 not 5 (v5 changed path-to-regexp wildcard syntax and error-handling defaults); \"main\": \"app.js\" points at the app export not the listener; \"test\": \"jest\" with no flags; jest block sets testEnvironment node so no jest.config.js file is needed; exactly one runtime dependency and two devDependencies per NFR-3.",
+        "reason": "The package.json is fully specified in the design; this packet is a transcription with no judgment calls."
+      }
+    ],
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "file_content": {
+          "type": "string",
+          "description": "Complete contents of package.json, valid JSON, 2-space indented."
+        }
+      },
+      "required": ["file_content"]
+    },
+    "acceptance": [
+      "JSON.parse of the content succeeds",
+      "engines.node is \">=20\"",
+      "scripts.start is \"node server.js\" and scripts.test is \"jest\"",
+      "dependencies contains exactly one key: express",
+      "devDependencies contains exactly two keys: jest and supertest",
+      "the key \"type\" is absent",
+      "jest.testEnvironment is \"node\""
+    ],
+    "budget": { "maxInputTokens": 4000, "maxOutputTokens": 3000 },
+    "retry_count": 0,
+    "pass_id": "pass1"
+  },
+  {
+    "id": "tp_codegen_002",
+    "phase": "codegen",
+    "task_type": "controller_handler",
+    "module": "ping",
+    "artifact_path": "app.js",
+    "instruction": "Write app.js: a CommonJS Express application module that builds and exports the app and NEVER calls listen(). Contents in exactly this order: (1) require express; (2) const app = express(); (3) app.get('/ping', (req, res) => res.status(200).json({ status: 'ok', time: new Date().toISOString() })) — new Date() MUST be evaluated inside the handler so time reflects request time; (4) a PATH-LESS catch-all app.use((req, res) => res.status(404).json({ error: 'not found' })) — use app.use with no path argument, NOT app.all('*') and NOT app.use('*'), because path-less use matches every method and path and is what makes POST /ping return 404 rather than 405; (5) a FOUR-ARGUMENT error handler app.use((err, req, res, next) => ...) that returns next(err) when res.headersSent, else derives status from err.status || err.statusCode || 500 and responds res.status(status).json({ error: 'internal server error' }) — it must declare all four parameters because Express identifies error handlers by arity, and it must never serialize err.message or err.stack; (6) module.exports = app. Register no other middleware: no express.json(), no body parser, no helmet, no cors, no compression, no logger. Return the file content as a single JSON string.",
+    "inputs": [
+      {
+        "path": ".sdlc/design.md#3.1,#4",
+        "content": "Section 3.1 per-file contract (requires express only; module.exports = app with no named exports, no factory, no wrapper), 3.1.1 route contract (200; exactly two keys status and time in that order; status literal 'ok'; time exact output of new Date().toISOString(), Z-suffixed millisecond precision), 3.1.2 catch-all contract (path-less app.use, terminal, does not accept or call next; 404 with exactly one key error = 'not found'; never HTML), 3.1.3 error handler contract (registered last, four-arity, headersSent delegation, body omits all error detail), and section 4's middleware order table: route first, then 404, then error handler, with the ordering rationale.",
+        "reason": "app.js is the only file with behavior; all three middleware and their exact order and response shapes are pinned by the design."
+      }
+    ],
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "file_content": {
+          "type": "string",
+          "description": "Complete contents of app.js in CommonJS."
+        }
+      },
+      "required": ["file_content"]
+    },
+    "acceptance": [
+      "the file contains no call to app.listen",
+      "it ends with module.exports = app",
+      "the GET /ping handler responds 200 with { status: 'ok', time: new Date().toISOString() } computed inside the handler",
+      "the 404 middleware is registered via a path-less app.use with no path argument",
+      "the error handler declares exactly four parameters (err, req, res, next)",
+      "no response body anywhere references err.message or err.stack",
+      "the only require is express"
+    ],
+    "budget": { "maxInputTokens": 4000, "maxOutputTokens": 3000 },
+    "retry_count": 0,
+    "pass_id": "pass1"
+  },
+  {
+    "id": "tp_codegen_003",
+    "phase": "codegen",
+    "task_type": "module_wiring",
+    "module": "bootstrap",
+    "artifact_path": "server.js",
+    "instruction": "Write server.js: the npm start entry point, CommonJS, exactly three statements. (1) const app = require('./app'); (2) const PORT = process.env.PORT || 3000; (3) app.listen(PORT, () => { console.log(`Ping service listening on port ${PORT}`); }); Export nothing. Do NOT coerce PORT with Number() or parseInt — app.listen accepts a numeric string — and do NOT add validation or a fallback chain beyond || 3000. The single console.log is a boot banner, the only console call in the codebase; do NOT add request logging, morgan, or pino. Do NOT add process.on('SIGTERM'), graceful shutdown, cluster mode, or an error listener. Return the file content as a single JSON string.",
+    "inputs": [
+      {
+        "path": ".sdlc/design.md#3.2",
+        "content": "Section 3.2: requires ./app, exports nothing, the three statements verbatim, and the binding notes forbidding Number() coercion, extra logging, shutdown handlers, and cluster mode. Plus ADR-001's standing rule: server.js is the only file that calls listen(), and future middleware must go in app.js so tests exercise the same app as production.",
+        "reason": "server.js is three lines fully pinned by the design; the notes exist to prevent plausible-looking additions."
+      }
+    ],
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "file_content": {
+          "type": "string",
+          "description": "Complete contents of server.js in CommonJS."
+        }
+      },
+      "required": ["file_content"]
+    },
+    "acceptance": [
+      "requires './app'",
+      "reads process.env.PORT with a literal default of 3000 and no numeric coercion",
+      "calls app.listen(PORT, callback) exactly once",
+      "contains exactly one console.log and no other console call",
+      "contains no module.exports",
+      "contains no SIGTERM/SIGINT handler and no graceful shutdown logic"
+    ],
+    "budget": { "maxInputTokens": 4000, "maxOutputTokens": 3000 },
+    "retry_count": 0,
+    "pass_id": "pass1"
+  },
+  {
+    "id": "tp_tests_001",
+    "phase": "tests",
+    "task_type": "test_integration",
+    "module": "ping",
+    "artifact_path": "__tests__/ping.test.js",
+    "instruction": "Write __tests__/ping.test.js, the ONLY test file in the repo. Imports: const request = require('supertest'); const app = require('../app'); One top-level describe('Ping Service') containing EXACTLY TWO it blocks, using async/await with await request(app)..., never the .end(done) callback form. Test 1 (GET /ping returns 200 with status ok and a parseable ISO timestamp) asserts: status is 200; res.headers['content-type'] matches /application\\/json/ as a SUBSTRING match, never strict equality, because Express sends 'application/json; charset=utf-8'; Object.keys(res.body).sort() equals ['status','time']; res.body.status is 'ok'; Number.isNaN(Date.parse(res.body.time)) is false; res.body.time matches /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/. Do NOT assert an exact time value and do NOT use fake timers. Test 2 (unknown path and wrong method return the 404 JSON body) asserts the SAME four checks against BOTH GET /nope AND POST /ping: status 404; content-type matches /application\\/json/; res.body deep-equals { error: 'not found' }; res.text does not match /<html/i. Include NO beforeAll, afterAll, beforeEach, afterEach, server.close(), or mocks — app.js does not listen and supertest owns its own ephemeral servers. Return the file content as a single JSON string.",
+    "inputs": [
+      {
+        "path": ".sdlc/design.md#7",
+        "content": "Section 7 test strategy in full: the import form and why requiring app.js has no side effect (ADR-001 — it exports a non-listening app, so supertest binds an ephemeral OS-assigned port per request and closes it when the request settles); the two it blocks; the six assertions of test 1 and four of test 2; the requirement that test 2 additionally asserts POST /ping so FR-7 is covered while the file stays at two blocks; and the teardown rationale (nothing ever calls listen() on a fixed port, so Jest exits with no open handles and needs no --forceExit or --detectOpenHandles).",
+        "reason": "Test assertions are enumerated exactly in the design, including the two traps: content-type substring matching and no fake timers."
+      },
+      {
+        "path": "app.js (response shapes)",
+        "content": "GET /ping responds 200 with {\"status\":\"ok\",\"time\":\"<new Date().toISOString()>\"}. Every other method/path pair, including POST /ping, responds 404 with {\"error\":\"not found\"}. Both via res.json(), so content-type is application/json; charset=utf-8.",
+        "reason": "The tests must pin the shipped response shapes; this slice is the contract rather than the full source."
+      }
+    ],
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "file_content": {
+          "type": "string",
+          "description": "Complete contents of __tests__/ping.test.js."
+        }
+      },
+      "required": ["file_content"]
+    },
+    "acceptance": [
+      "requires supertest and '../app' and nothing else",
+      "contains exactly one describe and exactly two it blocks",
+      "content-type assertions use toMatch with a regex, never toBe on the full header string",
+      "test 2 exercises both GET /nope and POST /ping",
+      "the 404 body is asserted with deep equality against { error: 'not found' }",
+      "contains no beforeAll, afterAll, beforeEach, afterEach, or server.close()",
+      "uses async/await, not done callbacks"
+    ],
+    "budget": { "maxInputTokens": 4000, "maxOutputTokens": 3000 },
+    "retry_count": 0,
+    "pass_id": "pass1"
+  },
+  {
+    "id": "tp_docs_001",
+    "phase": "docs",
+    "task_type": "readme_section",
+    "module": "ping-service",
+    "artifact_path": "README.md",
+    "instruction": "Produce two files. (A) README.md with these sections in order: '# Ping Service' with a one-sentence description; 'Requirements' stating Node.js 20 or newer; 'Install' with a fenced block containing npm install; 'Test' with a fenced block containing npm test; 'Start' with a fenced block containing npm start plus one sentence noting the service listens on port 3000 and honors a PORT environment variable override; 'Example' with EXACTLY ONE curl example and its expected output — `curl -s localhost:3000/ping` producing {\"status\":\"ok\",\"time\":\"2026-08-05T12:34:56.789Z\"}; 'Endpoints' as a two-row table mapping GET /ping to 200 {\"status\":\"ok\",\"time\":\"...\"} and any other method/path to 404 {\"error\":\"not found\"}. No badges, no license section, no contributing section, no architecture diagram, no more than one curl example. (B) .gitignore containing exactly two lines: node_modules/ and coverage/. Return both as separate JSON string fields.",
+    "inputs": [
+      {
+        "path": ".sdlc/design.md#3.5,#3.6",
+        "content": "Section 3.5 README section list in order with the exact curl example and expected output and the explicit prohibitions (no badges, license, contributing, or diagram), and section 3.6 .gitignore contents: node_modules/ and coverage/ only.",
+        "reason": "Both documentation artifacts are fully enumerated; this is volume work with no decisions."
+      }
+    ],
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "readme_content": {
+          "type": "string",
+          "description": "Complete contents of README.md."
+        },
+        "gitignore_content": {
+          "type": "string",
+          "description": "Complete contents of .gitignore, exactly two lines."
+        }
+      },
+      "required": ["readme_content", "gitignore_content"]
+    },
+    "acceptance": [
+      "README contains the headings Requirements, Install, Test, Start, Example, and Endpoints in that order",
+      "README contains exactly one curl command",
+      "README documents npm install, npm test, and npm start",
+      "README mentions the PORT override and the 3000 default",
+      "README contains no badge images and no license section",
+      ".gitignore contains exactly the two lines node_modules/ and coverage/"
+    ],
+    "budget": { "maxInputTokens": 4000, "maxOutputTokens": 3000 },
+    "retry_count": 0,
+    "pass_id": "pass1"
+  }
+]

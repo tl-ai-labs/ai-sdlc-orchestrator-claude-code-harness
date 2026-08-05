@@ -1,0 +1,430 @@
+{
+  "schema": "sdlc-manifest/1",
+  "run": {
+    "brief": "/workspace/ping-service/brief.md",
+    "pass": "pass1",
+    "policy": "opus-plus-flash",
+    "policy_version": 1,
+    "auth_mode": "estimated",
+    "select": {
+      "gemini-flash": "flash-agsdk-worker"
+    },
+    "code_dir": "/workspace/ping-service/src",
+    "output_dir": "/workspace/ping-service/.sdlc",
+    "started_at": "2026-08-05T01:46:17.744Z",
+    "finished_at": "2026-08-05T02:48:54.794Z",
+    "status": "complete"
+  },
+  "models": {
+    "judgment": {
+      "id": "opus",
+      "model_name": "claude-opus-4-7",
+      "adapter": "builtin-anthropic",
+      "transport": "in-session (estimated telemetry)",
+      "pricing": {
+        "input": 5,
+        "input_cached": 0.5,
+        "output": 25
+      }
+    },
+    "mechanical": {
+      "id": "flash-agsdk-worker",
+      "model_name": "gemini-3.5-flash",
+      "adapter": "antigravity-worker",
+      "transport": "MCP dispatch -> Antigravity agent session (vendor telemetry)",
+      "vertex_project": "your-project-id",
+      "vertex_location": "global",
+      "pricing": {
+        "input": 1.5,
+        "input_cached": 0.15,
+        "output": 9
+      }
+    }
+  },
+  "gates": [
+    {
+      "gate": 1,
+      "name": "requirements",
+      "result": "approved"
+    },
+    {
+      "gate": 2,
+      "name": "architecture",
+      "result": "approved"
+    },
+    {
+      "gate": 3,
+      "name": "security_review",
+      "result": "approved"
+    },
+    {
+      "gate": 4,
+      "name": "final_acceptance",
+      "result": "accepted"
+    }
+  ],
+  "phases": [
+    {
+      "phase": "requirements_analysis",
+      "models": [
+        "claude-opus-4-7"
+      ],
+      "provenance": [
+        "estimated"
+      ],
+      "events": 1,
+      "input_tokens_cached": 28515,
+      "input_tokens_fresh": 37008,
+      "output_tokens": 2646,
+      "cost_usd": 0.122873,
+      "task_ids": [
+        "tp_requirements_001"
+      ]
+    },
+    {
+      "phase": "architecture_design",
+      "models": [
+        "claude-opus-4-7"
+      ],
+      "provenance": [
+        "estimated"
+      ],
+      "events": 1,
+      "input_tokens_cached": 57051,
+      "input_tokens_fresh": 69646,
+      "output_tokens": 8475,
+      "cost_usd": 0.303376,
+      "task_ids": [
+        "tp_design_001"
+      ]
+    },
+    {
+      "phase": "plan_task_packets",
+      "models": [
+        "claude-opus-4-7"
+      ],
+      "provenance": [
+        "estimated"
+      ],
+      "events": 1,
+      "input_tokens_cached": 48195,
+      "input_tokens_fresh": 51300,
+      "output_tokens": 3595,
+      "cost_usd": 0.124498,
+      "task_ids": [
+        "tp_plan_001"
+      ]
+    },
+    {
+      "phase": "codegen",
+      "models": [
+        "gemini-3.5-flash"
+      ],
+      "provenance": [
+        "vendor"
+      ],
+      "events": 3,
+      "input_tokens_cached": 437258,
+      "input_tokens_fresh": 121133,
+      "output_tokens": 13016,
+      "cost_usd": 0.364432,
+      "task_ids": [
+        "tp_codegen_001",
+        "tp_codegen_002",
+        "tp_codegen_003"
+      ]
+    },
+    {
+      "phase": "tests",
+      "models": [
+        "gemini-3.5-flash"
+      ],
+      "provenance": [
+        "vendor"
+      ],
+      "events": 1,
+      "input_tokens_cached": 89900,
+      "input_tokens_fresh": 24704,
+      "output_tokens": 8754,
+      "cost_usd": 0.129327,
+      "task_ids": [
+        "tp_tests_001"
+      ]
+    },
+    {
+      "phase": "docs",
+      "models": [
+        "gemini-3.5-flash"
+      ],
+      "provenance": [
+        "vendor"
+      ],
+      "events": 1,
+      "input_tokens_cached": 68180,
+      "input_tokens_fresh": 17404,
+      "output_tokens": 11430,
+      "cost_usd": 0.139203,
+      "task_ids": [
+        "tp_docs_001"
+      ]
+    },
+    {
+      "phase": "senior_code_review",
+      "models": [
+        "claude-opus-4-7"
+      ],
+      "provenance": [
+        "estimated"
+      ],
+      "events": 2,
+      "input_tokens_cached": 191435,
+      "input_tokens_fresh": 218404,
+      "output_tokens": 14632,
+      "cost_usd": 0.596363,
+      "task_ids": [
+        "tp_review_001",
+        "tp_review_002"
+      ]
+    },
+    {
+      "phase": "security_review",
+      "models": [
+        "claude-opus-4-7"
+      ],
+      "provenance": [
+        "estimated"
+      ],
+      "events": 1,
+      "input_tokens_cached": 118336,
+      "input_tokens_fresh": 136026,
+      "output_tokens": 10179,
+      "cost_usd": 0.402093,
+      "task_ids": [
+        "tp_security_001"
+      ]
+    }
+  ],
+  "totals": {
+    "input_tokens_cached": 1038870,
+    "input_tokens_fresh": 675625,
+    "output_tokens": 72727,
+    "total_tokens": 1787222,
+    "cost_usd": 2.182165,
+    "events": 11
+  },
+  "tier_rollup": {
+    "judgment_opus": {
+      "cost_usd": 1.549203,
+      "events": 6
+    },
+    "mechanical_flash": {
+      "cost_usd": 0.632962,
+      "events": 5
+    },
+    "duplicate_senior_review": {
+      "cost_usd": 0.206177,
+      "note": "Senior review ran twice: first dispatch was backgrounded and its artifact was not visible before re-dispatch. Both runs independently returned approve_with_nits with zero code defects. Retained in the total so the run reconciles."
+    }
+  },
+  "delegated_packets": [
+    {
+      "task_id": "tp_codegen_001",
+      "phase": "codegen",
+      "task_type": "module_wiring",
+      "module": "manifest",
+      "model": "gemini-3.5-flash",
+      "model_id": "flash-agsdk-worker",
+      "sdk": "google-antigravity 0.1.9",
+      "vertex_project": "your-project-id",
+      "vertex_location": "global",
+      "workdir": "/workspace/ping-service/src",
+      "duration_ms": 17240,
+      "tool_calls": 2,
+      "tokens": {
+        "input": 15576,
+        "input_cached": 25328,
+        "output": 2112,
+        "output_reasoning": 1576
+      },
+      "cost_usd": 0.046171,
+      "success": true,
+      "files_added": [
+        "package.json"
+      ],
+      "receipt": ".sdlc/delegation/worker-delegation-tp_codegen_001.json",
+      "brief": ".sdlc/delegation/worker-task-tp_codegen_001.md",
+      "usage": ".sdlc/delegation/worker-usage-tp_codegen_001.json"
+    },
+    {
+      "task_id": "tp_codegen_002",
+      "phase": "codegen",
+      "task_type": "controller_handler",
+      "module": "ping",
+      "model": "gemini-3.5-flash",
+      "model_id": "flash-agsdk-worker",
+      "sdk": "google-antigravity 0.1.9",
+      "vertex_project": "your-project-id",
+      "vertex_location": "global",
+      "workdir": "/workspace/ping-service/src",
+      "duration_ms": 123450,
+      "tool_calls": 19,
+      "tokens": {
+        "input": 84743,
+        "input_cached": 379548,
+        "output": 8756,
+        "output_reasoning": 4990
+      },
+      "cost_usd": 0.262851,
+      "success": true,
+      "files_added": [
+        "app.js",
+        "package-lock.json"
+      ],
+      "receipt": ".sdlc/delegation/worker-delegation-tp_codegen_002.json",
+      "brief": ".sdlc/delegation/worker-task-tp_codegen_002.md",
+      "usage": ".sdlc/delegation/worker-usage-tp_codegen_002.json"
+    },
+    {
+      "task_id": "tp_codegen_003",
+      "phase": "codegen",
+      "task_type": "module_wiring",
+      "module": "server",
+      "model": "gemini-3.5-flash",
+      "model_id": "flash-agsdk-worker",
+      "sdk": "google-antigravity 0.1.9",
+      "vertex_project": "your-project-id",
+      "vertex_location": "global",
+      "workdir": "/workspace/ping-service/src",
+      "duration_ms": 18939,
+      "tool_calls": 3,
+      "tokens": {
+        "input": 20814,
+        "input_cached": 32382,
+        "output": 2148,
+        "output_reasoning": 1722
+      },
+      "cost_usd": 0.05541,
+      "success": true,
+      "files_added": [
+        "server.js"
+      ],
+      "receipt": ".sdlc/delegation/worker-delegation-tp_codegen_003.json",
+      "brief": ".sdlc/delegation/worker-task-tp_codegen_003.md",
+      "usage": ".sdlc/delegation/worker-usage-tp_codegen_003.json"
+    },
+    {
+      "task_id": "tp_docs_001",
+      "phase": "docs",
+      "task_type": "readme_section",
+      "module": "docs",
+      "model": "gemini-3.5-flash",
+      "model_id": "flash-agsdk-worker",
+      "sdk": "google-antigravity 0.1.9",
+      "vertex_project": "your-project-id",
+      "vertex_location": "global",
+      "workdir": "/workspace/ping-service/src",
+      "duration_ms": 57503,
+      "tool_calls": 4,
+      "tokens": {
+        "input": 17404,
+        "input_cached": 68180,
+        "output": 11430,
+        "output_reasoning": 10512
+      },
+      "cost_usd": 0.139203,
+      "success": true,
+      "files_added": [
+        "README.md"
+      ],
+      "receipt": ".sdlc/delegation/worker-delegation-tp_docs_001.json",
+      "brief": ".sdlc/delegation/worker-task-tp_docs_001.md",
+      "usage": ".sdlc/delegation/worker-usage-tp_docs_001.json"
+    },
+    {
+      "task_id": "tp_tests_001",
+      "phase": "tests",
+      "task_type": "test_integration",
+      "module": "ping",
+      "model": "gemini-3.5-flash",
+      "model_id": "flash-agsdk-worker",
+      "sdk": "google-antigravity 0.1.9",
+      "vertex_project": "your-project-id",
+      "vertex_location": "global",
+      "workdir": "/workspace/ping-service/src",
+      "duration_ms": 55284,
+      "tool_calls": 6,
+      "tokens": {
+        "input": 24704,
+        "input_cached": 89900,
+        "output": 8754,
+        "output_reasoning": 6880
+      },
+      "cost_usd": 0.129327,
+      "success": true,
+      "files_added": [
+        "app.test.js"
+      ],
+      "receipt": ".sdlc/delegation/worker-delegation-tp_tests_001.json",
+      "brief": ".sdlc/delegation/worker-task-tp_tests_001.md",
+      "usage": ".sdlc/delegation/worker-usage-tp_tests_001.json"
+    }
+  ],
+  "artifacts": {
+    "run_record": [
+      ".sdlc/requirements.md",
+      ".sdlc/design.md",
+      ".sdlc/packets.json",
+      ".sdlc/review.json",
+      ".sdlc/security_review.md",
+      ".sdlc/telemetry.jsonl",
+      ".sdlc/manifest.json"
+    ],
+    "generated_code": [
+      "src/README.md",
+      "src/app.js",
+      "src/app.test.js",
+      "src/package-lock.json",
+      "src/package.json",
+      "src/server.js"
+    ]
+  },
+  "verification": {
+    "npm_install": "exit 0",
+    "npm_test": "3 passed, 3 total, exit 0",
+    "boot_smoke": "GET /ping 200 ok+ISO8601; GET /nope 404 JSON; POST /ping 404",
+    "senior_review": "approve_with_nits, 0 blockers/majors/minors, 2 nits, 0 refinement packets",
+    "security_review": "PASS WITH ACCEPTED RISKS, 0 critical/high/medium/low, 2 info",
+    "npm_audit": "found 0 vulnerabilities",
+    "requirements_coverage": "32/32 satisfied (FR-1..14, NFR-1..10, AC-1..8)"
+  },
+  "open_items": [
+    {
+      "id": "F-1",
+      "source": "senior_code_review",
+      "severity": "nit",
+      "code_change_required": false,
+      "note": "HEAD /ping returns 200, not 404. Express auto-registers HEAD for every app.get(). Suppressing it would require the app.all() guard ADR-002 forbids and would contradict RFC 9110 section 9.3.2. Remedy is wording in design section 3.4."
+    },
+    {
+      "id": "F-2",
+      "source": "senior_code_review",
+      "severity": "nit",
+      "code_change_required": false,
+      "note": "Design section 3.2 states catch-all arity 3; ADR-004 normative code is arity 2. Code follows ADR-004 and is correct. Load-bearing constraint is negative: a 4-arity catch-all would be reclassified as error middleware and unmatched requests would hang."
+    },
+    {
+      "id": "SEC-01",
+      "source": "security_review",
+      "severity": "info",
+      "code_change_required": false,
+      "note": "Node HTTP parser answers malformed framing with a bare 400, no Content-Type, below the Express layer. Discloses nothing."
+    },
+    {
+      "id": "SEC-02",
+      "source": "security_review",
+      "severity": "info",
+      "code_change_required": false,
+      "note": "headersSent branch delegates to finalhandler, which prints err.stack to stderr. Client side clean. Unreachable in current code."
+    }
+  ]
+}

@@ -61,7 +61,7 @@ because its prerequisites are irrelevant to a run that will never call it. Do no
 do not try to "fix" it, and do not offer to install anything on its behalf.
 
 **If `ok` is true**, report the configuration to the user in one line before phase 1 — the policy name,
-each model, and for Vertex the resolved project and region — then continue. This is the only point in
+each model, and on the Google Cloud path the resolved project and region — then continue. This is the only point in
 the run where the operator can see what is about to be billed and to which project, while it is still
 free to stop.
 

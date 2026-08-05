@@ -58,7 +58,7 @@ hook, which matches on the MCP tool call and therefore never fires.
    model call, and is the only check that proves the cheap tier is actually reachable. Skipping it does
    not save time — it moves the failure from second zero to phase 4, after the premium-tier phases have
    been billed, which is exactly how the 2026-08-04 run silently became an all-premium run. On
-   `ok: true`, tell the user the policy, the models, and (on Vertex) the project and region before you
+   `ok: true`, tell the user the policy, the models, and (on the Google Cloud path) the project and region before you
    start.
 
    `auth_mode` is not optional here, because it decides which models this run dispatches through the
