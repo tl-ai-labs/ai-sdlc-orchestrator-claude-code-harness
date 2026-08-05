@@ -51,7 +51,7 @@ The plugin's files are in place from here on, but neither its slash commands nor
 server are live in this session, and no reload makes them so: Claude Code builds the command list
 and starts plugin MCP servers when a session starts. Do not go looking for a reload command —
 `/reload-plugins` does not exist in the desktop app, and running it wastes the user's turn on an
-error. Step 5 says what to tell them instead, and why running the pipeline here would produce a
+error. Step 6 says what to tell them instead, and why running the pipeline here would produce a
 wrong answer rather than merely an inconvenient one.
 
 Continue with the build below. It runs as a shell command and does not need the plugin's slash
@@ -113,21 +113,58 @@ Claude Code could see, and the server received the literal text `${GEMINI_API_KE
 value. The plugin now discards those and falls back to the credentials file, so the run is not
 silently wrong — but the credential the user thought they had set is not in play.
 
-**Do not offer the Antigravity agent path here.** The multi-model policy can route its mechanical
-phases to Gemini as an *agent* — working in the folder directly, running commands and editing
-files — instead of as a model. It needs Python 3.10 or newer and costs several times more per
-task, and it is deliberately off unless someone asks for it by name. Set up the default path,
-finish the handover, and point anyone who raises it at
-[docs/setup.md](docs/setup.md#gemini-as-a-model-or-gemini-as-an-agent). If the user has already
-set `SDLC_SELECT` themselves, the `--fix` in step 3 builds that environment as part of its normal
-work and reports `agent-worker-python` or `agent-worker-sdk` if it could not. In that case the
-script also ends by offering `scripts/probe-agent-worker.mjs` — pass that on as it is written.
-Everything step 3 checks is offline, and the agent path's commonest failures are not missing files
-but a missing Model Garden entitlement or a region that does not serve the model; both first appear
-at the run's first delegated packet, once the premium phases are already billed. The probe is one
-trivial delegation, about two cents, and it is the only thing here that settles them.
+## 5. Ask how Gemini should work on the mechanical tier
 
-## 5. Hand over
+**Ask this only if step 4 reported Vertex AI credentials.** The agent path signs with Application
+Default Credentials and has no API-key door, so on an AI-Studio-key-only install it is not a
+choice — it is an option that cannot work. Skip the question entirely there and go to step 6.
+Skip it too when there are no Gemini credentials at all.
+
+With Vertex credentials present, there are two doors to the same model and the user picks one.
+Ask in these words:
+
+> Gemini can work two ways on the mechanical phases.
+>
+> **As a model** — Claude reads your code and sends it over, Gemini sends text back. Cheap and
+> predictable: one request, one answer, per task. This is the default.
+>
+> **As an agent** — Gemini opens the folder itself, runs commands and edits files, and Claude
+> reviews the result. It needs Python 3.10 or newer, and it costs several times more per task: an
+> agent re-sends the whole conversation on every tool call, on top of a fixed multi-thousand-token
+> preamble it carries every turn.
+>
+> Set up the agent path as well? (default: no)
+
+On **no**, say nothing further about it and continue. Nothing needs to be written — the model path
+is what an untouched install already does.
+
+On **yes**, run the same script from step 3 with `--enable-agent` instead of `--fix`:
+
+```bash
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
+```
+
+That flag writes the selection into `.claude/settings.local.json` in the current folder — this
+folder only; add `--user` to set it for every folder on the machine — and then does everything
+`--fix` does, including building the Python environment the agent path needs. `--disable-agent`
+reverses it.
+
+**Do not write `SDLC_SELECT` into a settings file by hand, and do not have the user do it.** The
+value is a `slot=option` pair, `gemini-flash=flash-agsdk-worker`, and the half that gets dropped
+is the slot. A spec missing it looks right, passes the setup check, and then throws when the
+policy loads — after the premium phases of a run have already been billed. The flag exists so that
+nobody has to know the spelling.
+
+Then pass on the probe the script offers at the end. Everything the setup check does is offline,
+and the agent path's commonest failures are not missing files but a missing Model Garden
+entitlement or a region that does not serve the model. Both first appear at the run's first
+delegated packet, once the premium phases are already billed. The probe is one trivial delegation,
+about two cents, and it is the only thing here that settles them.
+
+Background on the two doors, if the user wants it:
+[docs/setup.md](docs/setup.md#gemini-as-a-model-or-gemini-as-an-agent).
+
+## 6. Hand over
 
 State plainly what is installed, which policies are available given the credentials present, and
 that the next step is a single prompt:
@@ -170,6 +207,10 @@ node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*
 
 Run it after `/plugin update`. An update re-copies the plugin from source, which removes the
 build produced in step 3; re-running with `--fix` restores it.
+
+The same script switches the mechanical tier between the two Gemini doors at any time, in either
+direction — `--enable-agent` records the selection and builds the Python environment the agent path
+needs, `--disable-agent` clears it. Both write this folder only; add `--user` for the machine.
 
 Refresh the marketplace before updating, for the reason given in step 1 — an update reads the
 cached clone, so without `/plugin marketplace update tilicho-ai-labs` it can reinstall the same

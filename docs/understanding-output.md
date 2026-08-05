@@ -6,7 +6,7 @@ After a pass finishes, three things live under `examples/<study-id>/passes/<run-
 - `manifest.json` — a rollup of the telemetry into totals, per-phase breakdown, and metadata.
 - Generated source under `app/` (or similar, per the phase-writer) — the actual code the run produced.
 
-A fourth appears only on runs that delegated to the agent worker (`SDLC_SELECT=flash-agsdk-worker`):
+A fourth appears only on runs that delegated to the agent worker — installs that chose the agent path, via `--enable-agent` on the verify script or the wizard's question ([setup.md](setup.md#gemini-as-a-model-or-gemini-as-an-agent)):
 
 - `delegation/` — three files per delegated packet: the brief the worker was given, the usage sidecar it wrote, and a receipt describing what it did. See [the delegation directory](#the-delegation-directory).
 
