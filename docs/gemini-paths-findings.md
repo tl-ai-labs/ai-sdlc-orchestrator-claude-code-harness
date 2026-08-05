@@ -4,7 +4,7 @@
 
 ---
 
-We have shipped the Antigravity SDK integration into our AI-SDLC pipeline, run the same brief down both Gemini paths on the same machine, and published both run records. The agent path costs **2.6× the money for 23× the tokens** and produces something the model path cannot: a per-packet audit trail. The friction we hit is in the last section, and that is the part worth your time.
+We have shipped the Antigravity SDK integration into our AI-SDLC pipeline, run the same brief down both Gemini paths on the same machine, and published both run records. The agent path costs **2.6× the money for 23× the tokens** and produces something the model path cannot: a per-packet audit trail. We hit four points of friction getting there, all four are handled in what shipped, and two of them carry a suggestion back to you — that section is the part worth your time.
 
 ---
 
@@ -63,21 +63,33 @@ That is the difference that matters to us. The agent path is **auditable** — w
 
 ---
 
-## Where we hit friction
+## Where we hit friction, and how we resolved it
 
-The useful part of this update.
+Four things cost us real time. All four are handled in what we shipped; two carry a suggestion back to you.
 
 **1. The agent path is ADC-only.**
-It signs with Application Default Credentials and has no API-key route, so it requires a Google Cloud project. For a team whose entry point was an AI Studio key, that is a real onboarding step and not an obvious one. Our setup checker now detects this and refuses to offer the agent path where it cannot work — because the failure mode otherwise is silent and expensive: the run dies at the first Gemini dispatch, *after* the premium phases have already been paid for.
+It signs with Application Default Credentials and has no API-key route, so it requires a Google Cloud project. For a team whose entry point was an AI Studio key, that is a real onboarding step and not an obvious one. Left alone, the failure is silent and expensive: the run dies at the first Gemini dispatch, *after* the premium phases have already been billed.
 
-**2. A project ID is not a credential, and it is easy to think it is.**
-`GOOGLE_CLOUD_PROJECT` is the variable most tutorials mention first. Having it set with nothing behind it looks like success to a naive check, and it cost us a debugging session before we made the checker distinguish the two. Worth considering whether the SDK could fail faster and louder here.
+*Resolved.* The setup checker now determines up front whether Google Cloud credentials exist, and only offers the agent path where it can actually work. On an install without them, the plugin runs the model path and says why. Nobody pays for a run that cannot finish.
+
+**2. A project ID is not a credential, though it looks like one.**
+`GOOGLE_CLOUD_PROJECT` is the variable most tutorials mention first. Set on its own, with no credential behind it, it satisfies a naive check and everything looks green.
+
+*Resolved.* The checker treats it as its own state — it reports that the project ID says *where to bill*, not *who is asking*, and names the one cheap probe that settles whether the install can really reach Gemini. It is a warning rather than a hard block, deliberately: inside Google Cloud the credential arrives from the metadata server and such a setup is perfectly valid, and nothing offline can tell that apart from a laptop.
+
+*Suggestion:* the SDK itself could fail faster and louder on this. It is the single easiest way for a new user to think they are configured when they are not.
 
 **3. The runtime split.**
-A Python 3.10+ worker alongside a Node plugin is two runtimes to provision on every machine. It works, but it is the single biggest thing standing between "install the plugin" and "use the agent path".
+A Python 3.10+ worker alongside a Node plugin is two runtimes to provision on every machine — the biggest single step between "install the plugin" and "use the agent path".
+
+*Resolved.* Provisioning it is one command, `verify-setup --enable-agent`, which records the choice and builds the worker environment. The same checker then reports whether the worker is importable, so a half-finished setup is visible before a run rather than during one.
 
 **4. Session caches cannot be shipped.**
-The SDK writes session state as opaque SQLite containing absolute local paths. When we packaged our run as public evidence we had to exclude those files — they cannot be path-scrubbed without corrupting them, and they carry the recording machine's directory layout. A portable or scrubbable session format would let us publish complete evidence bundles instead of near-complete ones.
+The SDK writes session state as opaque SQLite containing absolute local paths. They cannot be path-scrubbed without corrupting them, and they carry the recording machine's directory layout.
+
+*Resolved.* We excluded them from the published evidence and ship the JSON delegation records and usage receipts instead, which carry everything an auditor needs — the brief, the actions, the cost. Nothing material is lost.
+
+*Suggestion:* a portable or scrubbable session format would let us publish the session state too, which is the one part of the trail we currently have to withhold.
 
 ---
 
