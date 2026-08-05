@@ -44,12 +44,29 @@ export interface TelemetryEvent {
   task_id: string;
   module: string;
   model: string;             // canonical model name from pricing table
+  /**
+   * The policy leaf that ran, e.g. "flash-completion" or "flash-agsdk-worker".
+   *
+   * Not redundant with `model`: two leaves can name the same vendor model and
+   * differ only in how it is reached — one completion call versus an agent
+   * session with tools — so `model` alone cannot tell a reader which of them
+   * produced a row, and their costs differ by several times. Optional because
+   * every event written before this field existed lacks it.
+   */
+  model_id?: string;
   routed_by: "orchestrator" | "fallback" | "manual";
   routing: {
     policy_name: string;
     policy_version: number;
     rule_index: number;      // -1 = default
     rule_reason: string;
+    /**
+     * Present only when the matched rule named a select slot. `overridden`
+     * distinguishes "the run asked for this leaf" from "the run accepted the
+     * policy's default", which is the difference between a deliberate result
+     * and an inherited one when the numbers are read back months later.
+     */
+    select?: { slot: string; chosen: string; overridden: boolean };
   };
   input_tokens: number;
   input_tokens_cached: number;
@@ -129,6 +146,56 @@ export interface ModelConfig {
   // clamp the doubling loop here — beyond this, the API rejects the request
   // with 400. If unset, the adapter defaults to a conservative fallback.
   max_output_tokens_absolute?: number;
+  /**
+   * Vertex region this leaf runs in, e.g. "global" or "asia-south1".
+   *
+   * Declared on the leaf rather than read from the environment because it is a
+   * pricing input, not a deployment detail: Vertex adds 10% to every token
+   * class on a regional (non-`global`) endpoint for Gemini 3+, so a run's cost
+   * is only reproducible if the region it ran in is written down beside the
+   * rates. Unset means "whatever GOOGLE_CLOUD_LOCATION says, else global",
+   * which is the behaviour every policy had before this field existed.
+   */
+  region?: string;
+  /**
+   * Seconds an agent-worker delegation may run before it is abandoned. Only
+   * read by adapters that spawn a worker; ignored by the completion adapters,
+   * which have no session to time.
+   *
+   * Exists because the useful ceiling is a property of the TASK, not of the
+   * model: an agent asked to write one module and an agent asked to fix a
+   * failing test suite have wildly different honest durations, and the only
+   * place that difference is known is the policy.
+   */
+  worker_timeout_sec?: number;
+}
+
+/**
+ * Where the run is happening, as opposed to what it is asking for.
+ *
+ * The TaskPacket says what to do; this says where on disk to do it. Completion
+ * adapters need none of it — they send text and get text back. An agent worker
+ * needs all of it: a directory it may act in, and somewhere to leave the
+ * evidence of what it did.
+ *
+ * Optional throughout, and optional as an argument, so that adapters which do
+ * not care never had to change when it was introduced.
+ */
+export interface RunContext {
+  /** The user's project root — the run's default workspace. */
+  project_root?: string;
+  /**
+   * The directory a delegated agent may read, edit and run commands in.
+   * Narrower than `project_root` when the orchestrator wants a worker confined
+   * to the generated application rather than the whole repository.
+   */
+  work_dir?: string;
+  /**
+   * The run's telemetry JSONL. Used as the anchor for delegation evidence, so
+   * that a worker's brief and usage sidecar land in the same pass directory the
+   * report already reads rather than somewhere a reader has to be told about.
+   */
+  telemetry_path?: string;
 }
 
 export type RuleMatcher = {
@@ -142,17 +209,55 @@ export type Rule =
   | { when: RuleMatcher; use: string; reason?: string }
   | { default: string; reason?: string };
 
+/**
+ * One logical slot a rule may name instead of a concrete model leaf.
+ *
+ * A slot is a QUESTION the policy declines to answer at authoring time — "which
+ * of these vetted ways of reaching the mechanical tier should this run use?" —
+ * and `options` is the complete list of answers it will accept. The run picks
+ * one; if it picks none it gets `default`.
+ *
+ * Why the options are enumerated rather than left open: a selection can then
+ * never invent a model. A typo fails when the policy loads, before any tokens
+ * are spent, instead of surfacing as an unknown-model throw partway through a
+ * paid phase.
+ */
+export interface SelectSlot {
+  /** The option used when the run selects nothing. Must be one of `options`. */
+  default: string;
+  /** Every leaf this slot may resolve to. Non-empty; each is a real model id. */
+  options: string[];
+  /** Human note explaining what the choice trades off. Surfaced in errors. */
+  reason?: string;
+}
+
+/** A run's answers to the policy's slots, keyed by slot name. */
+export type SelectOverrides = Record<string, string>;
+
 export interface Policy {
   version: number;
   name: string;
   models: ModelConfig[];
   rules: Rule[];
+  /**
+   * Logical slots, keyed by the name a rule uses. Optional, and absent from
+   * every policy written before slots existed — which is why a rule naming a
+   * concrete model id still resolves without consulting this map at all.
+   */
+  select?: Record<string, SelectSlot>;
 }
 
 export interface RoutingDecision {
   modelId: string;
   reason: string;
   ruleIndex: number;   // -1 if default
+  /**
+   * Present only when the matched rule named a slot. Records which slot was
+   * resolved, what it resolved to, and whether the run asked for that leaf or
+   * merely accepted the policy's default — three facts that are impossible to
+   * recover from `modelId` alone once resolution has happened.
+   */
+  selection?: { slot: string; chosen: string; overridden: boolean };
 }
 
 export interface ExecutionResult {

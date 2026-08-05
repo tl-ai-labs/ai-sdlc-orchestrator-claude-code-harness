@@ -110,6 +110,28 @@ Report, in a short list:
 - the per-million input and output rates the policy declares for each, so the user can see where the
   cost difference comes from
 
+**Say which door the mechanical tier goes through, and only if it is the unusual one.** That tier
+can be reached two ways: as a model call, which is the default, or as an Antigravity agent that
+works in the folder directly. If `SDLC_SELECT` names `flash-agsdk-worker`, this install has chosen
+the agent — say so in one sentence, and say that it costs several times more per task than the same
+model called directly, because an agent re-sends the conversation on every tool call. The rates
+above are unchanged and still true; what changes is the token count. Add one more sentence, because
+it is the thing that makes the extra spend inspectable rather than merely claimed: the run will
+leave a `delegation/` directory beside the telemetry, holding the brief each worker was given and a
+receipt for what it did, and the end-of-run report will carry a **Delegated to an agent worker**
+section naming every delegated packet. Do not raise any of this when
+`SDLC_SELECT` is unset, which is the normal case — an unexplained aside about a path they are not
+on is noise, not transparency.
+
+**Offer the two-cent probe, on that path only, and only if they have not run it.** Pre-flight
+constructs the agent's adapter but never calls it, so three things stay unknown until the first
+delegated packet: whether the project carries the Antigravity entitlement, whether the region
+serves the model, and whether the credentials are still valid. All three fail *after* requirements,
+design and task planning are billed to the premium tier. Say that in one sentence and offer to run
+`${CLAUDE_PLUGIN_ROOT}/scripts/probe-agent-worker.mjs` first — one trivial delegation, about two
+cents, and it exits 0 or names the cause in words. If they decline, continue; the run is not
+blocked on it.
+
 This first version runs the default policy. It is not configurable from this command; a user who
 needs different routing edits the policy file directly.
 

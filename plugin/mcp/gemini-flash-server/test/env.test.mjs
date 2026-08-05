@@ -13,6 +13,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   isUnusableEnvValue,
   sanitizePluginEnv,
@@ -93,17 +94,30 @@ test("a clean environment is returned unchanged", () => {
   assert.equal(env.GOOGLE_CLOUD_PROJECT, "ai-studies-console");
 });
 
-test("every variable plugin.json declares is covered", () => {
-  // If a pass-through is added to plugin.json without being added here, it keeps the
-  // old broken behaviour silently. This asserts the list we sanitize is the list we ship.
-  assert.deepEqual([...PLUGIN_DECLARED_ENV].sort(), [
-    "ANTHROPIC_API_KEY",
-    "GEMINI_API_KEY",
-    "GEMINI_BACKEND",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "GOOGLE_CLOUD_LOCATION",
-    "GOOGLE_CLOUD_PROJECT",
-  ]);
+test("every variable plugin.json declares is covered", async () => {
+  // If a pass-through is added to plugin.json without being added to the
+  // sanitize list, it keeps the old broken behaviour silently: the literal
+  // "${VAR}" reaches the consumer, truthy and wrong.
+  //
+  // Read from the shipped files rather than compared against a list copied
+  // into this test. A copy asserts only that someone updated the copy — which
+  // is the very mistake it exists to catch. There are three hand-maintained
+  // copies of this list (plugin.json, env.ts, verify-setup.mjs), each in a
+  // package that cannot import the others, so all three are pinned here.
+  const pluginJson = JSON.parse(
+    readFileSync(
+      new URL("../../../.claude-plugin/plugin.json", import.meta.url),
+      "utf-8",
+    ),
+  );
+  const declaredInManifest = Object.keys(
+    pluginJson.mcpServers["gemini-flash-server"].env,
+  ).sort();
+
+  assert.deepEqual([...PLUGIN_DECLARED_ENV].sort(), declaredInManifest);
+
+  const { DECLARED_ENV } = await import("../../../scripts/verify-setup.mjs");
+  assert.deepEqual([...DECLARED_ENV].sort(), declaredInManifest);
 });
 
 test("the placeholder pattern is anchored", () => {

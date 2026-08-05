@@ -91,9 +91,27 @@ test("licensing is attributed to the organisation, and NOTICE names this project
  * Every text file a reader can see, excluding build output, dependencies, and
  * git internals. Walked rather than shelled out to git, so the check works in
  * an exported copy too.
+ *
+ * That choice is deliberate and it has a cost: the walker cannot consult
+ * .gitignore, so this SKIP set is a hand-maintained mirror of it and has to grow
+ * whenever the repo gains a new kind of installed-not-authored directory. The
+ * agent path added one — `.venv/` under the worker, holding the Antigravity SDK
+ * and its transitive dependencies, thousands of files carrying their authors'
+ * addresses and their own repository URLs. It is gitignored and never ships, but
+ * a machine that ran `verify-setup.mjs --fix` has it on disk, so without this
+ * entry the publish checks fail on other people's packages rather than on
+ * anything in this repo.
  */
 function textFiles(dir = ROOT, acc = []) {
-  const SKIP = new Set(["node_modules", ".git", "dist", "build", "coverage"]);
+  const SKIP = new Set([
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    "coverage",
+    ".venv",
+    "__pycache__",
+  ]);
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (SKIP.has(entry.name)) continue;
     const full = join(dir, entry.name);

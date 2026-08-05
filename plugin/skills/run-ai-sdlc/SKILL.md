@@ -54,6 +54,12 @@ are true and the operator should know the same policy would not start in `vendor
 warning as a halt: refusing to start a viable run is not the safe error, it is the one that teaches the
 operator to override a gate that exists to protect them.
 
+**`not_selected` is not a warning and not a problem.** A policy may hold more than one way of reaching a
+tier — `opus-plus-flash` reaches its mechanical tier either as a Gemini model call or as an Antigravity
+agent — and only the one this install selected can be dispatched to. The other is listed here, unchecked,
+because its prerequisites are irrelevant to a run that will never call it. Do not report it as a failure,
+do not try to "fix" it, and do not offer to install anything on its behalf.
+
 **If `ok` is true**, report the configuration to the user in one line before phase 1 — the policy name,
 each model, and for Vertex the resolved project and region — then continue. This is the only point in
 the run where the operator can see what is about to be billed and to which project, while it is still

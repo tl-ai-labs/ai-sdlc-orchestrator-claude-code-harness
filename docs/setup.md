@@ -75,6 +75,77 @@ If you only plan to run the `opus-only` policy, you can skip Gemini entirely.
 
 **Where you export matters if you installed the plugin rather than cloning.** The `export` lines above assume you launch `claude` from that same shell, which is the clone route. Claude Code started from the desktop app inherits no login shell, so nothing exported in a terminal or written to `~/.zshrc` reaches it. On that route, put the variables in the `env` block of `~/.claude/settings.json`, which Claude Code reads at startup and passes through to the bundled server — or use the Vertex door, which involves no variable at all: `gcloud auth application-default login` writes a credentials file at a fixed path that the server reads directly, taking the project from that file's quota project.
 
+## Gemini as a model, or Gemini as an agent
+
+Everything above sets up Gemini as a **model**, which is the default and what every run of this plugin has used. There is a second way to reach the same tier, and it is a genuinely different thing rather than a setting.
+
+**As a model.** For each packet the orchestrating Claude session reads the files it judges relevant, sends that text to Gemini, and gets text back. Gemini never sees your folder. Claude writes the result to disk. One request, one response, per packet.
+
+**As an agent.** Gemini is handed the working directory and works in it: it lists and reads files on its own, runs shell commands, and writes its own edits. Claude then reviews what changed. This runs through Google's [Antigravity SDK](https://pypi.org/project/google-antigravity/), which is a Python package, so this path — and only this path — adds a Python dependency to a plugin that otherwise has none.
+
+Three things are worth knowing before choosing it:
+
+- **It costs several times more per task.** An agent re-sends the whole conversation on every tool call, on top of a fixed preamble of several thousand tokens it carries every turn. Same published per-token rates; many more tokens.
+- **It needs Python 3.10 or newer.** The Antigravity SDK declares that minimum, and macOS ships `/usr/bin/python3` as 3.9 — so the interpreter your machine reaches for by default is the one that will not work. The setup script looks for a usable one by asking each candidate its own version rather than trusting its name.
+- **Vertex only.** The Antigravity SDK signs with Application Default Credentials and has no API-key door, so `GEMINI_API_KEY` cannot reach this path. `gcloud auth application-default login` is a prerequisite, not an alternative.
+
+### Choosing it
+
+On the clone route, `node tools/setup.mjs` asks — but only if it finds Google Cloud credentials, since without them the path is unavailable anyway. Answering yes builds a virtual environment under `plugin/mcp/gemini-flash-server/worker/.venv/`, installs the SDK into it, and writes one line into the project's `.mcp.json`:
+
+```json
+"SDLC_SELECT": "gemini-flash=flash-agsdk-worker"
+```
+
+That is the whole switch. Remove the line to go back to the model path; the virtual environment can stay where it is, unused, or be deleted.
+
+On the plugin route there is no wizard, so set the same variable in the `env` block of `~/.claude/settings.json` and then run the verify script with `--fix`, which builds the environment when — and only when — that variable selects the agent:
+
+```bash
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --fix
+```
+
+If you already maintain a Python 3.10+ environment with `google-antigravity` installed and would rather not have a second one built inside the plugin, point at yours instead and no virtual environment is created:
+
+```bash
+export GEMINI_WORKER_PYTHON=/path/to/your/venv/bin/python
+```
+
+Nothing here reaches an install that did not choose it. Without `SDLC_SELECT` naming the agent, the verify script never looks for Python, pre-flight never constructs the agent's adapter, and the mechanical tier dispatches exactly as it always did.
+
+### Confirming it actually took effect
+
+The switch is easy to set and easy to think you have set. A run that used the agent says so in two places, and both are absent on a run that did not:
+
+- `node tools/report.mjs <pass-dir>` prints a **Delegated to an agent worker** section — one row per delegated packet, with the tool calls it made and what changed in the working directory while it held it.
+- the pass directory contains `delegation/`, holding the brief each worker was given and a receipt for what it did.
+
+If neither appears, the run went through the model path regardless of what the variable says. Both are described in [understanding-output.md](understanding-output.md#delegated-to-an-agent-worker).
+
+### Confirming it works, before a run finds out
+
+Everything the setup and verify scripts check is offline — files, versions, variables. Three things they cannot see decide whether this path works at all, because none of them is a missing file:
+
+- whether the billing project carries the **Gemini Enterprise / Model Garden entitlement** the SDK needs and the plain Vertex path does not (a 403 without it);
+- whether the **region actually serves the model** — `gemini-3.5-flash-lite` in particular is not deployed everywhere (a 404 where it isn't);
+- whether Application Default Credentials are not just present but **still valid**, on a project with the Vertex API on.
+
+All three surface at the same moment: the first delegated packet, after requirements, design and task planning have already been billed to the premium tier. One trivial delegation settles them at second zero instead:
+
+```bash
+node plugin/scripts/probe-agent-worker.mjs
+```
+
+On the plugin route, where there is no repo to stand in:
+
+```bash
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/probe-agent-worker.mjs | tail -1)"
+```
+
+It loads the real policy, constructs the real adapter, and runs one real delegation in an empty temporary directory — no mock, no stub, no separate code path. It prints the project, the region, the interpreter, the per-token rates a run will be billed at, and what the delegation actually cost, then exits 0 if the path works. On failure it names the cause in words: an entitlement request that takes days reads differently from a region that takes one environment variable, and the two are never reported as the same thing.
+
+It is not free, because nothing on this path is: the Antigravity SDK re-sends a multi-thousand-token preamble every turn whatever you ask it. Measured against `gemini-3.5-flash` on the global endpoint, one probe is 12,245 input and 154 output tokens — **about two cents**, and roughly the same every time, since almost all of it is the preamble rather than the question. `verify-setup.mjs` offers this command at the end of its own output when — and only when — the install selects the agent and everything offline already passed.
+
 ## Install dependencies and register the plugin
 
 From the repo root:
@@ -107,6 +178,10 @@ The build output goes to `dist/server.js`; if that exists, you are good.
 
 **Pre-flight reports a `warnings` entry but the run starts anyway** — that is correct, not a missed error. What is checked depends on the run's auth mode. Under `--auth=vendor` every model is dispatched through the server, so every model's credential must work. Under `--auth=estimated` the premium phases run inside Claude Code on your subscription and that adapter is never constructed, so an unset `ANTHROPIC_API_KEY` cannot affect the run — pre-flight says so and continues. The warning is still printed because it is true of the *policy*: the same run under `--auth=vendor` would not start. Only a model this run actually dispatches to can halt it.
 
-**`env-placeholders` warning from the verify script** — one or more of the variables the plugin forwards (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GEMINI_BACKEND`) reached the server as the literal text `${NAME}` rather than a value. The plugin manifest declares them as pass-throughs from the host; when the host never set one, the placeholder is forwarded verbatim instead of being dropped. The server discards those values at startup and falls back to Application Default Credentials, so nothing runs on a garbage credential — but the variable you believed was set is not in play. Set it where Claude Code can see it, per the note above about the `env` block of `~/.claude/settings.json`.
+**Pre-flight lists a model under `not_selected`** — a policy can offer more than one way to reach a tier (`opus-plus-flash` reaches the mechanical tier either as a model or as an agent, see above), and only the one this run selected can be dispatched to. The other is named here rather than silently omitted, so "you did not choose it" stays distinguishable from "pre-flight forgot about it". Its prerequisites are not checked, which is the point: a machine with no Python would otherwise fail pre-flight over a tier it will never call.
+
+**`agent-worker-python` or `agent-worker-sdk` from the verify script** — `SDLC_SELECT` routes the mechanical tier to the Antigravity agent, but the Python environment that path needs is missing (`agent-worker-python`) or exists and cannot import the SDK (`agent-worker-sdk`, which quotes the interpreter's own error). Both are blocking, and both have the same two exits: build the environment with `--fix` on the verify script (or `node tools/setup.mjs` on a clone), or drop `SDLC_SELECT` and go back to the model path, which needs no Python at all. The second failure usually means the environment was built against an interpreter that has since been upgraded or removed; `--fix` rebuilds with `venv --clear`, so it replaces the broken environment rather than patching it, and there is nothing to delete by hand.
+
+**`env-placeholders` warning from the verify script** — one or more of the variables the plugin forwards (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GEMINI_BACKEND`, `SDLC_SELECT`, `GEMINI_WORKER_PYTHON`) reached the server as the literal text `${NAME}` rather than a value. The plugin manifest declares them as pass-throughs from the host; when the host never set one, the placeholder is forwarded verbatim instead of being dropped. The server discards those values at startup and falls back to Application Default Credentials, so nothing runs on a garbage credential — but the variable you believed was set is not in play. Set it where Claude Code can see it, per the note above about the `env` block of `~/.claude/settings.json`.
 
 **Rerun the wizard** — safe to run `node tools/setup.mjs` repeatedly. It skips steps that are already done.

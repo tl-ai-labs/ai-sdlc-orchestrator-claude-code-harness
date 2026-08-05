@@ -32,6 +32,8 @@ Opus handles phases that require judgment (requirements, design, senior code rev
 
 Costs depend on model output length, prompt caching, and current vendor pricing.
 
+**The mechanical tier has two doors, and the policy file does not choose between them.** By default Gemini is called as a model: Opus reads the files, sends the text, and writes the answer back. It can instead run as an agent that opens the working directory itself, runs commands and edits files, with Opus reviewing what changed. Which one a run uses is a property of the *install*, set once via `SDLC_SELECT` — deliberately, so the policy file stays a faithful record of how a run was priced and routed rather than something edited between runs. Both doors reach the same model at the same published rates, so the vendor model name on a telemetry event is the same either way; the `model_id` field on every event is what says which one ran. A delegated run says so more plainly than that: `node tools/report.mjs` grows a **Delegated to an agent worker** section naming every delegated packet, its tool calls, and what changed on disk while it ran — and the run leaves a `delegation/` directory holding the brief each worker was given and a receipt for what it did. See [understanding-output.md](understanding-output.md#delegated-to-an-agent-worker). Setting it up, and why the agent costs several times more per task, is in [setup.md](setup.md#gemini-as-a-model-or-gemini-as-an-agent).
+
 ## Running a pass — two modes
 
 ### Interactive mode (default)

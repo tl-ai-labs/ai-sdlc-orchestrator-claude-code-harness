@@ -12,6 +12,16 @@ yarn-error.log*
 # Build output for the bundled MCP server
 plugin/mcp/gemini-flash-server/dist/
 
+# The Antigravity agent worker's Python environment. Built on demand by the
+# setup wizard (or `verify-setup.mjs --fix`) and only for installs that chose
+# the agent path — the worker's source and its requirements.txt ARE tracked, so
+# the environment is reproducible from the repo without being carried in it. It
+# is also machine-specific: a virtualenv hardcodes the absolute path of the
+# interpreter it was built from, so a committed one would be broken everywhere
+# except the machine that made it.
+plugin/mcp/gemini-flash-server/worker/.venv/
+__pycache__/
+
 # Ephemeral scratch dirs / one-off scripts that a subagent might leave
 # under the MCP server dir during a run — never part of the release.
 plugin/mcp/gemini-flash-server/_run*/
