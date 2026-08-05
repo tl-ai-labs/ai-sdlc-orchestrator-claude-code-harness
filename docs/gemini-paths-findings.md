@@ -106,6 +106,54 @@ All of it is already in the public repo, `tl-ai-labs/ai-sdlc-orchestrator-claude
 
 ---
 
+## Trying it yourself
+
+Two steps. The first is free.
+
+### 1. Check the setup — offline, read-only, no cost
+
+```
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)"
+```
+
+Works in any state — no credentials at all, an AI Studio key, `gcloud auth application-default login`, `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service-account key, or just `GOOGLE_CLOUD_PROJECT` set. It reads the machine and reports what is ready, what is missing, and the exact command to fix each thing. It makes no network calls, writes nothing, and costs nothing.
+
+If what it reports does not match your actual setup, we would like to know.
+
+### 2. Run the pipeline end to end
+
+There is no unattended mode — it is two prompts by hand, because four of the phases stop for human approval.
+
+Make an **empty folder** and open Claude Code in it:
+
+```
+claude --permission-mode acceptEdits
+```
+
+Without that flag the orchestrator prompts on every file read. It still stops at the four approval gates either way; those are not part of the permission system.
+
+Paste this as the first prompt:
+
+```
+Setup this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness
+```
+
+That registers the marketplace, installs the plugin, builds the bundled model server, and reports what is ready and what is missing.
+
+Then **start a new session in the same folder** and type:
+
+```
+/sdlc-run
+```
+
+The new session matters. Claude Code registers a plugin's slash commands and starts its MCP servers only when a session begins, so in the install session neither exists yet — and a run started there would route every phase to the premium model.
+
+`/sdlc-run` takes no arguments. It checks the install, offers the shipped briefs, shows which model each phase will use, confirms the plan, and only then starts spending. **Pick Ping Service** — one endpoint, no database; it is the brief used in both runs above, it exercises every phase in minutes rather than hours, and it costs roughly **$0.84** on the model path. Generated code lands in `./src` and the run record in `./.sdlc/`.
+
+This spends real money and needs credentials.
+
+---
+
 ## What is next
 
 Scaling beyond a single small brief, and a full-dataset SWE-bench Pro run on the multi-model policy.
