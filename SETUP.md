@@ -122,27 +122,16 @@ not a choice — it is an option that cannot work. Skip the question entirely th
 Skip it too when there are no Gemini credentials at all.
 
 With Google Cloud credentials present, there are two doors to the same model, billed to the same
-project, and the user picks one. Ask in these words:
+project, and the user picks one. Present it as a two-option choice with **short labels only** —
+no description on either option. Background lives in
+[docs/setup.md](docs/setup.md#gemini-as-a-model-or-gemini-as-an-agent); link it if the user asks,
+do not inline it.
 
-> Gemini can work two ways on the mechanical phases. Both bill the same Google Cloud project.
->
-> **As a model, through Gemini Enterprise Agent Platform** (formerly Vertex AI) — Google's own API
-> for the model. Claude reads your code and sends it over, Gemini sends text back. Cheap and
-> predictable: one request, one answer, per task. Nothing to install. This is the default.
->
-> **As an agent, through Google's Antigravity SDK** — signing against that same project. Gemini
-> opens the folder itself, runs commands and edits files, and Claude reviews the result. It needs
-> Python 3.10 or newer and the Antigravity SDK, a Python package this step installs for you. It
-> costs several times more per task: an agent re-sends the whole conversation on every tool call,
-> on top of a fixed multi-thousand-token preamble it carries every turn.
->
-> The model path is the right answer for most work. Pick the agent path when you want Gemini to do
-> the work rather than describe it.
->
-> Set up the Antigravity SDK agent path as well? (default: no)
+- Through Gemini Enterprise Agent Platform (API)
+- Through Antigravity SDK
 
-On **no**, say nothing further about it and continue. Nothing needs to be written — the model path
-is what an untouched install already does.
+On **Gemini Enterprise Agent Platform (API)**, say nothing further about it and continue. Nothing
+needs to be written — that path is what an untouched install already does.
 
 **If step 4 found no Google Cloud credentials, say what would open the second door**, rather than
 skipping in silence. Someone who runs `gcloud auth application-default login` a week from now has
@@ -157,7 +146,7 @@ install that is still on the model path, it prints that `--enable-agent` line at
 run. That is the surface people actually re-run, which is why the reminder lives there and not only
 here.
 
-On **yes**, run the same script from step 3 with `--enable-agent` instead of `--fix`:
+On **Antigravity SDK**, run the same script from step 3 with `--enable-agent` instead of `--fix`:
 
 ```bash
 node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
@@ -179,9 +168,6 @@ and the agent path's commonest failures are not missing files but a missing Mode
 entitlement or a region that does not serve the model. Both first appear at the run's first
 delegated packet, once the premium phases are already billed. The probe is one trivial delegation,
 about two cents, and it is the only thing here that settles them.
-
-Background on the two doors, if the user wants it:
-[docs/setup.md](docs/setup.md#gemini-as-a-model-or-gemini-as-an-agent).
 
 ## 6. Hand over
 
