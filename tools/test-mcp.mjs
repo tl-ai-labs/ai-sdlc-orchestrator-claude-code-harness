@@ -1,18 +1,11 @@
 #!/usr/bin/env node
 /**
- * test-mcp.mjs — chains the bundled MCP server's own test suite into the
- * root `npm test`.
+ * Chains the bundled MCP server's test suite into the root `npm test`.
  *
- * The server is a separate npm package written in TypeScript, and its tests
- * run against the compiled output, so they need its dependencies installed.
- * The root suite deliberately needs nothing installed at all — `npm test` on
- * a fresh clone is a check a first-time user should be able to run before
- * anything else — so the two cannot simply be globbed together.
- *
- * The rule here: run the server's tests when the server is installed, and
- * when it is not, say so loudly and name the command that fixes it. What this
- * never does is pass silently, which would report a green suite while a whole
- * package went untested.
+ * Root suite has no dependencies (a fresh clone can run it). Server tests
+ * need TypeScript compilation → require the server's deps installed. Runs
+ * the server suite when possible; when not, says so loudly. Never passes
+ * silently — that would report green while a whole package went untested.
  */
 
 import { spawnSync } from "node:child_process";

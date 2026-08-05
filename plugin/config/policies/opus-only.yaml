@@ -1,5 +1,4 @@
 # Premium-ceiling baseline — every phase runs on Opus 4.7, no delegation.
-# Establishes the "what does this cost with one top-tier model?" number.
 version: 1
 name: opus-only
 
@@ -8,15 +7,14 @@ models:
     adapter: builtin-anthropic
     model_name: claude-opus-4-7
     pricing:
-      input: 5.00          # USD per 1M tokens — Claude Opus 4.7 GA
-      input_cached: 0.50   # cache-read rate
+      input: 5.00          # USD per 1M tokens
+      input_cached: 0.50
       output: 25.00
     pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
     pricing_last_verified: 2026-08-04
     auth:
       env: ANTHROPIC_API_KEY
-    # Vendor-declared absolute output-tokens ceiling. Adapters clamp the
-    # doubling loop here; requests beyond this return 400.
+    # Doubling loop clamps here; requests beyond this return 400.
     max_output_tokens_absolute: 32000
 
 rules:

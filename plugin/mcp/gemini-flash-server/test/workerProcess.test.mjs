@@ -1,25 +1,11 @@
 /**
- * workerProcess.test.mjs — the launch contract for the Antigravity agent
- * worker, held from outside.
+ * Launch contract for the Antigravity agent worker. Silent failures the
+ * seam is prone to: region the receipt claims but the call never used, an
+ * API key letting the worker in through a door the evidence doesn't
+ * describe, token count read under JS field names for a Python file,
+ * cached count billed twice.
  *
- * WHAT IS BEING PROTECTED. A delegation is the one dispatch in this server
- * where the expensive work happens in another process, on the other side of an
- * argument vector and an environment, and comes back as a JSON file. Every part
- * of that seam has a failure mode that is silent rather than loud: a region the
- * receipt claims but the call never used, an API key that lets the worker in
- * through a door the evidence does not describe, a token count read under
- * JavaScript's field names when the file was written by Python, a cached count
- * billed twice. None of those throw. They produce a run that finishes, reports
- * a number, and is wrong.
- *
- * WHY THESE ARE UNIT TESTS AND NOT AN END-TO-END RUN. Each case below is a
- * plain input-to-output check on a pure function, so the whole seam is pinned
- * with no Python, no Google credentials, no network and no spend. The paid
- * end-to-end run proves the worker can do the job; these prove it is being
- * asked to do it in the right place, on the right account, and reported
- * honestly afterwards.
- *
- * $0, offline.
+ * Pure functions; no Python, no credentials, no network.
  */
 
 import { test } from "node:test";

@@ -1,22 +1,10 @@
 /**
- * agent-probe.test.mjs — the parts of the agent-worker probe that can be wrong
- * without anyone noticing.
+ * Pins the probe's failure classifier (403 → entitlement, 404 → region;
+ * confusing the two is worse than no classifier), the cost reporting (billed
+ * rates ≠ policy rates when a region is pinned), and that the probe packet
+ * stays trivial (one turn, no tools).
  *
- * The probe's job is to convert a Google API status into a sentence someone can
- * act on. Two of those sentences send the reader to completely different places
- * — a 403 means an entitlement request that takes days, a 404 means one
- * environment variable — so a classifier that confuses them is worse than no
- * classifier at all: it sends people confidently in the wrong direction. That
- * is what most of this file pins.
- *
- * The rest pins the two things the probe promises about cost: that it reports
- * the rates a run will ACTUALLY be billed at (which are not always the rates in
- * the YAML, because of the Vertex regional surcharge), and that its probe
- * packet stays trivial — one turn, no tools — because the entire argument for
- * running it is that two cents is nothing next to the premium phases it saves.
- *
- * Everything here is offline and free. No adapter is constructed, no policy is
- * loaded from disk, no interpreter is launched, and nothing reaches the network.
+ * Offline. No adapter, no policy load, no network.
  */
 
 import { test } from "node:test";

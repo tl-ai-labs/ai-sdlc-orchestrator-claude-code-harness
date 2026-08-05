@@ -1,42 +1,19 @@
 #!/usr/bin/env node
 /**
- * verify-setup.mjs — proves an installed plugin can actually run, and repairs it.
+ * Offline check + repair for an installed plugin. `/plugin install` reports
+ * success even when dist/ and node_modules/ are missing; this script proves
+ * the dispatch path is real and, with --fix, builds it.
  *
- * Why this exists: `/plugin install` reports success even when the plugin is
- * unusable. The plugin manifest points the bundled MCP server at
- * `<plugin>/mcp/gemini-flash-server/dist/server.js`, but `dist/` is a build
- * artifact and `node_modules/` is a dependency tree — neither is tracked in
- * git, so neither arrives with a fresh install from GitHub. The install
- * succeeds, the slash command registers, and the failure only surfaces
- * mid-run when the first mechanical phase tries to dispatch to the
- * cost-efficient model. That is the worst possible moment to discover it:
- * premium-tier tokens have already been spent on the phases before it.
- *
- * This script closes that gap. It runs after install, reports every
- * precondition, and with --fix installs dependencies and builds the server so
- * the dispatch path is real before the first run starts.
- *
- * It locates the plugin from its own path (`<pluginRoot>/scripts/` → up one),
- * so the same file works whether it is executed out of the Claude Code plugin
- * cache after an install or out of a git clone during development. Nothing
- * here hardcodes a marketplace name or a cache layout, both of which are
- * outside our control and have changed before.
+ * Locates the plugin from its own path (<pluginRoot>/scripts/ → up one) so
+ * the same file works from the plugin cache or from a git clone.
  *
  * Usage:
- *   node verify-setup.mjs                  check and report; exit 1 if unusable
- *   node verify-setup.mjs --fix            check, repair what is repairable, re-check
- *   node verify-setup.mjs --enable-agent   route the mechanical tier to Gemini as an
- *                                          AGENT, then build what that needs (implies --fix)
- *   node verify-setup.mjs --disable-agent  put it back on the model path
- *   ...--user                              write the selection machine-wide instead of
- *                                          for this folder only
- *
- * The two agent flags exist because the selection is an environment variable with
- * a two-part spelling, and until they existed the only way to set it on an
- * installed plugin was to hand-edit a JSON file with a format documented nowhere
- * the user was looking. Hand-editing produced exactly the failure it looks like it
- * would: the leaf name written without its slot, a check that reported green, and a
- * run that died at policy load with the premium phases already billed.
+ *   node verify-setup.mjs                  check + report; exit 1 if unusable
+ *   node verify-setup.mjs --fix            check, repair, re-check
+ *   node verify-setup.mjs --enable-agent   route mechanical tier to the agent
+ *                                          and build what it needs (implies --fix)
+ *   node verify-setup.mjs --disable-agent  back to the model path
+ *   ...--user                              machine-wide instead of this folder
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -45,7 +22,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// ─── pure helpers (unit-tested; no filesystem, no process state) ──────
+// ─── pure helpers ─────────────────────────────────────────────────────
 
 /** Major version from a `process.versions.node` string ("20.11.1" → 20). */
 export function nodeMajorFrom(versionString) {
@@ -54,24 +31,17 @@ export function nodeMajorFrom(versionString) {
 }
 
 /**
- * Where `gcloud auth application-default login` writes user credentials.
- *
- * This script runs before `npm ci`, so it cannot import the server's
- * TypeScript. The same path is computed in
- * mcp/gemini-flash-server/src/adapters/geminiTransports.ts (`defaultAdcPath`)
- * and the two are kept in sync by hand — if one moves, move both.
+ * Path gcloud writes ADC to. Duplicated with `defaultAdcPath` in
+ * geminiTransports.ts (this script runs before `npm ci` and cannot import TS).
+ * Sync by hand.
  */
 export function adcPath(home = homedir()) {
   return join(home, ".config", "gcloud", "application_default_credentials.json");
 }
 
 /**
- * The environment variables plugin.json declares as host pass-throughs.
- *
- * Kept in sync by hand with PLUGIN_DECLARED_ENV in
- * mcp/gemini-flash-server/src/env.ts. This script runs before `npm ci`, so it
- * cannot import the server's TypeScript — same constraint, and same hand-sync
- * rule, as adcPath() above.
+ * plugin.json's declared env pass-throughs. Sync by hand with
+ * PLUGIN_DECLARED_ENV in env.ts (same pre-`npm ci` constraint as adcPath).
  */
 export const DECLARED_ENV = [
   "GEMINI_API_KEY",
@@ -80,42 +50,16 @@ export const DECLARED_ENV = [
   "GOOGLE_CLOUD_PROJECT",
   "GOOGLE_CLOUD_LOCATION",
   "GEMINI_BACKEND",
-  // Select-slot choices, e.g. "gemini-flash=flash-agsdk-worker". Unset on
-  // most machines, which is exactly why it has to be here — see the matching
-  // entry in env.ts for what an unexpanded placeholder does to policy load.
   "SDLC_SELECT",
-  // An operator-supplied Python for the agent worker, for people who already
-  // have a suitable one. Unexpanded it is a path that does not exist, which
-  // the worker refuses outright — see env.ts.
   "GEMINI_WORKER_PYTHON",
 ];
 
-/**
- * True when a value is a shell placeholder that was never substituted — the
- * literal string `${NAME}`, and nothing else.
- *
- * plugin.json declares the MCP server's environment as `"${GOOGLE_CLOUD_PROJECT}"`
- * style pass-throughs. When the host has the variable set, the value is
- * substituted. When it does not — the default state of anyone who launched Claude
- * Code from the desktop app, which inherits no login shell — the placeholder is
- * handed through verbatim. Confirmed against a live server process on 2026-08-04.
- *
- * That literal is truthy, which is why this check exists: without it, every
- * credential probe below sees a "set" variable and reports a green light, and the
- * user is told their Gemini setup is ready when no door into Gemini is actually
- * open. Anchored at both ends so a legitimate value that merely contains a dollar
- * sign — a path, a passphrase — is left alone.
- */
+/** `${NAME}` and nothing else. Anchored so a real value with `$` survives. */
 export function isUnexpandedPlaceholder(value) {
   return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(String(value ?? "").trim());
 }
 
-/**
- * A copy of `env` with unusable values dropped: absent, empty, or an unexpanded
- * placeholder. Returns a new object rather than mutating, because this script
- * only reports — the server does the real in-place stripping at startup
- * (see mcp/gemini-flash-server/src/envBootstrap.ts).
- */
+/** Copy of `env` with unusable values dropped. Non-mutating — this script only reports. */
 export function usableEnv(env = {}) {
   const out = {};
   for (const [key, value] of Object.entries(env)) {
@@ -133,35 +77,19 @@ export function unexpandedDeclaredEnv(env = {}) {
 }
 
 /**
- * Where a variable has to be set for the plugin to actually see it.
- *
- * One constant rather than a sentence repeated in four fix strings, because the
- * four had drifted into contradicting each other and the file's own
- * `env-placeholders` warning: three of them said `export NAME=...` while that
- * one explained, correctly, that a shell export is exactly what does not reach a
- * plugin launched from the desktop app. A user following the fix text was being
- * sent to do the thing the report elsewhere told them would not work.
- *
- * Note the asymmetry this makes visible: `gcloud auth application-default login`
- * needs none of this, because it writes a FILE that the SDK finds on its own. The
- * contradiction only ever bit the two routes that set a variable.
+ * Where a variable must be set for the plugin to see it. One constant to
+ * keep the fix strings from drifting apart — a shell export is not enough
+ * on the desktop-app path.
  */
 export const ENV_ADVICE =
   "the `env` block of ~/.claude/settings.json — a shell export is not enough, because " +
   "Claude Code launched from the desktop app inherits no login shell";
 
 /**
- * The credential types Google's auth libraries accept in an ADC-shaped JSON file,
- * and the fields each one is useless without.
- *
- * Used to answer a question the previous checks never asked: not "is a credential
- * configured" but "is the configured credential a credential". A truncated
- * download, a half-written service-account key, a file emptied by a full disk —
- * all of them satisfy `existsSync` and none of them can sign a request.
- *
- * Hand-maintained against google-auth-library's `fromJSON` handling. Types not
- * listed here are treated as USABLE rather than broken, deliberately: this list
- * is a way to be certain something is wrong, never a way to guess that it is.
+ * Credential types google-auth accepts in an ADC-shaped JSON file, and the
+ * fields each one is useless without. Answers "is the configured credential
+ * ACTUALLY a credential" — existsSync accepts a truncated key. Unlisted
+ * types are treated as USABLE: this list proves brokenness, never guesses it.
  */
 export const CREDENTIAL_REQUIRED_FIELDS = {
   authorized_user: ["client_id", "client_secret", "refresh_token"],
@@ -171,22 +99,11 @@ export const CREDENTIAL_REQUIRED_FIELDS = {
 };
 
 /**
- * Read a credential file and say what it actually is.
- *
- * Returns `{ present, usable, type, detail }`. `usable: false` is only ever
- * returned when this function is CERTAIN — the file is absent, is not JSON, has
- * no `type`, or is a recognised type missing a field it cannot work without.
- * Anything it does not recognise comes back usable, with the reason it could not
- * be checked in `detail`, because a setup checker that invents failures is worse
- * than one that misses them: the whole value of this script is that people trust
- * a green light.
- *
- * Expiry is deliberately not checked. A refresh token has no offline expiry to
- * read, and a revoked one is indistinguishable from a live one without a network
- * call. That gap is real, and it is what `probe-agent-worker.mjs` is for.
- *
- * The readers are injectable so the whole decision table is testable without
- * writing credential-shaped files to a real disk.
+ * `usable: false` only when CERTAIN (missing, unparseable, no type, or a
+ * recognised type missing a required field). Unrecognised types come back
+ * usable — a checker that invents failures is worse than one that misses them.
+ * Expiry not checked (offline can't tell live from revoked; probe-agent-worker
+ * covers that). Readers injected for offline testing.
  */
 export function inspectCredentialFile(path, { exists = existsSync, read = readFileSync } = {}) {
   if (!path) return { present: false, usable: false, type: null, detail: null };
@@ -230,27 +147,15 @@ export function inspectCredentialFile(path, { exists = existsSync, read = readFi
 }
 
 /**
- * What this machine can prove about its Vertex / Gemini Enterprise Agent Platform
- * credentials, in four states rather than a yes/no.
+ * Vertex/Gemini credential state in four values, not yes/no.
+ *   credential   — real signing credential, looks complete.
+ *   broken       — configured and definitely unusable.
+ *   project-only — GOOGLE_CLOUD_PROJECT set alone. Works inside Google Cloud
+ *                  (metadata server supplies the credential); laptop = dead end.
+ *   none         — no door.
  *
- *   credential   — a real signing credential was found and looks complete.
- *   broken       — one was configured and is definitely unusable. Certain.
- *   project-only — GOOGLE_CLOUD_PROJECT is set and nothing else is. This is a
- *                  project ID, not a credential. It works on a Google-hosted
- *                  machine, where ADC comes from the metadata server and there is
- *                  nothing on disk to find; on a laptop it authenticates nothing.
- *   none         — no door at all.
- *
- * The middle two states are the whole point. The previous check was a single
- * boolean that counted GOOGLE_CLOUD_PROJECT as a credential, so the commonest way
- * to get this wrong — export the project ID, assume that is the login step —
- * passed every offline check, reported green, and then failed at the first
- * delegated packet, which is after requirements, design and planning have already
- * been billed to the premium tier.
- *
- * Precedence matches google-auth: an explicit GOOGLE_APPLICATION_CREDENTIALS wins
- * outright, and a broken one is fatal rather than falling back to the gcloud file,
- * because the library does not fall back either.
+ * Precedence matches google-auth: an explicit GOOGLE_APPLICATION_CREDENTIALS
+ * wins, and a broken one is fatal (library doesn't fall back either).
  */
 export function vertexCredentialState({ env = {}, serviceAccountFile = null, adcFile = null } = {}) {
   if (env.GOOGLE_APPLICATION_CREDENTIALS) {
@@ -272,13 +177,7 @@ export function vertexCredentialState({ env = {}, serviceAccountFile = null, adc
   return { state: "none", source: null, detail: null };
 }
 
-/**
- * The state implied by the coarse fact older callers pass — a boolean "is there an
- * ADC file". Existence was all those callers ever knew, so this reads an existing
- * file as a working one, which is exactly the assumption they were already making.
- * Real callers pass a real inspection; this keeps `evaluate()` meaningful for
- * anything that has not been taught the finer distinction.
- */
+/** Fallback when a caller only knows "is there an ADC file". */
 function assumedVertexState(env, hasAdcFile) {
   return vertexCredentialState({
     env,
@@ -290,20 +189,9 @@ function assumedVertexState(env, hasAdcFile) {
 }
 
 /**
- * Whether ANY door into Gemini is open, mirroring the precedence in
- * geminiTransports.ts `selectGeminiBackend`: an API key, or a real Vertex
- * credential.
- *
- * Callers must pass an env that has already been through usableEnv() — this
- * function trusts every value it is given, by design, so that the "what counts as
- * a real value" rule lives in exactly one place.
- *
- * Split out originally because the check only looked at GEMINI_API_KEY and
- * GOOGLE_APPLICATION_CREDENTIALS, so the ordinary enterprise setup — a plain
- * `gcloud auth application-default login`, which sets no environment variable at
- * all — was reported as "no credentials" even though runs work fine. It now
- * defers the Google half to vertexCredentialState(), so a named project no longer
- * counts as a login.
+ * Any door into Gemini open. Mirrors selectGeminiBackend precedence.
+ * Callers pass an env already through usableEnv() — one place to decide
+ * what "real value" means.
  */
 export function hasGeminiCredentials({ env = {}, vertex = null } = {}) {
   return Boolean(env.GEMINI_API_KEY || vertex?.state === "credential");
@@ -320,47 +208,20 @@ export function mcpPaths(pluginRoot) {
 }
 
 /**
- * The policy leaf that reaches Gemini as an AGENT rather than as a model.
- *
- * Spelled out here as a literal because this script cannot import the policy —
- * it runs before `npm ci`, and the policy is YAML read by TypeScript that may
- * not be built yet. Kept in sync by hand with the `flash-agsdk-worker` entry in
- * config/policies/opus-plus-flash.yaml. If that id is ever renamed, rename it
- * here too, or this check silently stops firing.
+ * Agent leaf id + slot. Literal because this runs pre-`npm ci`. Sync by hand
+ * with opus-plus-flash.yaml — rename there = rename here, else this check
+ * silently stops firing.
  */
 export const AGENT_WORKER_MODEL_ID = "flash-agsdk-worker";
-
-/**
- * The select slot that leaf belongs to — the left-hand side of the spec.
- *
- * Kept beside the leaf id and under the same hand-sync rule, because a spec is
- * only valid as a PAIR. Writing the leaf name on its own is the single most
- * likely mistake anyone makes here: it is the part that carries meaning, the
- * part every document quotes, and the part that reads like a complete answer.
- * It is not one, and until this script grew `--enable-agent` there was nothing
- * that spelled the pair correctly on the user's behalf.
- */
 export const AGENT_WORKER_SLOT = "gemini-flash";
 
-/** The full, valid spec that selects the agent path. Never assembled by hand. */
+/** Full valid spec that selects the agent path. Never assembled by hand. */
 export const AGENT_WORKER_SELECT = `${AGENT_WORKER_SLOT}=${AGENT_WORKER_MODEL_ID}`;
 
 /**
- * Split an SDLC_SELECT spec into pairs, and say which pieces are not pairs.
- *
- * This deliberately mirrors `parseSelectOverrides` in src/routing.ts, including
- * its validity rule (`slot=option`, comma-separated, neither side empty). The
- * duplication is forced — this script runs before `npm ci`, so it cannot import
- * the server — but the DISAGREEMENT it replaced was worse than the duplication.
- *
- * Before this function existed, the two sides read the same string differently:
- * the server threw on anything without an `=`, while `selectsAgentWorker` below
- * just found no match and returned false. So a spec of `flash-agsdk-worker` —
- * the leaf name alone, the obvious guess — produced a setup check that reported
- * green, skipped building the Python environment because it believed the agent
- * path was not selected, and handed the user a run that died at policy load with
- * the premium phases already paid for. A malformed spec is now a blocking
- * problem, which is what it always was in fact.
+ * Mirrors parseSelectOverrides in routing.ts (same validity rule; duplication
+ * forced by pre-`npm ci` constraint). Malformed → blocking, or the leaf name
+ * alone would silently look "green" here and throw at policy load.
  */
 export function parseSelectSpec(spec) {
   const pairs = {};
@@ -380,13 +241,8 @@ export function parseSelectSpec(spec) {
 }
 
 /**
- * Where the agent worker's Python environment lives.
- *
- * Fourth copy of this path, and the reason is the same as adcPath()'s: nothing
- * here can import the server's TypeScript. The authority is
- * `workerVenvPython()` in mcp/gemini-flash-server/src/delegation/workerProcess.ts
- * — that is what actually launches the interpreter, so if the two ever disagree,
- * that one is right and this one is the bug.
+ * Duplicated from workerProcess.ts's workerVenvPython (pre-`npm ci`
+ * constraint). If they disagree, that one is authoritative.
  */
 export function workerPaths(pluginRoot) {
   const workerDir = join(pluginRoot, "mcp", "gemini-flash-server", "worker");
@@ -398,38 +254,24 @@ export function workerPaths(pluginRoot) {
 }
 
 /**
- * Has this install asked for Gemini-as-an-agent?
- *
- * Everything the agent path needs — Python 3.10+, a virtualenv, the Antigravity
- * SDK — is checked ONLY when this returns true. Someone on the model path never
- * touches Python, and telling them their setup is broken because they have no
- * virtualenv would be a false alarm on the check that is supposed to be the
- * trustworthy one.
- *
- * Deliberately a substring-free parse rather than `includes(...)`: SDLC_SELECT
- * is a comma-separated list of `slot=option` pairs, and a slot NAMED after the
- * worker would otherwise read as a selection OF it.
+ * Has this install selected the agent? Gates Python/venv/SDK checks so
+ * model-path installs never get false alarms. Parsed as pairs, not
+ * `includes()` — a slot named after the leaf would otherwise read as a
+ * selection OF it.
  */
 export function selectsAgentWorker(env = {}) {
   const { pairs } = parseSelectSpec(usableEnv(env).SDLC_SELECT);
   return Object.values(pairs).includes(AGENT_WORKER_MODEL_ID);
 }
 
-/**
- * The blocking problem raised by a spec the server will refuse to parse.
- *
- * Returns null when there is nothing wrong, so the caller reads as a list of
- * conditions rather than a branch. The message quotes the offending piece
- * verbatim and spells the correct pair, because the whole failure is that the
- * two look interchangeable and only one of them is.
- */
+/** Blocking finding for a spec the server will refuse to parse. */
 export function selectSpecProblem(env = {}) {
   const spec = usableEnv(env).SDLC_SELECT;
   const { invalid } = parseSelectSpec(spec);
   if (invalid.length === 0) return null;
 
-  // A bare leaf name is the specific mistake worth naming, because the fix is
-  // not "read the syntax" but "you were one word short".
+  // Bare leaf name deserves a specific message — fix is "one word short",
+  // not "read the syntax".
   const bareLeaf = invalid.includes(AGENT_WORKER_MODEL_ID);
   return {
     id: "select-spec",
@@ -449,34 +291,16 @@ export function selectSpecProblem(env = {}) {
 }
 
 /**
- * Can this install use the agent path at all?
- *
- * The Antigravity worker calls Vertex with `vertex=True` and application default
- * credentials — see the client construction in worker/gemini_worker.py. There is
- * no API-key door into it. So an install whose only Gemini credential is a
- * `GEMINI_API_KEY` can select the agent path, build the Python environment, pass
- * every offline check, and still fail at the first delegated packet with an
- * authentication error, having been told at no point that the combination it
- * chose cannot work.
- *
- * Takes the state computed by vertexCredentialState() rather than raw facts, so
- * that "what counts as a Vertex credential" is decided in exactly one place.
- * Only the `credential` state is a yes: `project-only` is a project ID that
- * authenticates nothing on a machine outside Google's own fleet, and `broken` is
- * a credential we are certain cannot sign.
+ * Can the agent path work? Only `credential` counts — `project-only`
+ * authenticates nothing off Google's fleet; `broken` cannot sign.
  */
 export function hasVertexCredentials(vertex = null) {
   return vertex?.state === "credential";
 }
 
 /**
- * Turn observed facts into an ordered problem list.
- *
- * Kept pure so the decision table is testable without installing anything.
- * `severity: "blocking"` means a run cannot succeed; "warning" means a run
- * can start but some policies will fail. Only blocking problems fail the exit
- * code, because a user running the Claude-only policy legitimately has no
- * Gemini credentials and must not be told their setup is broken.
+ * Facts → ordered problem list. Pure. `blocking` fails the exit code;
+ * `warning` limits which policies run.
  */
 export function evaluate({
   nodeMajor,
@@ -485,24 +309,11 @@ export function evaluate({
   hasDist,
   hasAdcFile = false,
   env = {},
-  /**
-   * What vertexCredentialState() made of the credentials on this machine, or
-   * null to have it inferred from `hasAdcFile` alone — see assumedVertexState().
-   */
+  /** vertexCredentialState result, or null to infer from `hasAdcFile`. */
   vertex = null,
-  /**
-   * Whether `gcloud` is on PATH. Defaults to true because almost every fix
-   * string below recommends it, and a checker that assumes the tool is missing
-   * would nag every correctly-set-up machine. Only an observed absence is worth
-   * saying out loud, and only when we are about to send someone to run it.
-   */
+  /** Defaults to true — only observed absence is worth naming. */
   hasGcloud = true,
-  /**
-   * What was found when the agent worker's Python environment was probed, or
-   * `null` when it was not probed because this install did not ask for it.
-   * `{ hasVenv, sdkImportable, detail }` — `detail` carries whatever the probe
-   * learned (a version string, an import error) so the message can quote it.
-   */
+  /** {hasVenv, sdkImportable, detail} or null when this install didn't ask for the agent. */
   agentWorker = null,
 }) {
   const problems = [];
@@ -525,8 +336,7 @@ export function evaluate({
     });
   }
 
-  // The two artifacts a fresh install never carries. Both are repairable
-  // in place, so --fix resolves them rather than sending the user away.
+  // The two artifacts a fresh install never carries. --fix repairs both.
   if (!hasNodeModules) {
     problems.push({
       id: "mcp-dependencies",
@@ -547,18 +357,13 @@ export function evaluate({
     });
   }
 
-  // Everything below asks "is this credential set?", and the honest answer
-  // depends on discarding values that look set but carry no information. Do
-  // that once, here, so no individual check can be fooled by a placeholder.
+  // Discard placeholder-looking values once so no downstream check is fooled.
   const declaredPlaceholders = unexpandedDeclaredEnv(env);
   const realEnv = usableEnv(env);
   const vertexState = vertex ?? assumedVertexState(realEnv, hasAdcFile);
 
-  // Every fix below that recommends gcloud says so through this, so that a
-  // machine without gcloud is told once, at the moment it is being sent to run
-  // it, instead of being handed a command that will not be found. Inlined rather
-  // than raised as its own problem because a missing gcloud is only a problem for
-  // someone who needs it — an AI Studio install never touches it.
+  // Every gcloud-recommending fix goes through this so a machine without
+  // gcloud is told once, when it matters.
   const gcloudLogin = hasGcloud
     ? "`gcloud auth application-default login`"
     : "`gcloud auth application-default login` — but gcloud is not on this machine's PATH, " +
@@ -579,8 +384,7 @@ export function evaluate({
     });
   }
 
-  // Credentials are reported, never repaired: writing a key anywhere on the
-  // user's behalf is not this script's business.
+  // Credentials reported, never written by this script.
   if (!realEnv.ANTHROPIC_API_KEY) {
     problems.push({
       id: "anthropic-key",
@@ -592,9 +396,8 @@ export function evaluate({
     });
   }
 
-  // A credential we are CERTAIN is broken, reported before the "have you got one"
-  // question below, because the answer to that question would be "yes" and the
-  // user would be left looking at a green light over a file that cannot sign.
+  // Reported before the "have you got one" question below — that would answer
+  // "yes" and leave a green light over a file that cannot sign.
   if (vertexState.state === "broken") {
     problems.push({
       id: "gemini-credentials-broken",
@@ -609,30 +412,22 @@ export function evaluate({
             "An explicit GOOGLE_APPLICATION_CREDENTIALS takes precedence over the gcloud file, so leaving a broken one set " +
             "hides a working login."
           : `Run ${gcloudLogin} to write a fresh credentials file over the unusable one.`) +
-        // The AI Studio door is named here because this problem now stands in for
-        // the generic "no credentials" warning, which is where that alternative
-        // would otherwise have been offered.
+        // AI Studio door named because this finding stands in for the generic
+        // "no credentials" warning.
         ` The AI Studio path is the other way in, if you would rather not fix this one: get a key at ` +
         `https://aistudio.google.com/app/apikey and put it in ${ENV_ADVICE}.`,
     });
   }
 
-  // `state === "broken"` is excluded rather than allowed to fall through. A broken
-  // credential fails hasGeminiCredentials(), so without this the same machine
-  // collects two findings for one cause, and the second one — "No Gemini
-  // credentials found" — flatly contradicts the first, which just said a
-  // credential is present and unusable. The blocking problem above already
-  // carries both doors in its fix, so nothing is lost by staying quiet here.
+  // Broken is excluded — hasGeminiCredentials returns false for it, but the
+  // blocking finding above already covers it; a second finding here would
+  // flatly contradict the first.
   if (
     vertexState.state !== "broken" &&
     !hasGeminiCredentials({ env: realEnv, vertex: vertexState })
   ) {
-    // Two distinct situations, and telling them apart is the point. Someone with
-    // nothing set has not started; someone with only GOOGLE_CLOUD_PROJECT set
-    // believes they have finished, and is the one who gets hurt — that variable
-    // names a billing project and authenticates nothing, but it is truthy, it is
-    // the variable every Google Cloud tutorial mentions first, and until this
-    // check told them apart it counted as a credential here.
+    // project-only vs nothing: the former reads as "credentials done" and is
+    // the one that hurts.
     const projectOnly = vertexState.state === "project-only";
     problems.push({
       id: "gemini-credentials",
@@ -655,26 +450,17 @@ export function evaluate({
     });
   }
 
-  // A spec the server cannot parse, checked before anything downstream of it.
-  // It comes first among the agent-path problems because everything below reads
-  // the same variable: while it is malformed, the agent path is neither on nor
-  // off, and every other message about it would be guessing.
+  // A malformed spec first — while it is bad, the agent path is neither on
+  // nor off and every other message about it would guess.
   const specProblem = selectSpecProblem(realEnv);
   if (specProblem) problems.push(specProblem);
 
-  // Selected the agent path with no way to authenticate to it. The worker builds
-  // its client with `vertex=True` and application default credentials and has no
-  // API-key branch at all, so an AI-Studio-only install fails at the first
-  // delegated packet — after the premium phases are billed — with an auth error
-  // that says nothing about the choice that caused it.
+  // Agent selected with no Vertex credential. The worker is ADC-only; a
+  // GEMINI_API_KEY doesn't help.
   if (selectsAgentWorker(realEnv) && !hasVertexCredentials(vertexState)) {
-    // `project-only` is separated out and left non-blocking on purpose. It is the
-    // one state this script genuinely cannot resolve offline: inside Google Cloud
-    // it is a working setup whose credential lives on a metadata server, and on a
-    // laptop it is a dead end. Failing the exit code would break every legitimate
-    // Cloud Build and Cloud Run install; passing it silently is what #170 is
-    // about. So it is said out loud, and pointed at the one cheap thing that
-    // actually settles it.
+    // project-only left non-blocking: it's a working setup inside Google Cloud
+    // (metadata-server credential) and a dead end on a laptop, and this script
+    // cannot tell the two apart offline.
     const unproven = vertexState.state === "project-only";
     problems.push({
       id: unproven ? "agent-worker-credentials-unproven" : "agent-worker-credentials",
@@ -701,11 +487,8 @@ export function evaluate({
     });
   }
 
-  // The agent path's prerequisites. Blocking rather than warning, because this
-  // install has already declared it will route mechanical work there: the
-  // adapter's constructor refuses without a working interpreter, pre-flight
-  // exercises that constructor, and the run halts. Saying so here — before a
-  // run is even started — is the same information one step earlier.
+  // Agent-path prerequisites. Blocking — this install has already declared
+  // it will route work there, and the adapter constructor throws without them.
   if (agentWorker) {
     if (!agentWorker.hasVenv) {
       problems.push({
@@ -714,10 +497,8 @@ export function evaluate({
         message:
           `SDLC_SELECT routes the mechanical tier to '${AGENT_WORKER_MODEL_ID}', which runs a Python ` +
           "agent worker, but the worker has no Python environment. Every mechanical task would fail.",
-        // --fix is named first because it is the one repair that works on both
-        // install routes. `node tools/setup.mjs` exists only in a clone; an
-        // installed plugin has no tools/ directory, and sending someone there
-        // from a plugin cache is a dead end.
+        // --fix first: it works on both install routes. `node tools/setup.mjs`
+        // exists only in a clone.
         fix:
           "Re-run this check with --fix, which builds the environment. On a clone, " +
           "`node tools/setup.mjs` does the same and asks first. Or set GEMINI_WORKER_PYTHON " +
@@ -733,10 +514,7 @@ export function evaluate({
           (agentWorker.detail ? ` (${agentWorker.detail})` : "") +
           ". The interpreter starts and then dies at its first import, inside a subprocess, " +
           "which is a much harder failure to read than this line.",
-        // Same repair as the missing-environment case, and for the same reason:
-        // --fix rebuilds with `venv --clear`, which empties the existing
-        // directory first, so a broken environment is replaced rather than
-        // patched. Nothing to delete by hand.
+        // --fix rebuilds with `venv --clear`; nothing to delete by hand.
         fix:
           "Re-run this check with --fix, which rebuilds the environment from scratch. " +
           "The commonest cause is an environment built against an interpreter that has since " +
@@ -748,26 +526,16 @@ export function evaluate({
   return { ok: problems.every((p) => p.severity !== "blocking"), problems };
 }
 
-// ─── observation + repair (IO; thin by design) ────────────────────────
+// ─── observation + repair ──────────────────────────────────────────────
 
 function onPath(cmd) {
   return spawnSync("which", [cmd], { encoding: "utf8" }).status === 0;
 }
 
 /**
- * Probe the agent worker's Python, or return null if this install never asked
- * for it.
- *
- * The import is actually attempted rather than inferred from the presence of a
- * directory, because "the package folder is there" and "the package imports on
- * this interpreter" come apart often enough to matter — a venv built against a
- * Python that was later upgraded or uninstalled looks perfectly healthy on disk
- * and fails on its first line.
- *
- * GEMINI_WORKER_PYTHON is honoured here for the same reason the adapter honours
- * it: someone who already maintains a suitable environment should not be told
- * to build a second one. Same name, same precedence — see resolveWorkerPython()
- * in src/delegation/workerProcess.ts.
+ * Import attempted, not inferred from directory presence — a venv built
+ * against an upgraded/uninstalled interpreter looks healthy on disk and
+ * fails on its first import.
  */
 function observeAgentWorker(pluginRoot, env) {
   if (!selectsAgentWorker(env)) return null;
@@ -778,26 +546,19 @@ function observeAgentWorker(pluginRoot, env) {
 
   const probe = spawnSync(python, ["-c", "import google.antigravity"], { encoding: "utf8" });
   if (probe.status === 0) return { hasVenv: true, sdkImportable: true, detail: null };
-  // The last line of a traceback is the exception; the rest is machinery no
-  // one reading a setup report needs.
+  // Last line of a traceback is the exception.
   const stderr = (probe.stderr || "").trim().split("\n").filter(Boolean).pop() ?? null;
   return { hasVenv: true, sdkImportable: false, detail: stderr };
 }
 
 /**
- * `env` is a parameter rather than a read of `process.env` because
- * `--enable-agent` writes a selection this process will never see: settings
- * files are read by Claude Code at session start, so the variable only reaches
- * the environment on the NEXT session. Passing the selection in lets the same
- * invocation that turns the agent path on also build the Python environment it
- * needs, instead of reporting green and leaving a second command to be run.
+ * `env` is a parameter so `--enable-agent` can pass in the selection it just
+ * wrote (settings files aren't read until the next Claude Code session).
  */
 function observe(pluginRoot, env = process.env) {
   const { nodeModules, distEntry } = mcpPaths(pluginRoot);
-  // The credential files are opened and read, not merely stat-ed. Every state
-  // this distinguishes — a truncated key, a service-account path left pointing at
-  // a deleted file, a project ID mistaken for a login — passes an existence check
-  // and fails a real request, which is the gap this whole function closes.
+  // Credential files are opened and read, not merely stat-ed — a truncated
+  // key or a path to a deleted file passes existsSync and fails a real call.
   const realEnv = usableEnv(env);
   const adcFile = adcPath();
   return {
@@ -819,13 +580,7 @@ function observe(pluginRoot, env = process.env) {
   };
 }
 
-/**
- * Install dependencies and build the server, in that order.
- *
- * `npm ci` rather than `npm install`: the lockfile is committed, and a build
- * that silently resolves different versions than the ones we verified is a
- * worse outcome than a loud failure.
- */
+/** `npm ci`, not `npm install` — resolve exactly the verified lockfile. */
 function repair(pluginRoot, log) {
   const { serverDir } = mcpPaths(pluginRoot);
   for (const [label, args] of [
@@ -842,24 +597,14 @@ function repair(pluginRoot, log) {
   return true;
 }
 
-/**
- * The oldest Python the Antigravity SDK accepts.
- *
- * Not a style preference — `google-antigravity` declares `requires-python
- * >= 3.10`, and macOS ships 3.9 as `/usr/bin/python3`, so the machine's default
- * interpreter is the one interpreter guaranteed not to work.
- */
+/** google-antigravity requires-python >= 3.10; macOS /usr/bin/python3 is 3.9. */
 export const MIN_PYTHON = [3, 10];
 
 /**
- * Find an interpreter new enough to run the worker, newest name first.
- *
- * Version-suffixed names are tried before bare `python3` because a bare
- * `python3` is whatever happens to be first on PATH — frequently the system 3.9
- * — and finding a usable one under an explicit name is worth more than finding
- * an unusable one under the obvious name. Each candidate is asked its own
- * version rather than trusted by name, since `python3.12` on PATH can be a
- * symlink to anything.
+ * Version-suffixed names before bare `python3` — the bare one is whatever's
+ * first on PATH, often the system 3.9. Each candidate is asked its own
+ * version rather than trusted by name (a `python3.12` symlink can point
+ * anywhere).
  */
 export function findWorkerPython(run = spawnSync, resolve = onPath) {
   for (const name of ["python3.13", "python3.12", "python3.11", "python3.10", "python3"]) {
@@ -877,18 +622,10 @@ export function findWorkerPython(run = spawnSync, resolve = onPath) {
 }
 
 /**
- * Create the agent worker's virtual environment and install the SDK into it.
- *
- * A virtualenv rather than the machine's Python for two reasons: `pip install`
- * into a Homebrew or system interpreter is refused outright on current setups
- * (PEP 668), and pinning the SDK inside the plugin means upgrading it can never
- * disturb anything else the user has installed.
- *
- * Lives here, rather than in tools/setup.mjs, so both installation routes share
- * one implementation — the clone route imports this function, and the plugin
- * route reaches it through `--fix`. A plugin-cache install has no tools/
- * directory, so a repair that only existed there would be unreachable for
- * exactly the users who most need it.
+ * A virtualenv (not the machine's Python): PEP 668 refuses `pip install` into
+ * Homebrew/system interpreters, and pinning the SDK here can't disturb the
+ * user's environment. Both install routes reach this — plugin route via
+ * `--fix`, clone route by import.
  */
 export function buildWorkerEnvironment(pluginRoot, log = () => {}) {
   const { workerDir, venvPython } = workerPaths(pluginRoot);
@@ -903,14 +640,8 @@ export function buildWorkerEnvironment(pluginRoot, log = () => {}) {
 
   log(`  → creating the worker environment with ${python.command} (${python.version})`);
   for (const [label, cmd, args] of [
-    // --clear empties an existing .venv before rebuilding, and is the whole
-    // reason this function can be used as a repair rather than only as an
-    // install. Without it, `venv` on an existing directory leaves site-packages
-    // in place, so the commonest breakage — an environment whose interpreter
-    // was upgraded or removed underneath it — would survive its own repair and
-    // report the same failure again. Every caller reaches here only because the
-    // environment is missing or already known to be broken, so there is nothing
-    // healthy to lose.
+    // --clear empties an existing .venv so this can rebuild a broken
+    // environment. Callers only reach here when it's missing or known broken.
     ["creating the virtual environment", python.command, ["-m", "venv", "--clear", ".venv"]],
     ["installing the Antigravity SDK", venvPython, ["-m", "pip", "install", "--quiet", "-r", "requirements.txt"]],
   ]) {
@@ -927,27 +658,9 @@ export function buildWorkerEnvironment(pluginRoot, log = () => {}) {
 }
 
 /**
- * Say out loud what this script cannot prove, but only to the people it can
- * cost money.
- *
- * Everything above is offline by design, and on the model path that is the
- * whole story: a green report there really does mean the next run will
- * dispatch. On the agent path it does not. Three failure modes are invisible to
- * every check in this file, because none of them is a missing file — the billing
- * project's Antigravity entitlement (403), whether the resolved region actually
- * serves the model (404), and whether the credential that looks complete on disk
- * has since been revoked or expired (401). All three surface at the FIRST
- * delegated packet, which is after requirements, design and task planning have
- * been billed to the premium tier.
- *
- * That third one is the honest limit of the credential inspection above. Reading
- * a file can prove a credential is malformed; nothing offline can prove a
- * well-formed refresh token is still live.
- *
- * So a green report is told to say so. Returns null on the model path, and on
- * any install that is not yet green — someone still fixing a blocking problem
- * does not need a second command to run, and the probe would fail on the same
- * cause anyway.
+ * Point green agent-path installs at the probe — the offline checks here
+ * can't see 403 (entitlement), 404 (region), 401 (stale credential). Null on
+ * model-path or non-green installs.
  */
 export function agentProbeHint(pluginRoot, env = {}, ok = true) {
   if (!ok || !selectsAgentWorker(env)) return null;
@@ -963,29 +676,15 @@ export function agentProbeHint(pluginRoot, env = {}, ok = true) {
 }
 
 /**
- * Tell an install that the agent path has become available since it was set up.
- *
- * The gap this closes: the setup wizard asks the agent-path question only when it
- * can see Google credentials, because the Antigravity SDK signs with ADC and has
- * no API-key door — offering it to an AI-Studio-only machine would be offering
- * something that cannot work. That is right at install time and wrong forever
- * after. Somebody who installs first and runs `gcloud auth application-default
- * login` a week later has the door open and is never told: the wizard is a
- * one-time command they have no reason to run again, and this check — the command
- * they DO run again — said nothing about it.
- *
- * Deliberately not a `problem`. Nothing is broken; the model path is a legitimate
- * choice and most installs should stay on it. It is one line of information, shown
- * only when the door is genuinely open (a real credential, not a named project)
- * and the install is not already through it.
+ * Note when the agent door has opened since the wizard ran. The wizard asks
+ * once at install; someone running `gcloud auth application-default login` a
+ * week later would otherwise never be told. Not a `problem` — the model path
+ * is a valid choice.
  */
 export function agentPathAvailableHint(pluginRoot, vertex = null, env = {}) {
   if (!hasVertexCredentials(vertex)) return null;
   if (selectsAgentWorker(env)) return null;
-  // The script's own resolved path, exactly as agentProbeHint does it. A bare
-  // `node verify-setup.mjs` is only correct if the reader happens to be standing
-  // in the scripts directory, which on the plugin route is a cache path nobody
-  // has ever cd'd into.
+  // Absolute path — the reader is not standing in the plugin-cache scripts dir.
   return (
     `\n  This machine now has credentials for the Antigravity SDK agent path, which\n` +
     `  the mechanical tier is not using. The model path is the cheaper default and\n` +
@@ -996,23 +695,10 @@ export function agentPathAvailableHint(pluginRoot, vertex = null, env = {}) {
 }
 
 /**
- * Which settings file a selection should be written into.
- *
- * Claude Code reads four, in this precedence order: managed, local
- * (`.claude/settings.local.json`), project (`.claude/settings.json`), user
- * (`~/.claude/settings.json`). All four accept an `env` block, and it applies to
- * the session and to every subprocess it spawns — which is what the bundled MCP
- * server is.
- *
- * The default is the LOCAL project file, and the choice matters:
- *   - not user-level, because the agent path is a per-project decision and a
- *     machine-wide switch silently changes every other folder the user opens.
- *   - not the shared project file, because that one is committed. Whether the
- *     agent path works depends on the machine — its Python, its entitlement —
- *     so a teammate who clones the repo would inherit a selection that may be
- *     wrong for them, and inherit it invisibly.
- * `--user` is offered for the person who genuinely wants it everywhere, and
- * says so out loud when it writes.
+ * Default = .claude/settings.local.json (per-project, not committed).
+ * User-level would silently change every folder. The shared project file is
+ * committed and a teammate would inherit a selection that may be wrong for
+ * their machine. `--user` opts into machine-wide.
  */
 export function settingsPathFor(scope, cwd, home = homedir()) {
   return scope === "user"
@@ -1021,19 +707,10 @@ export function settingsPathFor(scope, cwd, home = homedir()) {
 }
 
 /**
- * Return a copy of a settings object with the agent selection added or removed.
- *
- * Pure, so the merge rules are testable without touching anyone's real
- * configuration — and these rules are the whole point of the function:
- *   - every other key, and every other variable in `env`, is preserved. This
- *     file is the user's, not ours; it commonly holds their API keys.
- *   - disabling removes the pair for OUR slot only, keeping any other slot the
- *     user selected. It removes SDLC_SELECT entirely when nothing is left,
- *     rather than leaving an empty string behind, because an empty spec and an
- *     absent one must behave identically and only one of them looks intentional.
- *   - an existing malformed spec is discarded rather than merged. It could not
- *     have been doing anything except breaking policy load, and preserving it
- *     would mean this command cannot repair the exact mistake it exists for.
+ * Pure merge. Preserves every other key and env variable (the file is the
+ * user's; often holds their API keys). Disabling removes only our slot;
+ * removes SDLC_SELECT entirely when nothing is left (empty and absent must
+ * behave identically). Malformed existing spec is discarded, not merged.
  */
 export function withAgentSelection(settings, enabled) {
   const next = { ...(settings ?? {}) };
@@ -1056,12 +733,8 @@ export function withAgentSelection(settings, enabled) {
 }
 
 /**
- * Is this `.mcp.json` entry the bundled server this repo builds?
- *
- * Matched on the server SCRIPT rather than the entry's key, because the key is
- * the user's to choose and only the script identifies the program. A folder that
- * registers some other MCP server must not have its environment rewritten by a
- * flag about our routing.
+ * Match by server script, not entry key — the key is the user's to choose,
+ * only the script identifies the program.
  */
 export function isBundledServerEntry(server) {
   const argv = Array.isArray(server?.args) ? server.args.join(" ") : "";
@@ -1069,20 +742,10 @@ export function isBundledServerEntry(server) {
 }
 
 /**
- * Return a copy of an `.mcp.json` document with the selection applied to every
- * entry that is our bundled server.
- *
- * WHY THIS EXISTS AT ALL. The clone route registers the server through a project
- * `.mcp.json` whose `env` block is EXHAUSTIVE — a stdio MCP server does not
- * inherit the parent environment, so anything not listed there never reaches the
- * server (see the env block written by tools/setup.mjs). On that route a
- * selection written only into a settings file is read by Claude Code, applied to
- * the session, and then dropped at the server boundary: the flag reports success
- * and changes nothing. Writing both places is what makes one command correct on
- * both installation routes.
- *
- * The plugin route has no `.mcp.json` of ours, so `updated` comes back empty
- * there and the settings write is the whole of the change.
+ * On the clone route, .mcp.json's `env` block is EXHAUSTIVE (stdio MCP
+ * servers inherit nothing). A selection written only to a settings file
+ * would be dropped at the server boundary, so both files are updated.
+ * Plugin route has no .mcp.json of ours; `updated` comes back empty there.
  */
 export function withMcpSelection(config, enabled) {
   const servers = config?.mcpServers;
@@ -1092,9 +755,8 @@ export function withMcpSelection(config, enabled) {
   const updated = [];
   for (const [name, server] of Object.entries(servers)) {
     if (!isBundledServerEntry(server)) continue;
-    // A server entry carries its variables under `env`, exactly as a settings
-    // file does, so the same merge rules apply verbatim — including preserving
-    // the API keys tools/setup.mjs forwarded into that block.
+    // Same merge rules as a settings file — preserves API keys tools/setup.mjs
+    // forwarded into `env`.
     nextServers[name] = withAgentSelection(server, enabled);
     updated.push(name);
   }
@@ -1102,17 +764,10 @@ export function withMcpSelection(config, enabled) {
 }
 
 /**
- * Write the selection into a settings file, creating it if it is not there, and
- * into this folder's `.mcp.json` when one registers the bundled server.
- *
- * Returns `{ ok, path, mcpPath, spec, detail }` rather than throwing or exiting,
- * so the caller owns the reporting and the exit code.
- *
- * A file that exists but does not parse is refused rather than replaced. It is
- * the user's configuration and may hold the only copy of a key they have;
- * overwriting it to fix a routing preference is a trade nobody would accept if
- * asked. That refusal happens BEFORE anything is written, so a bad file leaves
- * the install exactly as it was rather than half-changed.
+ * Write the selection to a settings file (creating it if missing) and to
+ * this folder's .mcp.json when it registers our bundled server. An
+ * unparseable existing file is refused BEFORE anything is written — it may
+ * hold the user's only copy of a key.
  */
 export function enableAgentPath({ scope = "project", cwd = process.cwd(), enabled = true } = {}) {
   const path = settingsPathFor(scope, cwd);
@@ -1152,9 +807,8 @@ export function enableAgentPath({ scope = "project", cwd = process.cwd(), enable
     };
   }
 
-  // Only when the file was already there. Creating a `.mcp.json` from a routing
-  // flag would register a server pointing at a path this script has no business
-  // guessing; that file is `npm run setup`'s to write.
+  // Only when the file already exists. Creating a .mcp.json from a routing
+  // flag would guess a server path; `npm run setup` writes that file.
   let mcpPath = null;
   if (existsSync(mcpJsonPath)) {
     const { config, updated } = withMcpSelection(mcpDoc.current, enabled);
@@ -1189,8 +843,7 @@ function report({ ok, problems }, log) {
   return ok;
 }
 
-// Run only when executed directly, so the pure helpers above can be imported
-// by the test suite without triggering a setup check.
+// Direct-execution gate so the test suite can import the pure helpers.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const log = (m) => console.log(m);
@@ -1201,9 +854,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 
   log("\nAI-SDLC orchestrator — setup check");
 
-  // The environment this check reasons about. It starts as the real one and is
-  // replaced below when a selection is written, so that turning the agent path
-  // on and building what it needs happen in a single command.
+  // Real env, replaced below when a selection is written — so --enable-agent
+  // can also build what the selection needs.
   let env = process.env;
 
   if (enableAgent && disableAgent) {
@@ -1226,32 +878,23 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         ? `  ✓ Mechanical tier set to the Antigravity SDK agent path (SDLC_SELECT=${written.spec}) in ${written.path}.`
         : `  ✓ Mechanical tier set back to the model path in ${written.path}.`
     );
-    // Said plainly because the two scopes fail differently and both failures are
-    // quiet: a user-level write changes every folder on the machine, and a
-    // project-level one is invisible from anywhere else.
     log(
       scope === "user"
         ? "    This is machine-wide — it applies to every folder you open from now on."
         : "    This applies to this folder only. Add --user to set it machine-wide."
     );
-    // Named rather than left silent: on a clone this is the file that actually
-    // decides, and a reader who later edits only the settings file would be
-    // puzzled when nothing changed.
+    // Named because on a clone route this is the file that actually decides.
     if (written.mcpPath) log(`    Also updated ${written.mcpPath}, which is what this folder's server reads.`);
-    // Not a nicety: Claude Code reads settings when a session starts, so the
-    // session that ran this command still has the old value. Everything below
-    // uses the new one; the session does not.
+    // Settings files are read at session start; the current session has the old value.
     log("    It reaches Claude Code when you start a new session in this folder.");
   }
 
-  // --enable-agent implies --fix. Turning the agent path on without building the
-  // Python environment it needs would leave a blocking problem that a second
-  // command has to clear, which is the two-step dance this flag exists to end.
+  // --enable-agent implies --fix so a single command sets the selection AND
+  // builds what it needs.
   const repairing = shouldFix || enableAgent;
 
-  // The observation is kept, not just the verdict derived from it: the hints
-  // printed at the end need the credential state, and re-deriving it there would
-  // mean reading the same files twice and risking two different answers.
+  // Keep the observation, not just the verdict — the end-of-run hints need
+  // the credential state and re-deriving it could give two different answers.
   let observed = observe(pluginRoot, env);
   let state = evaluate(observed);
   const needsRepair = state.problems.some(
@@ -1266,10 +909,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     }
   }
 
-  // Repairable for the same reason the build is: this install asked for the
-  // agent path, and everything the agent path needs is ours to create. Kept
-  // separate from repair() above because it is conditional — an install that
-  // never selected the agent worker must not have a virtualenv built for it.
+  // Conditional: an install that never selected the agent worker must not
+  // have a virtualenv built for it.
   const needsWorker = state.problems.some(
     (p) => p.id === "agent-worker-python" || p.id === "agent-worker-sdk"
   );
@@ -1285,9 +926,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const passed = report(state, log);
   for (const hint of [
     agentProbeHint(pluginRoot, env, passed),
-    // Shown last, and only to installs that are on the model path with the agent
-    // door open. It is the one thing this check can tell someone that no problem
-    // in the list above ever will, because nothing about it is wrong.
+    // Only shown to model-path installs with the agent door open.
     agentPathAvailableHint(pluginRoot, observed.vertex, env),
   ]) {
     if (hint) log(hint);

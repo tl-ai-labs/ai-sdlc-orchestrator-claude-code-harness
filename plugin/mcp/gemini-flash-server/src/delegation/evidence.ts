@@ -1,33 +1,12 @@
 /**
- * evidence.ts — what the delegated agent actually did, recorded so a reader
- * does not have to take anyone's word for it.
+ * Delegation evidence. Inventory the workdir before and after the worker
+ * runs; diff into added/modified/removed. Records "files that changed while
+ * the agent worked" — not "files the agent wrote" (no per-tool attribution;
+ * cannot rule out another writer in the same window).
  *
- * THE PROBLEM THIS SOLVES. A delegated run and a non-delegated run look
- * identical from the outside: same phases, same gates, same generated tree,
- * same report. The one thing that changed — that a Gemini agent opened the
- * directory, ran commands and wrote the files itself — leaves no trace anybody
- * can point at. `worker-task-*.md` shows what the worker was ASKED to do and
- * `worker-usage-*.json` shows what it COST; neither shows what it CHANGED.
- *
- * So the adapter takes an inventory of the working directory immediately
- * before the worker starts and again immediately after it exits, and this
- * module turns the pair into a list of files added, modified and removed. That
- * list, next to the tool-call count, is the delegation's receipt.
- *
- * WHAT THE RECEIPT DOES NOT CLAIM. It records what changed inside the working
- * directory across the worker's lifetime — nothing more. It cannot attribute a
- * change to a specific tool call, and it cannot prove no other process touched
- * the directory in the same window (a watch task, an editor save). For the way
- * this repo runs — one packet at a time, into a directory the orchestrator
- * generates into — the two are the same thing in practice, and the honest
- * phrasing is the one the report uses: "files that changed while the agent
- * worked", not "files the agent wrote".
- *
- * PURE BY DEFAULT. `diffInventories` and `buildDelegationRecord` are plain
- * input-to-output mappings, pinned offline. `takeInventory` is the one function
- * that touches a filesystem, and its tests build a real temporary directory
- * rather than mocking `fs` — the interesting failures are things a mock would
- * happily agree with, like a symlink loop or an unreadable file.
+ * `diffInventories` and `buildDelegationRecord` are pure. `takeInventory`
+ * uses a real temp directory in its tests — mocking fs would agree with a
+ * symlink loop or an unreadable file that a real walk wouldn't.
  */
 
 import { createHash } from "node:crypto";
@@ -35,15 +14,9 @@ import { lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 /**
- * Directory names never descended into.
- *
- * Two different reasons, both of which produce a wrong answer rather than a
- * slow one. `node_modules`, `.git`, `.venv`, `__pycache__` and the build
- * outputs are machine-generated: a worker that runs `npm install` or a test
- * command would otherwise "change" tens of thousands of files, burying the
- * dozen it actually wrote. `.sdlc` is where the delegation evidence itself
- * lands when no telemetry path was supplied — walking it would make each
- * delegation report the previous delegation's receipt as a change it caused.
+ * Never descended into. Machine-generated dirs (npm install fills node_modules)
+ * would bury the real changes; .sdlc is where evidence lands — walking it
+ * would make each delegation report the previous one's receipt.
  */
 export const INVENTORY_SKIP_DIRS = new Set([
   ".git",
@@ -64,26 +37,16 @@ export const INVENTORY_SKIP_DIRS = new Set([
 ]);
 
 /**
- * Files larger than this are fingerprinted by size rather than by content.
- *
- * Hashing is what makes an edit visible; reading a 200 MB artifact into memory
- * twice per delegation to discover it did not change is not. Two megabytes is
- * far above any source file and far below anything worth streaming. The
- * trade-off is stated in the record itself (`hashed: false` on those entries):
- * a change to a large file that preserves its byte length exactly would be
- * missed, which for build artifacts and media is a rounding error and for
- * source files cannot happen, because source files are under the cap.
+ * Files larger than this get a size surrogate instead of a content digest.
+ * Above any source file, below anything worth streaming. `hashed: false`
+ * records the trade — a byte-length-preserving change to a big file would
+ * be missed (rounding error for build/media, impossible for source).
  */
 export const HASH_BYTE_CAP = 2 * 1024 * 1024;
 
 /**
- * Ceiling on how many files one inventory records.
- *
- * A guard against pathological inputs, not a tuning knob — a working directory
- * with more than this many source files is not a directory this plugin
- * generated. When it trips, the inventory says so (`truncated: true`) and the
- * record repeats it, because a silently partial diff would understate what the
- * agent did and read exactly like a small, tidy delegation.
+ * File cap. Guard against being pointed at a home directory. `truncated: true`
+ * rides into the diff so a partial list is never read as complete.
  */
 export const INVENTORY_FILE_CAP = 20_000;
 
@@ -114,24 +77,11 @@ const EMPTY_INVENTORY = (root: string): Inventory => ({
 });
 
 /**
- * Walk a directory and fingerprint every file in it.
- *
- * `exclude` takes ABSOLUTE paths, and exists for one specific hazard: the
- * worker's own output directory can sit inside the working directory (it does
- * whenever no telemetry path was supplied), and the Antigravity SDK writes its
- * session save-dir in there while the agent runs. Without the exclusion, every
- * delegation would report its own brief, its own sidecar and the SDK's
- * transcript as files the agent changed — evidence contaminated by the act of
- * collecting it.
- *
- * Symlinks are recorded by where they point, never followed. A link is one
- * line in the inventory — creating one shows up as an addition, re-pointing one
- * as a modification — and the walk never descends through it, so a link aimed
- * at its own ancestor cannot loop.
- *
- * Never throws. An inventory is evidence about a run, not part of it, and a
- * permission error on one file must not fail a delegation the user has already
- * paid for — the unreadable path is recorded and the walk continues.
+ * Walk a directory and fingerprint every file. `exclude` takes ABSOLUTE
+ * paths, used for the worker's own out-dir (SDK writes session state there
+ * while the agent runs — otherwise every delegation reports its own evidence
+ * as a change). Symlinks recorded by target, never followed (no loop risk).
+ * Never throws; unreadable paths land in `unreadable` and the walk continues.
  */
 export function takeInventory(root: string, opts: { exclude?: string[] } = {}): Inventory {
   const inv = EMPTY_INVENTORY(root);
@@ -154,26 +104,16 @@ export function takeInventory(root: string, opts: { exclude?: string[] } = {}): 
       if (isExcluded(abs)) continue;
       let st;
       try {
-        // lstat, NOT stat: stat resolves a symlink and would describe the
-        // target, so a link to a directory would report `isDirectory()` and the
-        // walk below would descend through it. A link aimed at its own
-        // ancestor — which an agent is perfectly capable of creating in the
-        // workspace it was given — would then recurse until the process ran out
-        // of stack, hanging a delegation that had already been paid for.
+        // lstat, not stat: stat resolves symlinks; a link aimed at its own
+        // ancestor would then recurse until the stack ran out.
         st = lstatSync(abs, { throwIfNoEntry: true });
       } catch (err: any) {
-        // A file that vanished between readdir and stat is the normal case
-        // here, not an anomaly: the agent may be writing temporary files while
-        // the after-inventory runs.
+        // A vanished file is the normal case — the agent may be writing
+        // temporaries while the after-inventory runs.
         inv.unreadable.push({ path: rel(root, abs), reason: reason(err) });
         continue;
       }
       if (st.isSymbolicLink()) {
-        // Recorded by target rather than hashed, so the link is one line
-        // instead of a whole second copy of a tree that is already inventoried
-        // under its real path. Creating a link shows as an addition and
-        // re-pointing one as a modification, which is the part a reader cares
-        // about; a dangling link keeps its entry with an empty target.
         let target = "";
         try {
           target = readlinkSync(abs);
@@ -188,7 +128,7 @@ export function takeInventory(root: string, opts: { exclude?: string[] } = {}): 
         walk(abs);
         continue;
       }
-      if (!st.isFile()) continue; // sockets, fifos, devices — not deliverables
+      if (!st.isFile()) continue; // sockets, fifos, devices
       if (!push(inv, fingerprint(root, abs, st.size))) return;
     }
   };
@@ -198,13 +138,7 @@ export function takeInventory(root: string, opts: { exclude?: string[] } = {}): 
   return inv;
 }
 
-/**
- * Append one entry, honouring the file cap. Returns false once the cap is hit,
- * which is the caller's signal to stop walking. The cap is a guard against
- * being pointed at a home directory by accident, not a normal operating mode —
- * `truncated` rides along into the diff so a partial list is never read as a
- * complete one.
- */
+/** Returns false once the cap is hit — caller stops walking. */
 function push(inv: Inventory, entry: InventoryEntry): boolean {
   if (inv.entries.length >= INVENTORY_FILE_CAP) {
     inv.truncated = true;
@@ -225,8 +159,8 @@ function fingerprint(root: string, abs: string, size: number): InventoryEntry {
       hashed: true,
     };
   } catch {
-    // Unreadable content with a readable stat — record it as size-only rather
-    // than dropping the file, so its appearance or disappearance still shows.
+    // Unreadable content, readable stat — size surrogate keeps
+    // appearance/disappearance visible.
     return { path, size, digest: `size:${size}`, hashed: false };
   }
 }
@@ -248,15 +182,7 @@ export interface InventoryDiff {
   unreadable: string[];
 }
 
-/**
- * What changed between two inventories of the same directory.
- *
- * Modification is a digest change, not an mtime change. An agent that rewrites
- * a file with byte-identical content has not modified anything a reader cares
- * about, and a tool that rewrites timestamps — `npm install`, a formatter run
- * over untouched files, a `touch` in a test script — would otherwise fill the
- * receipt with changes nobody made.
- */
+/** Modification = digest change, not mtime change. */
 export function diffInventories(before: Inventory, after: Inventory): InventoryDiff {
   const prior = new Map(before.entries.map((e) => [e.path, e]));
   const added: string[] = [];
@@ -284,14 +210,7 @@ export function diffInventories(before: Inventory, after: Inventory): InventoryD
   };
 }
 
-/**
- * Schema tag on every record.
- *
- * The report reads these files from a directory it globs, so it will meet
- * records written by older versions of this plugin. A version here lets it say
- * "written by a newer plugin than this report understands" instead of silently
- * rendering a half-empty row.
- */
+/** Schema tag; the report can meet records from older plugin versions. */
 export const DELEGATION_RECORD_SCHEMA = "delegation-record/1";
 
 export interface DelegationRecordInput {
@@ -314,20 +233,11 @@ export interface DelegationRecordInput {
 }
 
 /**
- * Assemble the JSON a reader (and `tools/report.mjs`) gets.
+ * Assemble the delegation JSON.
  *
- * ONE FILE, NOT A JOIN ACROSS THREE. The brief, the sidecar and the telemetry
- * event each hold a piece of a delegation, and the pieces are keyed
- * differently — the sidecar by filename, the event by `task_id`. This record
- * carries `task_id` explicitly so the report joins on a field rather than by
- * reconstructing the adapter's filename convention, which would be a fourth
- * hand-maintained copy of a rule that already exists in `evidenceStem`.
- *
- * `cable` is copied out of the sidecar rather than out of the adapter's own
- * configuration on purpose. The adapter knows what it INTENDED — project P,
- * region R, through the Antigravity SDK. The sidecar is written by the worker
- * process after the session ran, so it reports what the run actually used. When
- * the two disagree, the one worth keeping is the worker's.
+ * `cable` comes from the sidecar (what the worker actually used), not the
+ * adapter's configuration (what it intended). When they disagree, the
+ * worker's is the ground truth.
  */
 export function buildDelegationRecord(i: DelegationRecordInput): Record<string, unknown> {
   const sidecar = i.sidecar ?? {};
@@ -354,9 +264,7 @@ export function buildDelegationRecord(i: DelegationRecordInput): Record<string, 
     cost_usd: i.costUsd,
     tokens: i.tokens,
     tool_calls: {
-      // The count is the drained total; the list stops at the worker's own
-      // recording cap. Reporting `sample.length` as the count would understate
-      // every long session by exactly the amount that makes it interesting.
+      // `count` is the true total; `sample` stops at the worker's recording cap.
       count: Number(sidecar.tool_call_count ?? 0),
       truncated: sidecar.tool_calls_truncated === true,
       sample: Array.isArray(sidecar.tool_calls) ? sidecar.tool_calls : [],

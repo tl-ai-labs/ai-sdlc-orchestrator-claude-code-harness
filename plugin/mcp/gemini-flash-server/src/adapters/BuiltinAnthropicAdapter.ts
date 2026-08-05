@@ -1,11 +1,8 @@
 /**
- * BuiltinAnthropicAdapter — calls Claude (Opus / Sonnet / Haiku) directly
- * via @anthropic-ai/sdk with prompt caching enabled on the system block.
- *
- * In production, the Claude Code plugin would route Anthropic work through
- * the host CLI's own model dispatch (no API key needed in our process).
- * This adapter exists so the Pass-2 driver script can run standalone
- * outside the CC session — useful for CI replays and judge.
+ * BuiltinAnthropicAdapter — direct @anthropic-ai/sdk calls with prompt
+ * caching on the system block. Under `--auth=estimated` the orchestrator
+ * runs the direct tier in-session and this adapter is never constructed;
+ * under `--auth=vendor` it is.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -13,15 +10,10 @@ import type { AttemptRecord, ExecutionResult, ModelConfig, TaskPacket } from "..
 import { computeCostUsd, estimateTokens } from "../pricing.js";
 import type { ModelAdapter } from "./ModelAdapter.js";
 
-// Fallback when the policy YAML doesn't declare max_output_tokens_absolute
-// for a Claude model. 32000 is the current documented Opus 4.7 output ceiling;
-// keeping it conservative avoids sending a request the API rejects with 400
-// while still leaving headroom for 3 doublings from a 5000-token premium ceiling.
+// Fallback when the policy YAML omits max_output_tokens_absolute. 32000 is
+// the current Opus 4.7 output ceiling.
 const CLAUDE_ABSOLUTE_OUTPUT_TOKENS_FALLBACK = 32000;
 
-// Cap on how many times the adapter will double the ceiling in one execute().
-// After this many doublings we fail the packet with terminal_reason
-// "output_cap_at_model_max" — the report surfaces the fact without editorial.
 const MAX_DOUBLINGS = 3;
 
 export class BuiltinAnthropicAdapter implements ModelAdapter {
@@ -46,13 +38,9 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
   }
 
   async execute(packet: TaskPacket): Promise<ExecutionResult> {
-    // Split packet.inputs into stable (project-level artifacts that recur
-    // across every packet in a pass) and dynamic (per-task inputs). The
-    // stable ones lift into the system block with `cache_control: ephemeral`
-    // so Anthropic prompt caching amortizes the input cost across dispatches.
-    // Cached-read is billed at ~10% of the input rate — this is what makes
-    // the doubling loop economical: retries hit the cache on input, so only
-    // output tokens are re-paid.
+    // Stable inputs lift into the system block with `cache_control:
+    // ephemeral`; cache-read is billed at ~10% of input, so a doubling-loop
+    // retry re-pays output tokens only.
     const { stableBlock, userPrompt } = splitStableFromDynamic(packet, this.cachedSystem);
 
     const absoluteCeiling =
@@ -61,9 +49,8 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
     const attempts: AttemptRecord[] = [];
     let ceiling = Math.min(packet.budget.maxOutputTokens, absoluteCeiling);
 
-    // Doubling loop. The successful attempt (or the final failed one) supplies
-    // the ExecutionResult; the full attempts[] array is returned so the caller
-    // can emit one telemetry event per attempt with a shared task_id.
+    // Doubling loop; returns attempts[] so the caller can emit one telemetry
+    // event per attempt with a shared task_id.
     for (let attemptNumber = 1; attemptNumber <= MAX_DOUBLINGS + 1; attemptNumber++) {
       const attemptStart = Date.now();
       const baseReq: any = {
@@ -78,11 +65,9 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
       let resp: any;
       let vendorError: string | undefined;
       try {
-        // Some Claude model versions reject the `temperature` parameter with
-        // HTTP 400 ("temperature not supported"), others accept it. Rather
-        // than encode a model-version regex here (which drifts), we send with
-        // temperature and, if the API rejects it, retry without. Cost: at
-        // most one extra request per model, and only on first use.
+        // Some Claude versions reject `temperature` with 400; send with it,
+        // retry without on that specific error (at most one extra request
+        // per model, first use only).
         try {
           resp = await this.client.messages.create({ ...baseReq, temperature: 0.2 });
         } catch (e: any) {
@@ -106,8 +91,7 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
           error: vendorError,
         };
         attempts.push(attempt);
-        // Vendor errors are not output-cap; no reason to double. Bail with
-        // the accumulated attempts so the report can show the failure chain.
+        // Not an output-cap; no reason to double.
         return this.finalizeResult(attempts, /*parsed*/ null, /*cacheHit*/ false, "vendor_error");
       }
 
@@ -148,16 +132,13 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
         return this.finalizeResult(attempts, parsed, attemptTokens.input_cached > 0, "success");
       }
 
-      // Hit output cap. If we still have doublings available and headroom
-      // under the model absolute, double and try again.
+      // Hit output cap. Double if there's headroom and retries remain.
       const nextCeiling = Math.min(ceiling * 2, absoluteCeiling);
-      const atModelAbsolute = nextCeiling <= ceiling; // clamp collapsed → we're already at absolute
+      const atModelAbsolute = nextCeiling <= ceiling; // clamp collapsed
       const doublingsExhausted = attemptNumber > MAX_DOUBLINGS;
       if (doublingsExhausted || atModelAbsolute) {
-        // Two distinct signals: doubling budget out (retry the packet with
-        // a higher initial next run) vs already at the vendor absolute
-        // (raising the initial won't help — the packet is too big for this
-        // model). Both truncate; the reason field tells them apart.
+        // `_budget_exhausted`: raise the initial ceiling on the next run.
+        // `_at_model_absolute`: packet too big for this model.
         const truncatedParsed = { raw: text, _truncated: true };
         return this.finalizeResult(
           attempts,
@@ -171,7 +152,7 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
       ceiling = nextCeiling;
     }
 
-    // Unreachable — the loop always returns. Included for TS control-flow.
+    // Unreachable; the loop always returns. Kept for TS control flow.
     return this.finalizeResult(attempts, null, false, "output_cap_doubling_budget_exhausted");
   }
 
@@ -185,10 +166,8 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
       | "output_cap_at_model_absolute"
       | "vendor_error",
   ): ExecutionResult {
-    // Aggregate tokens and cost across every attempt so the ExecutionResult's
-    // top-level totals reflect what actually got billed for the packet, not
-    // just the final attempt. This is what makes the report's per-packet cost
-    // honest even when doubling was triggered.
+    // Sum across attempts so the top-level totals reflect what was billed
+    // for the packet, not just the final attempt.
     const totalTokens = attempts.reduce(
       (acc, a) => ({
         input: acc.input + a.tokens.input,
@@ -214,12 +193,8 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
   }
 }
 
-// Recognized as project-level, stable across every packet in a pass.
-// These files' contents don't change once written; caching them saves
-// input cost on every subsequent dispatch. Matched on basename so the
-// heuristic survives the brief and output_dir living at any repo path
-// (e.g. brief at examples/<study>/brief.md, artifacts at
-// examples/<study>/passes/<run-id>/requirements.md).
+// Stable across every packet in a pass; matched on basename so the heuristic
+// survives the brief and output dir living at any repo path.
 const STABLE_INPUT_BASENAMES = new Set([
   "brief.md",
   "requirements.md",
@@ -229,8 +204,7 @@ const STABLE_INPUT_BASENAMES = new Set([
 function isStableInput(input: { path: string; reason: string }): boolean {
   const basename = input.path.split("/").pop() ?? input.path;
   if (STABLE_INPUT_BASENAMES.has(basename)) return true;
-  // Also accept explicit orchestrator marking. Rule 6 (orchestrator.md)
-  // instructs the orchestrator to mark inputs that don't change per packet.
+  // Explicit orchestrator marking per orchestrator.md rule 6.
   return /\bstable\b/i.test(input.reason);
 }
 
@@ -241,9 +215,6 @@ function splitStableFromDynamic(
   const stableInputs = packet.inputs.filter(isStableInput);
   const dynamicInputs = packet.inputs.filter((i) => !isStableInput(i));
 
-  // Stable block: any pre-set system prompt from setSystemCache() plus
-  // the stable inputs, formatted the same way as the dynamic inputs so
-  // the model sees consistent structure.
   const stableParts: string[] = [];
   if (extraCachedSystem) stableParts.push(extraCachedSystem);
   if (stableInputs.length > 0) {
@@ -254,7 +225,6 @@ function splitStableFromDynamic(
   }
   const stableBlock = stableParts.join("\n\n");
 
-  // Dynamic user prompt: everything that changes per packet.
   const dynamicInputsBlock = dynamicInputs
     .map((s) => `### ${s.path} — ${s.reason}\n\`\`\`\n${s.content}\n\`\`\``)
     .join("\n\n");

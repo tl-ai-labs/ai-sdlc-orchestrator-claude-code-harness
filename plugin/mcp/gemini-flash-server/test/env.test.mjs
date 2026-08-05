@@ -1,15 +1,7 @@
 /**
- * Regression tests for environment sanitation.
- *
- * Background: plugin.json declares the MCP server's environment as `"${VAR}"` pass-throughs
- * from the host. When the host never exported the variable, the placeholder arrives at this
- * process verbatim — the literal string `${GOOGLE_CLOUD_PROJECT}`, which is truthy and
- * therefore indistinguishable from a real value to every consumer downstream. On 2026-08-04
- * that made selectGeminiBackend throw on an unrecognised GEMINI_BACKEND, killed every
- * mechanical-tier dispatch, and turned a mixed-tier run into an all-premium one.
- *
- * These tests pin three things: what counts as unusable, that only the declared variables
- * are ever touched, and that legitimate values which merely resemble a placeholder survive.
+ * Regression tests for env sanitation. Pins: what counts as unusable
+ * (`${NAME}` verbatim, empty, undefined), that only declared vars are
+ * touched, and that legitimate `$`-containing values survive.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";

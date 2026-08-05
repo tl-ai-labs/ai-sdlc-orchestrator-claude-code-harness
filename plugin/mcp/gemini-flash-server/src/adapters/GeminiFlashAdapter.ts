@@ -1,17 +1,8 @@
 /**
- * GeminiFlashAdapter — calls Gemini 3.5 Flash, with explicit context caching
- * for the stable project header to amortize the input cost across many
- * TaskPackets in a single pass.
- *
- * The adapter is auth-agnostic. Google exposes Gemini through two front doors
- * — AI Studio (an API key) and Vertex AI (Application Default Credentials on a
- * GCP project) — and which one is reachable depends entirely on whose machine
- * this runs on. Both live behind `GeminiTransport` in ./geminiTransports.ts,
- * chosen from the credentials present at construction time. Everything below
- * this line — the output-cap doubling loop, prompt assembly, JSON-schema mode,
- * per-attempt telemetry — is identical on both doors and is written once.
- *
- * Falls back gracefully to implicit caching if explicit cache creation fails.
+ * GeminiFlashAdapter — Gemini 3.5 Flash with explicit context caching for
+ * the stable project header. Auth-agnostic: the two doors live behind
+ * `GeminiTransport`, picked from credentials at construction. Falls back to
+ * implicit caching if explicit cache creation fails.
  */
 
 import type {
@@ -32,33 +23,22 @@ import {
   type GenerateOutcome,
 } from "./geminiTransports.js";
 
-// Fallback when the policy YAML doesn't declare max_output_tokens_absolute
-// for a Gemini model. 8192 is the current Gemini 3.5 Flash generation ceiling
-// on the standard API; overriding via the YAML is the way to lift it if the
-// vendor bumps it in the future.
+// Fallback when the policy YAML omits max_output_tokens_absolute. 8192 is
+// the current Gemini 3.5 Flash ceiling.
 const GEMINI_ABSOLUTE_OUTPUT_TOKENS_FALLBACK = 8192;
 
-// Cap on doublings per execute() — matches the Anthropic adapter so the
-// report can compare per-model doubling behavior on equal footing.
 const MAX_DOUBLINGS = 3;
 
-// TTL on the explicit context cache, in seconds. One hour comfortably covers
-// a full pass; the cache is per-run and never reused across runs, so a longer
-// TTL would only keep paying storage for content nothing will read again.
+// One hour comfortably covers a full pass.
 const CACHE_TTL_SECONDS = 3600;
 
 export class GeminiFlashAdapter implements ModelAdapter {
   readonly id: string;
   readonly modelConfig: ModelConfig;
   private transport: GeminiTransport;
-  /** Which door we came in through — surfaced in errors and setup logs. */
+  /** Which door was picked — surfaced in errors and setup logs. */
   readonly backendChoice: BackendChoice;
-  /**
-   * The policy's pinned rates adjusted for where the calls actually run.
-   * Identical to `modelConfig.pricing` on every default run; differs only when
-   * a user has pinned a Vertex region. Every cost figure this adapter reports
-   * is computed from this, never from the raw pin.
-   */
+  /** Policy pricing adjusted for a pinned Vertex region. Cost reports read from here. */
   readonly billedPricing: ModelPricing;
   private cachingAvailable = true;
   private cacheNamesByKey = new Map<string, string>(); // cacheContext -> cachedContentName
@@ -67,19 +47,11 @@ export class GeminiFlashAdapter implements ModelAdapter {
   constructor(config: ModelConfig) {
     this.id = config.id;
     this.modelConfig = config;
-    // auth.env names the API-key variable the policy expects. It is only one
-    // of the two doors: buildGeminiTransport falls through to Vertex/ADC when
-    // that variable is absent, and throws — naming both doors — when neither
-    // is available. Throwing here, at construction, is deliberate: it happens
-    // during setup validation, before any premium-tier phase has been billed.
+    // Throws at construction (before any premium spend) if neither door works.
     const { transport, choice } = buildGeminiTransport(config.auth?.env ?? "GEMINI_API_KEY");
     this.transport = transport;
     this.backendChoice = choice;
-    // The rates in the policy YAML are the flat global/AI-Studio card. Vertex
-    // charges +10% on regional endpoints for Gemini 3+, so on a pinned region
-    // the pinned rates are not the billed rates. Resolve the difference once,
-    // here, rather than at each call site — a cost path that is right in one
-    // place and stale in another is worse than one that is wrong everywhere.
+    // Resolve the +10% regional surcharge once, here — never at call sites.
     this.billedPricing = applyVertexSurcharge(config.pricing, {
       backend: choice.backend,
       location: transport.location,
@@ -104,14 +76,12 @@ export class GeminiFlashAdapter implements ModelAdapter {
       if (cacheName) {
         this.cacheNamesByKey.set(cacheKey, cacheName);
       } else {
-        // The transport told us caching is unavailable on this door (e.g. no
-        // resolvable GCP project on the Vertex path). Stop re-attempting it.
+        // Transport says caching is unavailable (e.g. no resolvable project).
         this.cachingAvailable = false;
       }
     } catch {
-      // Explicit caching not available (quota / model mismatch / API change /
-      // minimum-token floor not met). Fall back to inlining the stable header
-      // on every call: more expensive, but the run still completes.
+      // Quota / model mismatch / minimum-token floor. Inline the header on
+      // every call instead — more expensive, still completes.
       this.cachingAvailable = false;
     }
   }
@@ -124,10 +94,8 @@ export class GeminiFlashAdapter implements ModelAdapter {
     const absoluteCeiling =
       this.modelConfig.max_output_tokens_absolute ?? GEMINI_ABSOLUTE_OUTPUT_TOKENS_FALLBACK;
 
-    // Free-text marker on outputSchema means the caller wants fenced code
-    // blocks / plain markdown back, not JSON. Skip JSON mode entirely and
-    // don't forward the marker as a schema (Google's API rejects unknown
-    // fields like `__free_text__` with 400).
+    // `__free_text__` marker means the caller wants markdown, not JSON.
+    // Skip JSON mode; the marker never reaches the vendor (400 on unknown).
     const wantsJson = packet.outputSchema && !(packet.outputSchema as any).__free_text__;
 
     const attempts: AttemptRecord[] = [];
@@ -168,25 +136,14 @@ export class GeminiFlashAdapter implements ModelAdapter {
       const text = outcome.text;
       const usage = outcome.usage;
 
-      // Gemini's promptTokenCount is the WHOLE prompt, cached portion
-      // included — cachedContentTokenCount is a subset of it, not a sibling.
-      // computeCostUsd() requires the two counts to be disjoint (fresh at the
-      // full rate, cached at the discounted one), so subtract before handing
-      // them over. Without this the cached tokens are billed twice in the
-      // report — once at the full rate and once at the cached rate — which
-      // makes an effective cache look more expensive than no cache at all.
-      // Math.max guards against a vendor edge case where the reported cached
-      // count exceeds the prompt count; a negative would corrupt the totals.
+      // `cachedContentTokenCount` is a SUBSET of `promptTokenCount` — subtract
+      // to get disjoint counts (fresh at full rate, cached at discounted).
+      // Without this, cached tokens are billed twice.
       const cachedTokens =
         usage.cachedContentTokenCount ?? (cacheHit ? estimateTokens(this.cacheHeader) : 0);
       const promptTokens = usage.promptTokenCount ?? estimateTokens(userPrompt);
-      // Output is candidates + thoughts: Gemini 3.x bills the reasoning it
-      // does before answering at the output rate, and reports it in a separate
-      // field. See billedOutputTokens for why reading candidates alone is a
-      // large under-report rather than a small one. The estimate fallback
-      // stands in only when the vendor sent no usage block at all — a
-      // zero-length answer with a real usage block is genuinely zero
-      // candidate tokens, and `?? 0` inside the helper keeps it that way.
+      // Output = candidates + thoughts (see billedOutputTokens). Estimate
+      // stands in only when the vendor sent no usage block at all.
       const outputTokens =
         usage.candidatesTokenCount === undefined && usage.thoughtsTokenCount === undefined
           ? estimateTokens(text)
@@ -197,9 +154,8 @@ export class GeminiFlashAdapter implements ModelAdapter {
         output: outputTokens,
       };
 
-      // Gemini reports the finish reason on the first candidate. "MAX_TOKENS"
-      // is the truncation signal; anything else (STOP, SAFETY, RECITATION,
-      // OTHER) is a genuine termination and should not double.
+      // Only MAX_TOKENS triggers doubling. STOP/SAFETY/RECITATION/OTHER are
+      // genuine terminations.
       const finishReason = outcome.finishReason;
       const hitOutputCap = finishReason === "MAX_TOKENS";
 

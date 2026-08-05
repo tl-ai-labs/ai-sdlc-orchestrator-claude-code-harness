@@ -1,17 +1,7 @@
 /**
- * command.test.mjs — guards the two-prompt user surface.
- *
- * The whole product promise is that a person types two prompts and gets a run:
- * one prompt to install, one to start. The second prompt is `/sdlc-run`, and it
- * only holds if the command genuinely needs no arguments — a single required
- * flag turns "type this" into "read the docs first", which is the failure this
- * file exists to prevent.
- *
- * These are contract tests over the command and agent definitions. They cannot
- * prove the run behaves correctly — only a paid end-to-end run does that — but
- * they do catch the cheap, silent regressions: a flag creeping back into the
- * wizard, the output contract drifting between the command and the agent that
- * has to honour it, or a documented path that no longer exists.
+ * Guards the two-prompt user surface: `/sdlc-run` takes no arguments (a
+ * required flag turns "type this" into "read the docs first"). Contract
+ * tests over command + agent definitions — catches regressions cheaply.
  */
 
 import { test } from "node:test";

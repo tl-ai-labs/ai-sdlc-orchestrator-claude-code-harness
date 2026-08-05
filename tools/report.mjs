@@ -1,13 +1,8 @@
 #!/usr/bin/env node
 /**
- * report.mjs — post-run summary for an AI-SDLC pass.
+ * Post-run report for an AI-SDLC pass.
  *
- * Usage: node tools/report.mjs <path-to-pass-directory>
- *
- * Reads telemetry.jsonl + manifest.json from the pass directory and prints
- * a tabular summary to stdout. The SDLC work is shown first; costs (with
- * the runner-overhead carve-out) come below so the reader is not surprised
- * by the total-vs-SDLC delta.
+ * Usage: node tools/report.mjs <path-to-pass-directory> [--markdown]
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
@@ -42,11 +37,8 @@ const events = readFileSync(telemetryPath, "utf8")
 
 const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) : {};
 
-// ─── SDLC phase classification ────────────────────────────────────────
-// Anything in this set is treated as SDLC-productive work in the summary.
-// Everything else is bucketed as "runner overhead" (planning, reads,
-// bookkeeping, debug loops, shell). Adjust here if your policy uses phases
-// with different names.
+// SDLC-productive phases; everything else is "runner overhead" (planning,
+// reads, debug loops, shell).
 const SDLC_PHASES = new Set([
   "requirements_analysis",
   "architecture_design",
@@ -59,14 +51,10 @@ const SDLC_PHASES = new Set([
   "test_run",
 ]);
 
-// ─── aggregate per phase, tracking provenance ─────────────────────────
-// Every event carries a `provenance` field per orchestrator rule 6:
-//   - "vendor"    — real vendor-reported tokens (Anthropic API returned
-//                   its usage block; or MCP-dispatched Gemini call)
-//   - "estimated" — char/3.8 derived, used only when the subagent handled
-//                   the call in-session without an API key
-//   - (absent)    — legacy runs pre-dating rule 6's two-mode design;
-//                   treated as "unknown" and reported as such
+// `provenance` field per orchestrator rule 6:
+//   "vendor"    — real vendor-reported tokens
+//   "estimated" — char/3.8 heuristic for direct-tier calls under estimator mode
+//   absent      — legacy pre-rule-6; reported as "unknown"
 const phaseAgg = new Map(); // phase → {calls, tokIn, tokOut, cost, provCounts}
 let sdlcCost = 0, sdlcCalls = 0;
 let overheadCost = 0, overheadCalls = 0;
@@ -74,11 +62,7 @@ let totalIn = 0, totalOut = 0, totalCached = 0;
 let vendorEvents = 0, estimatedEvents = 0, unknownEvents = 0;
 let vendorCost = 0, estimatedCost = 0;
 
-// Per-packet aggregation across doubling attempts. Each TaskPacket may span
-// multiple TelemetryEvents (one per attempt); they share a task_id. We collapse
-// them into a single per-packet record so the report shows one row per packet
-// rather than N rows per doubling. This is what makes the doubling loop
-// invisible at the summary level but auditable at the raw-event level.
+// Collapse doubling attempts into one per-packet record (same task_id).
 const packetAgg = new Map(); // task_id → {phase, module, model, attempts, finalCeiling, totalCost, terminal}
 
 for (const e of events) {
@@ -108,9 +92,8 @@ for (const e of events) {
   rec.provCounts[prov === "vendor" ? "vendor" : prov === "estimated" ? "estimated" : "unknown"]++;
   phaseAgg.set(p, rec);
 
-  // Per-packet accumulation for the "output-ceiling attempts" observation
-  // (n=1 report section). We only track packets whose events carry the
-  // attempt fields — older telemetry without them contributes nothing.
+  // Only packets whose events carry attempt fields — older telemetry
+  // contributes nothing.
   const tid = e.task_id;
   if (tid && (e.attempt_number != null || e.ceiling_used != null)) {
     const pkt = packetAgg.get(tid) ?? {
@@ -135,14 +118,11 @@ for (const e of events) {
   }
 }
 
-// Packets that needed at least one doubling. These are the interesting cases
-// for the "Findings from this run (n=1)" section — every other packet fit
-// under its initial ceiling first-shot.
 const packetsWithDoublings = [...packetAgg.values()]
   .filter((p) => p.attempts > 1)
   .sort((a, b) => b.attempts - a.attempts);
 
-// Overall mode label. Any events without vendor tokens taint the whole run.
+// Any non-vendor event taints the whole run's label.
 const runMode =
   vendorEvents > 0 && estimatedEvents === 0 && unknownEvents === 0 ? "vendor" :
   estimatedEvents > 0 && vendorEvents === 0                        ? "estimated" :
@@ -232,18 +212,9 @@ if (asMarkdown) {
   console.log(`  Prov key: V = vendor-authoritative, E = estimated, M = mixed, ? = legacy\n`);
 }
 
-// ─── Delegated to an agent worker ─────────────────────────────────────
-// Printed only when this run actually delegated. Without it a connector run
-// reads exactly like an ordinary one — same phases, same gates, same totals —
-// and the one thing that changed leaves no trace in the report.
-//
-// TWO SOURCES, DELIBERATELY JOINED. Each receipt describes ONE worker process:
-// its tool calls, its wall-clock, and what changed in the workspace while it
-// held it. Telemetry describes every ATTEMPT at the packet. They are joined on
-// `task_id` because a retried packet writes its receipt under the same
-// filename each time — so the receipt is the last attempt while the cost is
-// all of them, and the row says so with a marker rather than quietly showing
-// one attempt's cost as the packet's.
+// Delegation section — receipts join to telemetry on task_id. A retried
+// packet's receipt describes the LAST attempt while telemetry's cost covers
+// ALL attempts; markers on the row flag the difference.
 const delegationDir = join(passDir, "delegation");
 const delegationFiles = existsSync(delegationDir)
   ? readdirSync(delegationDir).filter((n) => n.startsWith("worker-delegation-") && n.endsWith(".json")).sort()
@@ -255,9 +226,7 @@ const receipts = delegationFiles
     try {
       return JSON.parse(readFileSync(join(delegationDir, n), "utf8"));
     } catch {
-      // A truncated receipt — the run was killed mid-write — is counted and
-      // named below rather than dropped. A delegation missing from the table
-      // with no explanation is the one failure mode this section cannot afford.
+      // Counted and named below rather than dropped silently.
       unreadableReceipts += 1;
       return null;
     }
@@ -266,9 +235,7 @@ const receipts = delegationFiles
   .sort((a, b) => String(a.started_at).localeCompare(String(b.started_at)));
 
 if (receipts.length || unreadableReceipts) {
-  // Per-task telemetry, recomputed here rather than threaded through the
-  // aggregation above: this whole block is self-contained, and re-walking a
-  // few dozen in-memory events costs nothing.
+  // Per-task telemetry, recomputed locally to keep this block self-contained.
   const byTask = new Map();
   for (const e of events) {
     if (!e.task_id) continue;
@@ -283,9 +250,7 @@ if (receipts.length || unreadableReceipts) {
     return {
       d,
       tries: tel?.calls ?? 1,
-      // Telemetry's figure covers every attempt; the receipt's covers the one
-      // it describes. Preferring telemetry is what makes the column sum to the
-      // run total instead of undercounting a retried packet.
+      // Prefer telemetry (covers every attempt) over receipt (last attempt only).
       cost: tel ? tel.cost : (d.cost_usd ?? 0),
       joined: Boolean(tel),
     };
@@ -305,8 +270,7 @@ if (receipts.length || unreadableReceipts) {
     fileTotal.removed += r.d.files?.removed?.length ?? 0;
   }
 
-  // `+` added, `~` modified, `-` removed. Zero terms are omitted rather than
-  // printed as `+0`, so a row with real edits stands out from one without.
+  // `+` added, `~` modified, `-` removed; zero terms omitted.
   const fmtFiles = (f) =>
     [
       f.added ? `+${f.added}` : "",
@@ -320,8 +284,7 @@ if (receipts.length || unreadableReceipts) {
       removed: d.files?.removed?.length ?? 0,
     });
 
-  // Markers, explained under the table. Each one exists because the row would
-  // otherwise state something slightly untrue.
+  // Markers explained under the table.
   const marks = (r) =>
     (r.tries > 1 ? "*" : "") + (r.d.success === false ? "!" : "") + (r.joined ? "" : "?");
 
@@ -355,12 +318,8 @@ if (receipts.length || unreadableReceipts) {
   }
   notes.push(`One receipt per delegation: ${basename(delegationDir)}/worker-delegation-<packet>.json`);
 
-  // The notes and the markers are written once, for a terminal, and reused in
-  // the Markdown branch — where three of those characters are syntax. `<packet>`
-  // is swallowed as an HTML tag and disappears entirely, taking the receipt
-  // filename with it, and a lone `*` pairs with the next one to italicise
-  // everything in between. Escaped here rather than avoided in the prose,
-  // because the terminal is the primary reader and it wants the plain glyphs.
+  // Escape *, <, > for the Markdown branch — plain glyphs for the terminal,
+  // which is the primary reader.
   const md = (s) =>
     String(s).replace(/[*<>]/g, (c) => (c === "<" ? "&lt;" : c === ">" ? "&gt;" : "\\*"));
 
@@ -369,9 +328,8 @@ if (receipts.length || unreadableReceipts) {
     console.log(`${lead}\n`);
     for (const [tag, meaning] of ACTOR_LEGEND) console.log(`- \`${tag}\` — ${meaning}`);
     console.log("");
-    // The header carries the handoff tag because that is what every line under
-    // it is: one packet leaving the harness for a worker. It keeps the third
-    // legend entry from being a symbol the table never uses.
+    // Header carries the handoff tag — every line under it is a packet
+    // leaving the harness for a worker.
     console.log(`| \`${ACTOR.handoff}\` | Phase | Packet | Tool calls | Files | Time | Cost |`);
     console.log(`|---|---|---|---:|---|---:|---:|`);
     for (const r of rows) {
@@ -394,9 +352,6 @@ if (receipts.length || unreadableReceipts) {
     console.log(`  ${lead.replace(/(.{1,70})(\s|$)/g, "$1\n  ").trimEnd()}\n`);
     for (const [tag, meaning] of ACTOR_LEGEND) console.log(`  ${gutter(tag)}${meaning}`);
     console.log("");
-    // The header carries the handoff tag because that is what every line under
-    // it is: one packet leaving the harness for a worker. It keeps the third
-    // legend entry from being a symbol the table never uses.
     console.log(
       `  ${gutter(ACTOR.handoff)}${"Phase".padEnd(14)}${"Packet".padEnd(20)}${"Tools".padStart(6)}${"Files".padStart(10)}${"Time".padStart(8)}${"Cost".padStart(10)}`,
     );
@@ -438,8 +393,7 @@ if (asMarkdown) {
   console.log(`  Code files produced                                      ${String(arts).padStart(4)}\n`);
 }
 
-// Cost block — SDLC first (already shown above); runner overhead + total.
-// The "total" label depends on provenance mix — see runMode above.
+// Cost block. Total label depends on runMode.
 const totalLabel =
   runMode === "vendor"    ? "Total (vendor-billed)" :
   runMode === "estimated" ? "Total (estimator sum)"  :
@@ -510,11 +464,7 @@ if (asMarkdown) {
   console.log("");
 }
 
-// ─── Findings from this run (n=1) ─────────────────────────────────────
-// Neutral report of what happened, with a standing preamble that any single
-// run has material variance. No editorializing on which model, which policy,
-// or which mechanism "won" or "lost" — the raw telemetry.jsonl is authoritative
-// if a reader wants to draw their own conclusions.
+// ─── Findings (n=1) ────────────────────────────────────────────────────
 const findingsPreamble = [
   "This is n=1. Generation tasks have material run-to-run variance under",
   "identical settings. Before drawing conclusions about a policy's cost-quality",
@@ -531,7 +481,7 @@ if (asMarkdown) {
   console.log("");
 }
 
-// Output-ceiling doubling — factual list; no per-model editorial.
+// Output-ceiling doubling — factual list.
 if (packetsWithDoublings.length > 0) {
   if (asMarkdown) {
     console.log(`### Packets that needed output-ceiling doublings\n`);
@@ -558,8 +508,6 @@ if (packetsWithDoublings.length > 0) {
   }
 }
 
-// Next iterations — the mitigation menu, uniform across models. Every study
-// gets the same list; nothing here is per-vendor.
 const nextIterations = [
   ["Run 5+ independent passes under identical settings and report the cost / completion-rate distribution rather than a single-point number.",
    "Why: n=1 conclusions about generation quality are known to be unreliable; distribution reveals whether an outcome is systematic or a tail draw.",
@@ -589,15 +537,8 @@ if (asMarkdown) {
   console.log("");
 }
 
-// ─── Artifacts ────────────────────────────────────────────────────────
-// The list is organized so a reader can trace any number on the report
-// back to a specific file. Order:
-//   1. SDLC narrative artifacts (what the pass produced)
-//   2. Data artifacts (telemetry, manifest, packets — the numbers)
-//   3. Code output (the actual generated source tree)
-//   4. Claude Code session artifacts (raw transcripts a reviewer can grep
-//      for exact model responses, if they need to audit at that level)
-// Everything is conditional on existsSync — missing files aren't listed.
+// Artifacts. Ordered: narrative → data → code → Claude Code transcripts.
+// All entries conditional on existsSync.
 const artLines = [];
 
 // 1. SDLC narrative
@@ -631,16 +572,10 @@ for (const dir of ["prisma", "test"]) {
   if (existsSync(p)) artLines.push([dir === "prisma" ? "Prisma schema + seed" : "Tests", p + "/"]);
 }
 
-// 4. Claude Code session artifacts — computed deterministically from the
-// project directory. Claude Code writes transcripts to:
-//   ~/.claude/projects/<project-hash>/<session-id>.jsonl
-// and per-subagent transcripts to:
-//   ~/.claude/projects/<project-hash>/<session-id>/subagents/agent-*.jsonl
-// The project-hash is the absolute project path with '/' AND whitespace
-// replaced by '-' (Claude Code encodes both — missing the whitespace step
-// silently drops the transcripts when the path contains spaces).
-// We list every JSONL modified during the pass's time window; that's
-// almost always the session transcript(s) for this run.
+// 4. Claude Code session/subagent transcripts under
+// ~/.claude/projects/<project-hash>/. Hash = absolute project path with
+// '/' AND whitespace replaced by '-' (both — missing whitespace loses
+// space-containing paths).
 try {
   // Project root is four levels up from passDir
   // (examples/<study>/passes/<run-id>/ → repo root)

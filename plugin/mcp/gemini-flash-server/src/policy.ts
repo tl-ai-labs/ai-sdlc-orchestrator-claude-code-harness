@@ -1,8 +1,8 @@
 /**
- * Policy loader & validator. Supports per-run override via:
- *   1. CLI flag (--policy=<name>) handled upstream
- *   2. Project-root routing-policy.yaml (wins over plugin default)
- *   3. Plugin default in plugin/config/policies/<name>.yaml
+ * Policy loader & validator. Precedence:
+ *   1. --policy=<name> (handled upstream)
+ *   2. <projectRoot>/routing-policy.yaml
+ *   3. plugin/config/policies/<name>.yaml
  */
 
 import { readFileSync, existsSync } from "node:fs";
@@ -67,9 +67,8 @@ function validatePolicy(raw: any): Policy {
   for (const m of raw.models) validateModel(m);
   const modelIds = new Set<string>(raw.models.map((m: ModelConfig) => m.id));
   const slotNames = validateSelect(raw, modelIds);
-  // Cross-check: every rule references a known model id or a declared slot.
-  // Both are legal targets and both are checked here, at load, so a policy that
-  // would fail to route can never reach a paid dispatch.
+  // Every rule references a known model id or a declared slot; check at load
+  // so a routing failure never reaches a paid dispatch.
   raw.rules.forEach((r: any, i: number) => {
     const used = r.use ?? r.default;
     if (!used) throw new Error(`Policy rule ${i}: needs 'use' or 'default'`);
@@ -85,12 +84,8 @@ function validatePolicy(raw: any): Policy {
 
 /**
  * Validate the optional `select:` block and return the slot names it declares.
- *
- * Every failure here is one that would otherwise surface mid-run, after money
- * has been spent, as an unknown-model throw from the adapter factory. The
- * collision check earns its place separately: if a slot and a model shared a
- * name, `use: <name>` would be genuinely ambiguous, and the reader of the
- * policy — not just the code — would have no way to tell which was meant.
+ * A slot name that collides with a model id is refused: `use: <name>` would
+ * be ambiguous.
  */
 function validateSelect(raw: any, modelIds: Set<string>): Set<string> {
   const names = new Set<string>();

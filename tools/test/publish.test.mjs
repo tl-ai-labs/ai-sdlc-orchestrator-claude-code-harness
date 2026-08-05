@@ -1,15 +1,8 @@
 /**
- * publish.test.mjs — guards the things that only matter once the repo is public.
- *
- * This repo is read by people outside the organisation that wrote it. Identity
- * details that are harmless internally read as carelessness in public: a
- * package named after a repo that no longer exists, a homepage pointing at a
- * URL that 404s, an internal migration log shipped as a changelog to people who
- * were never on the old version.
- *
- * None of these break a run, which is exactly why they survive review and reach
- * a stranger's terminal. Each check below is a mechanical fact, so it holds
- * without anyone having to remember it.
+ * Guards public-facing identity: package name matches the repo, homepage
+ * URLs resolve, no internal artifacts (CHANGELOG, .DS_Store, NEXT_STEPS)
+ * ship. None break a run — each is a mechanical fact so nobody has to
+ * remember.
  */
 
 import { test } from "node:test";

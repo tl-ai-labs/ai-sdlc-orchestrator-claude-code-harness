@@ -1,19 +1,15 @@
 #!/usr/bin/env node
 /**
- * MCP server entrypoint — bundled inside the multi-model-orchestrator plugin.
- *
- * Tools exposed:
+ * MCP server entrypoint. Tools:
  *   execute_with_model   — run a TaskPacket against the model chosen by policy
- *   simulate_policy      — what-if recomputation for the dashboard
- *   log_telemetry        — append a TelemetryEvent to disk (used by hooks)
- *   load_policy          — return the active policy (debug/inspection)
+ *   simulate_policy      — recompute cost from telemetry against another policy
+ *   log_telemetry        — append a direct-tier event to disk
+ *   preflight_dispatch   — construct every adapter this run will use (no API call)
+ *   load_policy          — return the active policy (debug)
  */
 
-// MUST stay the first import. It strips environment variables that arrived as
-// unexpanded `${VAR}` placeholders — which is what plugin.json's env pass-throughs
-// hand us whenever the host never exported them — and ES module evaluation order is
-// the only thing guaranteeing it happens before any SDK reads process.env. See
-// envBootstrap.ts and env.ts for the full account of what this prevented.
+// MUST stay the first import — strips `${NAME}` placeholder env vars before
+// any SDK reads process.env. See envBootstrap.ts.
 import "./envBootstrap.js";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -49,17 +45,7 @@ const adapterCache = new Map<string, ReturnType<typeof createAdapter>>();
 let activePolicy: Policy | null = null;
 let activePolicyKey = "";
 
-/**
- * The environment variable carrying this run's answers to the policy's select
- * slots, spelled `slot=option[,slot=option...]`.
- *
- * An environment variable rather than a tool argument because the choice is a
- * property of the INSTALL, not of any one dispatch: `npm run setup` asks the
- * question once and writes the answer into `.mcp.json` (clone route) or the
- * host environment (plugin route). Making it a per-call argument would put the
- * orchestrator subagent in charge of restating it on every packet, and a single
- * forgotten restatement would silently route that packet to the other tier.
- */
+/** Slot choices, spelled `slot=option[,slot=option...]`. Property of the install. */
 const SELECT_ENV = "SDLC_SELECT";
 
 function ensurePolicy(policyName?: string, projectRoot?: string, policyPath?: string): Policy {
@@ -68,26 +54,15 @@ function ensurePolicy(policyName?: string, projectRoot?: string, policyPath?: st
   const policy = policyPath
     ? loadPolicyFromPath(policyPath)
     : loadPolicy({ policyName, projectRoot });
-  // Check the run's slot choices against THIS policy, once, here. Every policy
-  // load goes through this function, so there is no path on which a bad choice
-  // reaches routing unchecked — and failing at load means failing before the
-  // first dispatch is paid for rather than partway through a phase.
+  // Every policy load goes through here, so a bad slot choice fails at load
+  // rather than partway through a paid phase.
   validateSelectOverrides(policy, selectOverrides());
   activePolicy = policy;
   activePolicyKey = key;
   return activePolicy;
 }
 
-/**
- * This run's slot choices, re-read from the environment on each call.
- *
- * Re-read rather than captured at module load so that a test can set the
- * variable and observe the effect without restarting the server, and so the
- * parse error for a malformed spec surfaces at the call that needed it, naming
- * the offending text. `envBootstrap` has already removed the value if it
- * arrived as an unexpanded `${SDLC_SELECT}` placeholder, so an absent variable
- * here genuinely means "no choices made".
- */
+/** Re-read on every call — a test can set the variable without restarting. */
 function selectOverrides(): SelectOverrides {
   return parseSelectOverrides(process.env[SELECT_ENV]);
 }
@@ -101,47 +76,20 @@ function adapterFor(policy: Policy, modelId: string) {
 }
 
 /**
- * Prove every model in the policy can actually be dispatched to — before the run
- * spends anything.
+ * Construct every adapter the loaded policy names, before the run spends
+ * anything. Adapters are otherwise built lazily on first dispatch, where a
+ * credential problem would surface after premium-tier phases had already been
+ * billed. No API call — construction is where credential discovery happens.
+ * Adapters land in the shared cache, so the first real dispatch reuses them.
  *
- * WHY THIS EXISTS
- *
- * Adapters are constructed lazily, on first dispatch. GeminiFlashAdapter's
- * constructor is where credential discovery happens and where it throws when no
- * door into Gemini is open — a deliberate design, because construction was meant
- * to happen "during setup validation, before any premium-tier phase has been
- * billed". Nothing ever called it that early. In practice the first construction
- * happened at the first mechanical packet, which is phase 4 of 9, roughly twenty
- * minutes and several dollars of premium-tier work into a run. The 2026-08-04
- * live run failed exactly there: every mechanical dispatch died, the orchestrator
- * fell back to the premium tier, and the run silently became the opposite of the
- * cost demonstration it exists to produce.
- *
- * Calling this first closes that gap. It constructs every adapter the loaded
- * policy names, which is the same code path a real dispatch takes, and reports
- * the resolved Gemini configuration. It makes no API call and costs nothing, so
- * there is no reason not to run it every time.
- *
- * Adapters land in the shared cache, so the first real dispatch reuses what this
- * built rather than paying for construction twice.
- *
- * WHY IT TAKES THE AUTH MODE
- *
- * Which models this server actually dispatches to is not a property of the policy
- * alone — it depends on the run's auth mode, so a check that ignores the mode gets
- * the answer wrong half the time. Under `estimated` the orchestrator runs its own
- * tier inside the Claude Code session and never constructs that adapter, so a missing
- * ANTHROPIC_API_KEY is inert; halting on it (which this did on 2026-08-04) is a false
- * positive on a gate the operator is told never to override. The classification lives
- * in preflight.ts, which is unit-testable without credentials; what stays here is the
- * environment probing that is not.
+ * Takes authMode because only models this run actually dispatches to matter:
+ * under `estimated` the orchestrator runs its own tier in-session and never
+ * constructs `builtin-anthropic`, so an unset ANTHROPIC_API_KEY is inert.
+ * Classification lives in preflight.ts.
  */
 function preflightDispatch(policy: Policy, authMode: AuthMode) {
-  // A policy may now offer more than one way to reach a tier. Only the option
-  // this run selected can be dispatched to, so only it is constructed — the
-  // loser's prerequisites (a Python environment, a worker script) are not this
-  // run's problem, and halting on them would be the same false positive the
-  // auth-mode split above exists to remove.
+  // Losing options of `select:` slots are excluded: their prerequisites
+  // (Python venv, worker script) are not this run's problem.
   const notSelected = unreachableModelIds(policy, selectOverrides());
   const assessment = assessModels(
     policy.models.filter((m) => !notSelected.has(m.id)),
@@ -149,10 +97,7 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
     (modelId) => adapterFor(policy, modelId),
   );
 
-  // Report the resolved Gemini configuration alongside the pass/fail. On a
-  // healthy setup this is the line that tells the operator which project and
-  // region the run is about to bill, which is worth seeing before it starts and
-  // not only afterwards in the telemetry.
+  // Resolved Gemini configuration — the project and region the run will bill.
   const adcPath = defaultAdcPath();
   const adcFileExists = existsSync(adcPath);
   let gemini: Record<string, unknown>;
@@ -181,16 +126,13 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
     auth_mode: authMode,
     policy: { name: policy.name, version: policy.version },
     models: assessment.models,
-    // Named rather than silently omitted: "the agent leaf is not in this list
-    // because you did not select it" is a different message from "the agent leaf
-    // is not in this list because pre-flight forgot about it", and an operator
-    // reading the output has no other way to tell them apart.
+    // Named so "you did not select it" stays distinguishable from
+    // "pre-flight forgot about it".
     not_selected: [...notSelected],
     gemini,
     halt_reason: assessment.halt_reason,
-    // Failures on models this run will not dispatch to. Reported because they are
-    // true and useful — the same policy in vendor mode would not start — but they
-    // must never stop a run that was never going to touch them.
+    // Failures on models this run will not dispatch to — informational,
+    // never blocking.
     warnings: assessment.warnings,
   };
 }
@@ -314,21 +256,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           selectOverrides()
         );
         const adapter = adapterFor(policy, decision.modelId);
-        // Where the run is happening, as distinct from what it is asking for.
-        // Passed on every dispatch rather than only when a worker is selected,
-        // because the selection happens above by policy and this call site has
-        // no business knowing which adapter came back. Completion adapters
-        // ignore the argument entirely.
+        // Passed on every dispatch; completion adapters ignore it.
         const result = await adapter.execute(packet, a.cache_context, {
           project_root: a.project_root,
           work_dir: a.work_dir ?? a.project_root,
           telemetry_path: a.telemetry_path,
         });
 
-        // If the adapter ran a doubling loop, emit one TelemetryEvent per
-        // attempt, all sharing the packet's task_id. The report collapses
-        // them into a single row per packet. If it didn't loop (single
-        // attempt), we still emit exactly one event — same code path.
+        // One TelemetryEvent per attempt, all sharing the packet's task_id.
         const attempts = result.attempts ?? [
           {
             attempt_number: 1,
@@ -351,18 +286,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           module: packet.module,
           model: modelName,
           routed_by: "orchestrator" as const,
-          // The leaf id, alongside the vendor model name above. Two leaves can
-          // share a model name and differ only in how it is reached, so this is
-          // the only field that says which tier actually ran.
+          // Leaf id; the only field that distinguishes two leaves that share
+          // a vendor model name (e.g. flash-completion vs flash-agsdk-worker).
           model_id: decision.modelId,
           routing: {
             policy_name: policy.name,
             policy_version: policy.version,
             rule_index: decision.ruleIndex,
             rule_reason: decision.reason,
-            // Undefined unless the matched rule named a slot; JSON.stringify
-            // drops undefined keys, so events from unslotted policies are
-            // byte-for-byte what they were before slots existed.
+            // Undefined unless the rule went through a slot; JSON.stringify
+            // drops undefined keys, so unslotted policies produce identical
+            // events to before slots existed.
             select: decision.selection,
           },
           retry_count: packet.retry_count ?? 0,
@@ -372,11 +306,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           input_tokens: att.tokens.input,
           input_tokens_cached: att.tokens.input_cached,
           output_tokens: att.tokens.output,
-          // Already counted inside output_tokens and billed at the output rate;
-          // repeated here only so a reader can see how much of a delegation's
-          // output was thinking rather than answer. Left undefined by adapters
-          // that do not report it, and JSON.stringify drops undefined keys, so
-          // events from the completion tiers are byte-for-byte unchanged.
+          // Already counted in output_tokens and billed at the output rate;
+          // surfaced only so a reader can see how much of a delegation's
+          // output was thinking. Undefined on adapters that don't report it.
           output_tokens_reasoning: att.tokens.output_reasoning,
           cost_usd: att.cost_usd,
           latency_ms: att.latency_ms,
@@ -403,25 +335,20 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "simulate_policy": {
         const a = args as any;
         const policy = ensurePolicy(a.policy_name, undefined, a.policy_path);
-        // Simulated against the same slot choices the real run uses, so a
-        // what-if on a slotted policy prices the tier this install would
-        // actually dispatch to rather than the policy's default.
+        // Replay against the same slot choices the real run uses.
         const out = simulatePolicyCost(a.events, policy, selectOverrides());
         return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
       }
       case "log_telemetry": {
         const a = args as any;
-        // The caller here is a model reporting a call it made itself (the direct tier),
-        // so its `ts` and `latency_ms` are guesses, not measurements — overwrite both
-        // server-side before persisting. See normalizeDirectTierEvent for the full why.
+        // Direct-tier caller is a model with no clock — normalize overwrites
+        // its `ts` and nulls `latency_ms`.
         appendEvent(a.telemetry_path, normalizeDirectTierEvent(a.event as TelemetryEvent));
         return { content: [{ type: "text", text: "ok" }] };
       }
       case "preflight_dispatch": {
         const a = args as any;
-        // Parsed before the policy is loaded so a missing mode fails on the mode,
-        // not on some downstream symptom of it. parseAuthMode throws rather than
-        // defaulting — see preflight.ts for why neither default is safe.
+        // Parse before the policy loads so a missing mode fails on the mode.
         const authMode = parseAuthMode(a.auth_mode);
         const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
         const out = preflightDispatch(policy, authMode);

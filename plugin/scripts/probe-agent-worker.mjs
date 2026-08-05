@@ -1,50 +1,20 @@
 #!/usr/bin/env node
 /**
- * probe-agent-worker.mjs — spends about two cents to prove the agent path
- * actually works, before a run spends real money finding out it does not.
+ * One real delegation, ~2¢, to catch the agent-path failure modes that are
+ * invisible to the offline verify-setup.mjs: 403 (missing entitlement),
+ * 404 (region doesn't serve the model), 401 (stale credentials). All three
+ * would otherwise surface at the first delegated packet, after premium
+ * phases are billed.
  *
- * WHY THIS IS SEPARATE FROM verify-setup.mjs. That script answers "is
- * everything installed" and is deliberately, completely offline: it never reads
- * a credential and never makes a call, which is what makes it safe to run on
- * any machine at any time. Three of the agent path's failure modes are
- * invisible to it, because none of them is a missing file:
- *
- *   1. The Antigravity SDK needs a Gemini Enterprise / Model Garden entitlement
- *      on the billing project that the plain model path does not. Without it
- *      every delegation returns 403.
- *   2. `gemini-3.5-flash` is not deployed in every region. A pinned region that
- *      does not serve the model returns 404.
- *   3. Application Default Credentials can exist on disk, be readable, name a
- *      project — and still be expired, or belong to a project with the platform
- *      API switched off.
- *
- * All three surface identically today: the run starts, requirements, design and
- * task planning are billed to the premium tier, and the FIRST delegated packet
- * fails. That is the most expensive possible moment to learn it. This script
- * moves that discovery to second zero, for the price of one trivial delegation
- * — the multi-thousand-token session preamble the SDK sends whatever you ask
- * it. Measured on 2026-08-05 against `gemini-3.5-flash` on the global endpoint:
- * 12,245 input and 154 output tokens, $0.0198 at the policy's pinned rates.
- * That is the floor of this path and it does not vary much, because almost all
- * of it is the preamble rather than the question.
- *
- * WHAT IT DOES NOT DO. It does not mock, stub, or shortcut. It loads the real
- * policy, constructs the real adapter, and runs one real delegation through the
- * same `execute()` path a run uses — in a temporary, empty workspace, so the
- * agent has nothing to damage and nothing to read. Anything it reports about
- * project, region, interpreter, tokens or price is what a run would do, because
- * it is the same code arriving at the same answer.
- *
- * WHY IT LIVES IN plugin/scripts/. The same reason verify-setup.mjs does: it
- * has to be reachable from both install routes. Someone who ran
- * `/plugin install` has no `tools/` directory — only what is inside the plugin.
+ * Loads the real policy, constructs the real adapter, runs execute() in a
+ * temporary empty workspace. Cost measured 2026-08-05 against
+ * gemini-3.5-flash global: 12,245/154 tokens, $0.0198.
  *
  * Usage:
  *   node probe-agent-worker.mjs                  # opus-plus-flash
- *   node probe-agent-worker.mjs --policy=<name>  # any policy with an agent leaf
+ *   node probe-agent-worker.mjs --policy=<name>
  *
- * Exit 0 means a delegation completed and was priced. Exit 1 means it did not,
- * with the reason named in words rather than as a vendor status code.
+ * Exit 0: delegation completed and priced. Exit 1: cause named in words.
  */
 
 import { existsSync, mkdtempSync, mkdirSync } from "node:fs";
@@ -52,31 +22,17 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// ─── pure helpers (unit-tested; no filesystem, no network, no process state) ──
+// ─── pure helpers ─────────────────────────────────────────────────────
 
 /**
- * The adapter string that means "reach this model as an agent".
- *
- * The probe finds its leaf by ADAPTER rather than by model id, unlike
- * verify-setup.mjs's `AGENT_WORKER_MODEL_ID`. The two are asking different
- * questions. That script asks "did this install SELECT the agent path", which
- * is a question about one specific leaf named in `SDLC_SELECT`. This one asks
- * "does the agent path work at all", which is true or false regardless of what
- * any leaf happens to be called — so it matches on the thing that is actually
- * structural, and keeps working if the leaf is ever renamed or a second one is
- * added.
+ * Match by adapter, not model id: "does the agent path work" is true or
+ * false regardless of leaf naming, and stays right if the leaf is renamed.
+ * (verify-setup.mjs matches by model id because it answers a different
+ * question: "did this install SELECT the agent path".)
  */
 export const AGENT_ADAPTER = "antigravity-worker";
 
-/**
- * Pick the leaf to probe out of a loaded policy.
- *
- * Deliberately refuses on more than one rather than picking the first. A policy
- * with two agent leaves is a policy where "does the agent path work" has two
- * answers — different models, possibly different regions — and reporting one of
- * them as THE answer would be a lie by omission. Naming one explicitly is a
- * flag away and takes a second; a wrong green light costs a whole run.
- */
+/** Refuses on more than one — a wrong green light costs a whole run. */
 export function agentLeafFrom(policy) {
   const leaves = (policy?.models ?? []).filter((m) => m.adapter === AGENT_ADAPTER);
   if (leaves.length === 0) {
@@ -114,19 +70,9 @@ export function agentLeafById(policy, modelId) {
 }
 
 /**
- * The smallest thing that is still a real delegation.
- *
- * There is no such thing as a cheap agent session — the SDK sends its tool and
- * identity preamble on every turn whatever you ask — so the only lever is the
- * number of TURNS. Hence an instruction that forbids tool use and asks for one
- * JSON object: one turn, one answer, and the floor price of the path. The
- * packet is otherwise an ordinary TaskPacket, because an artificial shape would
- * exercise an artificial code path.
- *
- * `phase: "docs"` because it is the most harmless phase in the union and the
- * policy routes it to the mechanical tier — the probe never asks the router
- * anything, but a reader who finds this packet in a receipt should not have to
- * wonder why a probe claimed to be codegen.
+ * Smallest real delegation. No cheap agent session exists — the SDK sends its
+ * preamble every turn. The only lever is TURNS, so: one turn, one JSON reply,
+ * no tool use.
  */
 export function probePacket(passId = "probe") {
   return {
@@ -147,15 +93,7 @@ export function probePacket(passId = "probe") {
 }
 
 /**
- * Turn a worker failure into the sentence a human can act on.
- *
- * The raw text is a Python traceback tail carrying a Google API status. Left
- * alone it tells the reader that something returned 403, which is true and
- * useless — the fix for a 403 here is an entitlement request that takes days,
- * and the fix for a 404 is one environment variable. Conflating them wastes
- * whichever of those the reader guesses wrong.
- *
- * Ordered most-specific first: a missing SDK import and a credentials error can
+ * Ordered most-specific first: a missing SDK import and a credentials error
  * both mention words that appear in the broader patterns below them.
  */
 export function classifyFailure(errorText) {
@@ -237,14 +175,9 @@ export function formatUsd(amount) {
 }
 
 /**
- * Say whether the rates a run will be billed at are the rates the policy pins.
- *
- * They differ by exactly the regional surcharge Google applies: +10% on every token
- * class for Gemini 3+ on a non-`global` endpoint. The pin stays honest and the
- * adapter adjusts, which means the number on the report and the number in the
- * YAML are allowed to disagree — and a reader who does not know that reads the
- * difference as a bug. So the probe states which of the two it is, in words,
- * every time.
+ * Say whether the billed rates match the pinned rates. They differ by the
+ * regional +10% surcharge (Gemini 3+ non-global). Stated in words so a reader
+ * doesn't read the difference as a bug.
  */
 export function pricingNote(pinned, billed, region) {
   const same =
@@ -268,15 +201,11 @@ export function readFlag(argv, name) {
   return hit ? hit.slice(prefix.length) : undefined;
 }
 
-// ─── the live probe (everything below touches the network and the disk) ──────
+// ─── live probe (network + disk) ───────────────────────────────────────
 
 /**
- * Import the built server modules.
- *
- * A dynamic import behind an `existsSync`, rather than a static one at the top,
- * because an unbuilt plugin is the single commonest state this script will be
- * run in — `/plugin install` does not build — and a raw ERR_MODULE_NOT_FOUND
- * stack tells the reader nothing about which of the two scripts fixes it.
+ * Dynamic import behind existsSync — unbuilt plugin is the commonest state,
+ * and a raw ERR_MODULE_NOT_FOUND stack says nothing about the fix.
  */
 async function loadServerModules(pluginRoot) {
   const serverDir = join(pluginRoot, "mcp", "gemini-flash-server");
@@ -296,15 +225,8 @@ async function loadServerModules(pluginRoot) {
 }
 
 /**
- * A workspace that is empty, temporary, and NOT the user's project.
- *
- * The agent is handed `policies=[allow_all()]` and a working directory it may
- * edit. On a probe there is nothing to gain from pointing that at real files
- * and everything to lose, so it gets a fresh temp directory with nothing in it.
- * The evidence directory is a SIBLING rather than a child, which keeps the
- * workspace genuinely empty — so if the delegation's file-change inventory
- * reports anything at all, the agent really did write it, and the probe can say
- * so plainly.
+ * Empty temp workspace, evidence in a sibling (not child) so the workspace
+ * stays genuinely empty and any file-change report is unambiguous.
  */
 function makeProbeDirs() {
   const root = mkdtempSync(join(tmpdir(), "sdlc-agent-probe-"));
@@ -329,10 +251,8 @@ async function main() {
   const policy = loadPolicy({ policyName });
   const leaf = modelId ? agentLeafById(policy, modelId) : agentLeafFrom(policy);
 
-  // Construction is itself a gate: this adapter's constructor resolves the GCP
-  // project, the worker script and the interpreter, and throws on any of them.
-  // Everything it can catch, it catches here — before a subprocess exists and
-  // therefore before a token is spent.
+  // Constructor is itself a gate — resolves project, worker script, and
+  // interpreter, and throws on any of them before a subprocess exists.
   const adapter = createAdapter(leaf);
 
   log(`  policy      ${policy.name}`);
@@ -371,15 +291,13 @@ async function main() {
   const verdict = classifyFailure(result.error);
   log(`\n  ✗ ${verdict.headline}`);
   log(`    fix: ${verdict.fix}`);
-  // Printed even when the classification is confident: the classification is a
-  // reading of this text, and a reader who disagrees with it needs the source.
+  // Printed with the classification so a reader can second-guess it.
   log(`\n  Worker output:\n    ${String(result.error ?? "").split("\n").join("\n    ")}`);
   log(`\n  Evidence kept at: ${dirs.evidence}\n`);
   return 1;
 }
 
-// Run only when executed directly, so the pure helpers above can be imported by
-// the test suite without spending anything.
+// Direct-execution gate so the test suite can import the pure helpers.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   main()
     .then((code) => process.exit(code))

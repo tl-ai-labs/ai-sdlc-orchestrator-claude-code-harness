@@ -1,23 +1,10 @@
 /**
- * agent-path.test.mjs — the one question the wizard asks, and everything that
- * hangs off the answer.
+ * Invariant: agent-path checks stay silent unless the install opted in
+ * (no false alarms for model-path users). Also pins agreement between the
+ * three copies of the interpreter path + agent-leaf spec (verify-setup,
+ * policy YAML, wizard — none can import the others).
  *
- * The agent path adds a Python dependency to a plugin that had none. That is
- * fine for the person who asked for it and unacceptable for everyone else, so
- * the invariant worth protecting is not "the checks work" but "the checks stay
- * silent unless this install opted in". A model-path user who is told their
- * setup is broken because they have no virtualenv has been given a false
- * alarm on the one report that is supposed to be trustworthy.
- *
- * The second half pins three paths that are physically separate copies of one
- * fact — where the worker's interpreter lives, and what string selects the
- * agent leaf. None of the three files can import the others (this script runs
- * before `npm ci`; the policy is YAML; the wizard is not the plugin), so the
- * only thing standing between them and a silent divergence is this file.
- *
- * Everything here is offline and free. No interpreter is launched, no
- * credential is read, and the injected `spawn` means even the Python probe
- * runs against a fake.
+ * Offline; injected `spawn` fakes the Python probe.
  */
 
 import { test } from "node:test";

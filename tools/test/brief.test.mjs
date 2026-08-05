@@ -1,17 +1,7 @@
 /**
- * brief.test.mjs — guards every shipped brief against the contract the
- * pipeline actually reads.
- *
- * docs/brief-template.md states that the requirements phase and the architect
- * subagent expect a fixed set of section headings. A brief missing one is not
- * rejected up front: the run starts, spends real tokens on the phases that do
- * parse, and produces a thin or wrong requirements document further in. That
- * is expensive to discover and easy to introduce, because a brief is prose and
- * looks fine to a human reader either way.
- *
- * These tests read the headings out of the template rather than hardcoding a
- * second copy of the list, so editing the template updates the contract in one
- * place instead of silently drifting from it.
+ * Every shipped brief has the section headings docs/brief-template.md
+ * documents — otherwise a run starts, spends tokens, and produces a thin
+ * requirements document. Headings read from the template, not hardcoded.
  */
 
 import { test } from "node:test";

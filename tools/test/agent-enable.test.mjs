@@ -1,27 +1,10 @@
 /**
- * agent-enable.test.mjs — the command that turns the agent path on, and the two
- * findings that catch the mistakes it was written to make impossible.
+ * `--enable-agent` writes the SDLC_SELECT pair so nobody has to know its
+ * shape. Pinned here: the command writes both files (settings + .mcp.json),
+ * malformed specs are blocking, and agent-selection-without-Vertex-credentials
+ * is blocking.
  *
- * The failure this whole file guards against is a real one, not a hypothetical.
- * The selection is an environment variable whose value is a PAIR —
- * `gemini-flash=flash-agsdk-worker` — and the half that carries the meaning is
- * the right half, so that is the half people write. `flash-agsdk-worker` alone
- * looks like a complete answer. It is not one, and until `--enable-agent`
- * existed the only way to set this on an installed plugin was to open a JSON
- * file and type it. What that produced: a setup check that reported green
- * (because it found no agent selection, so it skipped building the Python
- * environment), and then a run that threw at policy load — after the premium
- * phases had already been billed.
- *
- * Two things had to change, and both are pinned here. The command writes the
- * spec so nobody has to know its shape, and a malformed spec is now a blocking
- * finding rather than a silent no-op. A third check covers the credential door:
- * the agent worker signs with Application Default Credentials and has no
- * API-key branch at all, so an AI-Studio-key-only install that selects it would
- * pass every offline check and fail at the first delegated packet.
- *
- * Everything here is offline and free. Filesystem tests write into a temporary
- * directory and never touch the real `~/.claude` or the repo's own settings.
+ * Offline; writes to a temp dir, never touches real ~/.claude or repo settings.
  */
 
 import { test } from "node:test";

@@ -1,11 +1,7 @@
-# Multi-model — premium-judgment phases on Opus, high-volume mechanical
-# work on Gemini 3.5 Flash. The pass that demonstrates cross-model routing.
-#
-# The mechanical tier has two doors to the same model, chosen per run rather
-# than per policy file (see the `select:` block below): Gemini as a MODEL —
-# one completion call — or Gemini as an AGENT, an Antigravity SDK session with
-# a working directory and tools of its own. Default is the completion door,
-# which is what every run of this policy did before the agent door existed.
+# Multi-model — Opus for judgment phases, Gemini 3.5 Flash for mechanical.
+# The mechanical tier has two doors to the same model, chosen per run via the
+# `select:` block below: `flash-completion` (one call per packet) or
+# `flash-agsdk-worker` (an Antigravity SDK agent session). Default is completion.
 version: 1
 name: opus-plus-flash
 
@@ -18,77 +14,45 @@ models:
     pricing_last_verified: 2026-08-04
     auth: { env: ANTHROPIC_API_KEY }
     max_output_tokens_absolute: 32000
-  # Gemini as a MODEL. One completion call: this server builds the prompt from
-  # the TaskPacket, sends it, and writes the answer to disk itself. The model
-  # never sees the filesystem and never runs anything.
+
+  # Gemini as a MODEL. One completion call per packet.
   - id: flash-completion
     adapter: mcp:gemini-flash-server
     model_name: gemini-3.5-flash
     display_name: gemini-3.5-flash
-    # The flat rate, which is what both default doors bill: AI Studio, and
-    # Vertex on its "global" endpoint. Verified 2026-08-04 against both pages
-    # below. Vertex adds +10% on every token class for REGIONAL endpoints
-    # (Gemini 3 and later, effective 2026-07-01) — the adapter defaults to the
-    # global endpoint so these numbers hold, and applies the surcharge to the
-    # cost it reports if GOOGLE_CLOUD_LOCATION pins a region. Do not hand-edit
-    # a x1.10 into this block; see applyVertexSurcharge in geminiTransports.ts.
+    # Flat global/AI-Studio rates. Vertex adds +10% on every token class for
+    # REGIONAL endpoints (Gemini 3+, effective 2026-07-01). Do not hand-edit a
+    # x1.10 in — geminiTransports.ts::applyVertexSurcharge does it at dispatch.
     pricing: { input: 1.50, input_cached: 0.15, output: 9.00 }
     pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
     pricing_last_verified: 2026-08-04
-    # Names the API-key env var for the AI Studio path. It is not a
-    # requirement: when it is unset the adapter falls through to Vertex AI and
-    # signs with Application Default Credentials instead — same model, same
-    # rates, no key. See plugin/mcp/gemini-flash-server/src/adapters/geminiTransports.ts.
+    # AI Studio door. Unset → adapter falls through to Vertex ADC, same rates.
     auth: { env: GEMINI_API_KEY }
     max_output_tokens_absolute: 8192
 
-  # The SAME model, reached as an AGENT. An Antigravity SDK session is given a
-  # working directory and its own tools; it reads what it needs, runs commands,
-  # and edits files itself. Nothing here is a different vendor, a different
-  # model, or a different bill rate — what changes is how much work happens per
-  # dispatch, and therefore how many tokens one dispatch costs.
-  #
-  # Expect a delegation to cost several times a completion call on the same
-  # packet. The session carries its own tool/identity preamble on every turn
-  # (measured at ~11.5k prompt tokens even for a one-word answer), and it takes
-  # as many turns as the work needs. That is the trade: fewer, larger, more
-  # autonomous units of work instead of many small ones you assemble yourself.
+  # The SAME model, reached as an AGENT (Antigravity SDK session with tools and
+  # a working directory). Same rates; several times more tokens per packet
+  # because the SDK re-sends the conversation on every turn plus a ~11.5k-token
+  # identity preamble.
   - id: flash-agsdk-worker
     adapter: antigravity-worker
     model_name: gemini-3.5-flash
     display_name: gemini-3.5-flash (Antigravity agent)
-    # Identical rates to the completion leaf — same model, same credentials,
-    # same published price list. Verified 2026-08-04 against the same two pages.
     pricing: { input: 1.50, input_cached: 0.15, output: 9.00 }
     pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
     pricing_last_verified: 2026-08-04
-    # `region:` is deliberately not pinned here, so this leaf follows
-    # GOOGLE_CLOUD_LOCATION and falls back to the global endpoint — exactly
-    # what the completion leaf above does. Pin it on this leaf only if you must
-    # run in a named region; the +10% regional surcharge is then applied to the
-    # reported cost automatically (applyVertexSurcharge in geminiTransports.ts).
-    #
-    # This route is Vertex-only: the Antigravity SDK signs with Application
-    # Default Credentials and has no API-key door, so GEMINI_API_KEY is
-    # irrelevant to it and no `auth:` block is declared.
-    #
-    # Nine minutes, then the session is abandoned and the worker's process group
-    # is killed. Long enough for a module-sized task on a warm repo, short
-    # enough that a wedged session cannot burn an afternoon unattended.
+    # `region:` deliberately unpinned so this leaf follows GOOGLE_CLOUD_LOCATION
+    # and hits the flat global endpoint by default, same as flash-completion.
+    # Vertex-only: the Antigravity SDK is ADC-only and has no API-key door, so
+    # no `auth:` block.
+    # 9-minute deadline, then the worker's process group is killed.
     worker_timeout_sec: 540
-    # No max_output_tokens_absolute: that field feeds the output-cap doubling
-    # loop, which only makes sense when WE chose the ceiling. An agent session
-    # sets its own per-turn limits, so there is nothing here to double.
+    # No max_output_tokens_absolute: the doubling loop only makes sense when WE
+    # chose the ceiling. An agent session sets its own per-turn limits.
 
-# Logical slots. A rule names the slot; the run picks one of its options, or
-# gets `default`. Every option is a real model id declared above, so a selection
-# can never invent a model and a typo fails when the policy loads rather than
-# mid-run, after earlier phases have already been paid for.
-#
-# The run's choice arrives in the SDLC_SELECT environment variable, written by
-# `npm run setup`, spelled `slot=option` (comma-separated for more than one):
-#
-#   SDLC_SELECT=gemini-flash=flash-agsdk-worker
+# Logical slots. A rule names the slot; the run picks one option, or gets
+# `default`. The run's choice arrives in SDLC_SELECT, spelled `slot=option`
+# (comma-separated for more than one), written by verify-setup.mjs.
 select:
   gemini-flash:
     default: flash-completion
@@ -97,12 +61,7 @@ select:
       - flash-agsdk-worker
     reason: "How the mechanical tier reaches Gemini: one completion call (cheap, predictable) or an agent session with tools and a workspace (costlier per packet, does its own reading and editing)."
 
-# The rules below are unchanged from before this slot existed. They still name
-# `gemini-flash`; what changed is that the name now resolves through the slot
-# above instead of straight to a leaf. With no selection made, it resolves to
-# flash-completion — the same leaf, the same model, the same rates as before.
 rules:
-  # Premium-judgment phases — stay on Opus
   - when: { phase: requirements_analysis }
     use: opus
     reason: "Judgment-heavy, low volume"
@@ -119,7 +78,6 @@ rules:
     use: opus
     reason: "Risk-bearing, low volume"
 
-  # High-volume mechanical phases — Gemini Flash
   - when:
       phase: codegen
       task_type:
@@ -148,7 +106,7 @@ rules:
     use: gemini-flash
     reason: "Volume work"
 
-  # Debug with escalation: try mechanical tier first, escalate to Opus after 2 retries
+  # Escalate to Opus after 2 mechanical-tier retries.
   - when: { phase: debug, retry_count: { gte: 2 } }
     use: opus
     reason: "Escalation: 2 mechanical-tier attempts failed"
