@@ -10,12 +10,12 @@
  * invisible to it, because none of them is a missing file:
  *
  *   1. The Antigravity SDK needs a Gemini Enterprise / Model Garden entitlement
- *      on the billing project that the plain Vertex path does not. Without it
+ *      on the billing project that the plain model path does not. Without it
  *      every delegation returns 403.
  *   2. `gemini-3.5-flash` is not deployed in every region. A pinned region that
  *      does not serve the model returns 404.
  *   3. Application Default Credentials can exist on disk, be readable, name a
- *      project — and still be expired, or belong to a project with the Vertex
+ *      project — and still be expired, or belong to a project with the platform
  *      API switched off.
  *
  * All three surface identically today: the run starts, requirements, design and
@@ -187,7 +187,7 @@ export function classifyFailure(errorText) {
     return {
       id: "entitlement",
       headline:
-        "Vertex refused the call (403). On this path that almost always means the billing " +
+        "Google refused the call (403). On this path that almost always means the billing " +
         "project lacks the Gemini Enterprise / Model Garden entitlement the Antigravity SDK " +
         "requires — the plain model path can work on a project where this one does not.",
       fix:
@@ -199,7 +199,7 @@ export function classifyFailure(errorText) {
     return {
       id: "region",
       headline:
-        "Vertex could not find the model (404). The model is not deployed in the region this " +
+        "Google could not find the model (404). The model is not deployed in the region this " +
         "leaf resolved to — the region, not the model name, is nearly always what is wrong.",
       fix:
         "Unset GOOGLE_CLOUD_LOCATION to use the global endpoint, or pin a region that serves " +
@@ -209,8 +209,8 @@ export function classifyFailure(errorText) {
   if (has("429", "RESOURCE_EXHAUSTED", "quota")) {
     return {
       id: "quota",
-      headline: "Vertex returned a quota error (429). The path is wired correctly; capacity is not there right now.",
-      fix: "Retry later, or raise the quota for this model in the project's Vertex AI quotas page.",
+      headline: "Google returned a quota error (429). The path is wired correctly; capacity is not there right now.",
+      fix: "Retry later, or raise the quota for this model on the project's quotas page (still filed under Vertex AI in the console).",
     };
   }
   if (has("was killed after", "timed out", "TimeoutError")) {
@@ -239,7 +239,7 @@ export function formatUsd(amount) {
 /**
  * Say whether the rates a run will be billed at are the rates the policy pins.
  *
- * They differ by exactly the Vertex regional surcharge: +10% on every token
+ * They differ by exactly the regional surcharge Google applies: +10% on every token
  * class for Gemini 3+ on a non-`global` endpoint. The pin stays honest and the
  * adapter adjusts, which means the number on the report and the number in the
  * YAML are allowed to disagree — and a reader who does not know that reads the
@@ -255,7 +255,7 @@ export function pricingNote(pinned, billed, region) {
     return `billed at the policy's pinned rates (region '${region}' carries no surcharge)`;
   }
   return (
-    `billed at the pinned rates plus the Vertex regional surcharge, because this leaf runs in ` +
+    `billed at the pinned rates plus Google's regional surcharge, because this leaf runs in ` +
     `'${region}' rather than the global endpoint: in $${pinned.input}/$${pinned.input_cached}/$${pinned.output} ` +
     `→ $${billed.input}/$${billed.input_cached}/$${billed.output} per million (input/cached/output)`
   );

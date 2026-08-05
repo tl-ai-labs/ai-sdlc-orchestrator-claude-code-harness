@@ -22,6 +22,7 @@ import {
   evaluate,
   adcPath,
   hasGeminiCredentials,
+  vertexCredentialState,
   isUnexpandedPlaceholder,
   usableEnv,
   unexpandedDeclaredEnv,
@@ -125,15 +126,28 @@ test("a plain `gcloud auth application-default login` satisfies it too", () => {
   assert.deepEqual(idsOf(state), []);
 });
 
-test("a Google Cloud project named in the environment satisfies it", () => {
+test("a Google Cloud project named in the environment does not satisfy it", () => {
+  // It used to. GOOGLE_CLOUD_PROJECT is a billing project ID — it says where to
+  // charge the call, not who is making it — but it is the variable every Google
+  // Cloud getting-started page mentions first, so setting only that is a common
+  // way to arrive here believing you are done. The old check agreed with that
+  // belief and reported a clean setup.
   const state = evaluate({
     ...healthy,
     env: { ANTHROPIC_API_KEY: "x", GOOGLE_CLOUD_PROJECT: "some-project" },
   });
-  assert.deepEqual(idsOf(state), []);
+  assert.deepEqual(idsOf(state), ["gemini-credentials"]);
+  const problem = state.problems[0];
+  // A warning, not a block: on a Compute Engine or Cloud Run instance the
+  // credential comes from the metadata server and this setup genuinely works,
+  // and there is no way to tell that apart from a laptop without a live call.
+  assert.equal(problem.severity, "warning");
+  assert.equal(state.ok, true);
+  assert.match(problem.message, /some-project/);
+  assert.match(problem.message, /where to bill, not who is asking/);
 });
 
-test("the missing-Gemini fix names both doors, Vertex first", () => {
+test("the missing-Gemini fix names both doors, the keyless one first", () => {
   // A field engineer at a company with Google Cloud should not be sent to
   // create a personal AI Studio key; the fix text is the only place that
   // steering happens.
@@ -141,19 +155,39 @@ test("the missing-Gemini fix names both doors, Vertex first", () => {
   const problem = state.problems.find((p) => p.id === "gemini-credentials");
   assert.ok(problem, "expected a gemini-credentials warning");
   assert.match(problem.fix, /gcloud auth application-default login/);
-  assert.match(problem.fix, /GEMINI_API_KEY/);
+  assert.match(problem.fix, /aistudio\.google\.com/);
   assert.ok(
-    problem.fix.indexOf("gcloud") < problem.fix.indexOf("GEMINI_API_KEY"),
-    "the keyless Vertex path should be offered before the API-key path",
+    problem.fix.indexOf("gcloud") < problem.fix.indexOf("aistudio"),
+    "the keyless Google Cloud path should be offered before the API-key path",
   );
+  // The platform is named the way Google names it now, with the old name kept
+  // alongside so that everyone reading their own console recognises one of them.
+  assert.match(problem.fix, /Gemini Enterprise Agent Platform \(formerly Vertex AI\)/);
+  // And the key has to land somewhere a plugin can actually read it. A shell
+  // export does not reach Claude Code launched from the desktop app, and three
+  // fix strings in this file used to say `export NAME=...` regardless.
+  assert.match(problem.fix, /settings\.json/);
+  assert.ok(!/^\s*export /m.test(problem.fix), "no fix should tell the user to export a variable");
 });
 
-test("hasGeminiCredentials accepts any one door and rejects none", () => {
-  assert.equal(hasGeminiCredentials({ env: {} }), false);
-  assert.equal(hasGeminiCredentials({ env: { GEMINI_API_KEY: "k" } }), true);
-  assert.equal(hasGeminiCredentials({ env: {}, hasAdcFile: true }), true);
-  assert.equal(hasGeminiCredentials({ env: { GOOGLE_APPLICATION_CREDENTIALS: "/sa.json" } }), true);
-  assert.equal(hasGeminiCredentials({ env: { GOOGLE_CLOUD_PROJECT: "p" } }), true);
+test("hasGeminiCredentials accepts either door and rejects a project ID alone", () => {
+  const vertexOf = (env, adcUsable = false) =>
+    vertexCredentialState({
+      env,
+      serviceAccountFile: env.GOOGLE_APPLICATION_CREDENTIALS
+        ? { present: true, usable: true, type: "service_account", detail: null }
+        : null,
+      adcFile: { present: adcUsable, usable: adcUsable, type: null, detail: null },
+    });
+
+  assert.equal(hasGeminiCredentials({ env: {}, vertex: vertexOf({}) }), false);
+  assert.equal(hasGeminiCredentials({ env: { GEMINI_API_KEY: "k" }, vertex: vertexOf({}) }), true);
+  assert.equal(hasGeminiCredentials({ env: {}, vertex: vertexOf({}, true) }), true);
+  assert.equal(
+    hasGeminiCredentials({ env: {}, vertex: vertexOf({ GOOGLE_APPLICATION_CREDENTIALS: "/sa.json" }) }),
+    true,
+  );
+  assert.equal(hasGeminiCredentials({ env: {}, vertex: vertexOf({ GOOGLE_CLOUD_PROJECT: "p" }) }), false);
 });
 
 test("every credential the check accepts is one the server actually honours", () => {
@@ -500,4 +534,157 @@ test("the server sanitizes exactly the names this script declares", () => {
   for (const name of DECLARED_ENV) {
     assert.ok(block.includes(name), `${name} is declared here but the server never strips it`);
   }
+});
+
+/**
+ * The credential matrix in docs/setup.md, checked row by row against the
+ * checker it describes.
+ *
+ * That table is what the field team walks when an install misbehaves, and three
+ * of its rows exist because those combinations used to report green on a broken
+ * install. A table that drifts from the code is worse than no table: it is a
+ * confident wrong answer, and the person reading it has no way to know. So each
+ * row's scenario is spelled out here in fixture form, run through the real
+ * `evaluate()`, and the finding it produces is compared against the finding the
+ * document claims — in the document's own notation.
+ */
+
+/** Every row of the matrix, in the document's order, as observable facts. */
+const MATRIX_SCENARIOS = {
+  1: { env: {} },
+  2: { env: { GEMINI_API_KEY: "AIza-test" } },
+  3: { adcFile: { present: true, usable: true, type: "authorized_user", detail: null } },
+  4: {
+    env: { GOOGLE_APPLICATION_CREDENTIALS: "/svc.json" },
+    serviceAccountFile: { present: true, usable: true, type: "service_account", detail: null },
+  },
+  5: { env: { GOOGLE_CLOUD_PROJECT: "some-project" } },
+  6: {
+    env: { GOOGLE_APPLICATION_CREDENTIALS: "/svc.json" },
+    serviceAccountFile: {
+      present: true,
+      usable: false,
+      type: "service_account",
+      detail: "/svc.json is a 'service_account' credential but is missing private_key",
+    },
+  },
+  7: {
+    env: { GEMINI_API_KEY: "AIza-test" },
+    adcFile: { present: true, usable: true, type: "authorized_user", detail: null },
+  },
+  8: {
+    env: { GEMINI_API_KEY: "AIza-test", SDLC_SELECT: "gemini-flash=flash-agsdk-worker" },
+    // A fully built worker environment, so the only thing left to fail is the
+    // credential — which is the row's whole point. Without this the row would
+    // also report a missing venv, and the table would look wrong for a reason
+    // that has nothing to do with credentials.
+    agentWorker: { hasVenv: true, sdkImportable: true, detail: null },
+  },
+};
+
+/** Read one scenario the way the real script reads a machine, and evaluate it. */
+function findingFor(scenario) {
+  const env = scenario.env ?? {};
+  const state = vertexCredentialState({
+    env,
+    serviceAccountFile: scenario.serviceAccountFile ?? null,
+    adcFile: scenario.adcFile ?? null,
+  });
+  const { problems } = evaluate({
+    nodeMajor: 20,
+    hasClaudeCli: true,
+    hasNodeModules: true,
+    hasDist: true,
+    env,
+    vertex: state,
+    agentWorker: scenario.agentWorker ?? null,
+  });
+  // Only the credential findings. The table's third column is about Gemini
+  // credentials, and every scenario above leaves ANTHROPIC_API_KEY unset, which
+  // is its own unrelated warning on every row.
+  const credential = problems.filter(
+    (p) => p.id.startsWith("gemini-credentials") || p.id.startsWith("agent-worker-credentials"),
+  );
+  if (credential.length === 0) return "—";
+  return credential.map((p) => `\`${p.id}\` (${p.severity})`).join(", ");
+}
+
+/** Pull the matrix out of the prose, as a { rowNumber: findingCell } map. */
+function matrixFromDoc() {
+  const doc = readFileSync(join(ROOT, "docs/setup.md"), "utf8");
+  const heading = "### Every credential combination";
+  const start = doc.indexOf(heading);
+  assert.notEqual(start, -1, "the credential matrix section is gone from docs/setup.md");
+  const section = doc.slice(start, doc.indexOf("\n## ", start));
+
+  const rows = {};
+  for (const line of section.split("\n")) {
+    // Table rows only: a leading pipe, a bare number in the first cell. The
+    // header and its `|---|` separator both fail that.
+    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    if (cells.length !== 4 || !/^\d+$/.test(cells[0])) continue;
+    rows[Number(cells[0])] = cells[2];
+  }
+  return rows;
+}
+
+test("every row of the credential matrix says what the checker actually does", () => {
+  const documented = matrixFromDoc();
+  assert.deepEqual(
+    Object.keys(documented).map(Number).sort((a, b) => a - b),
+    Object.keys(MATRIX_SCENARIOS).map(Number).sort((a, b) => a - b),
+    "the table and this test disagree about which rows exist — a new row needs a scenario here",
+  );
+
+  for (const [row, scenario] of Object.entries(MATRIX_SCENARIOS)) {
+    assert.equal(
+      // The document bolds the three rows that were once false greens, and bold
+      // markers are not part of the finding.
+      documented[row].replaceAll("**", ""),
+      findingFor(scenario),
+      `row ${row} of the matrix in docs/setup.md no longer matches evaluate()`,
+    );
+  }
+});
+
+test("the three rows called out as former false greens are the ones that are not clean", () => {
+  // The section's opening sentence names rows 5, 6 and 8 by number. If a fix or a
+  // regression moves which rows are interesting, that sentence is the thing most
+  // likely to be left behind, because nothing about it looks stale.
+  const flagged = Object.entries(MATRIX_SCENARIOS)
+    .filter(([, scenario]) => findingFor(scenario) !== "—")
+    .map(([row]) => Number(row))
+    .sort((a, b) => a - b);
+  assert.deepEqual(flagged, [1, 5, 6, 8]);
+
+  const doc = readFileSync(join(ROOT, "docs/setup.md"), "utf8");
+  // Row 1 is "nothing is set", which is not a false green — it is the honest
+  // report of a fresh machine. The other three are the ones worth naming.
+  assert.match(doc, /Rows 5, 6 and 8 are the ones worth knowing by name/);
+});
+
+test("the findings named in the matrix prose are ones the checker can produce", () => {
+  // The paragraph under the table names two IDs that deliberately have no row of
+  // their own. They are still IDs, and still have to exist.
+  const { problems: placeholders } = evaluate({
+    nodeMajor: 20,
+    hasClaudeCli: true,
+    hasNodeModules: true,
+    hasDist: true,
+    env: { GEMINI_API_KEY: "${GEMINI_API_KEY}" },
+  });
+  assert.ok(placeholders.some((p) => p.id === "env-placeholders"));
+
+  const { problems: unproven } = evaluate({
+    nodeMajor: 20,
+    hasClaudeCli: true,
+    hasNodeModules: true,
+    hasDist: true,
+    env: { GOOGLE_CLOUD_PROJECT: "some-project", SDLC_SELECT: "gemini-flash=flash-agsdk-worker" },
+    vertex: vertexCredentialState({ env: { GOOGLE_CLOUD_PROJECT: "some-project" } }),
+    agentWorker: { hasVenv: true, sdkImportable: true, detail: null },
+  });
+  const found = unproven.find((p) => p.id === "agent-worker-credentials-unproven");
+  assert.ok(found, "the unproven variant named in the prose is unreachable");
+  assert.equal(found.severity, "warning");
 });

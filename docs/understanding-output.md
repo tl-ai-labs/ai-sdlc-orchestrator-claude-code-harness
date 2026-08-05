@@ -133,7 +133,7 @@ Aggregated form of the telemetry. Useful fields:
 Present only on runs that delegated. Three files per delegated packet, all named after the packet's task id:
 
 - **`worker-task-<packet>.md`** — the brief the worker was given, exactly as it was written to disk. This is the prompt: what the packet asked for, which files it excerpted, and the output contract. Nothing was added to it out of band.
-- **`worker-usage-<packet>.json`** — written by the worker process itself, in its own words: the model it reached, the SDK version, the Vertex project and region, its token usage, and its tool calls.
+- **`worker-usage-<packet>.json`** — written by the worker process itself, in its own words: the model it reached, the SDK version, the Google Cloud project and region, its token usage, and its tool calls.
 - **`worker-delegation-<packet>.json`** — the receipt, written by the server. Joins the two above to what changed on disk.
 
 The receipt carries `schema: "delegation-record/1"` and these fields:

@@ -1,0 +1,45 @@
+{
+  "model": "gemini-3.5-flash",
+  "thinking": "NONE",
+  "sdk": "google-antigravity",
+  "sdk_version": "0.1.9",
+  "vertex_project": "your-project-id",
+  "vertex_location": "global",
+  "usage": {
+    "prompt_token_count": 53196,
+    "cached_content_token_count": 32382,
+    "candidates_token_count": 426,
+    "thoughts_token_count": 1722,
+    "total_token_count": 55344
+  },
+  "tool_call_count": 3,
+  "tool_calls_truncated": false,
+  "tool_calls": [
+    {
+      "name": "list_directory",
+      "args": {
+        "directory_path": "/workspace/ping-service/src"
+      },
+      "canonical_path": "/workspace/ping-service/src",
+      "args_clipped": false
+    },
+    {
+      "name": "edit_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/server.js"
+      },
+      "canonical_path": "/workspace/ping-service/src/server.js",
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "node -c server.js",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    }
+  ],
+  "text": "I am going to check the contents of the target directory to understand the project structure.I will now write the `server.js` file to the working directory with the exact structure and statements as defined in the request.I will check the syntax of the newly created `server.js` file using Node.js to ensure it has no errors.{\n  \"artifact_path\": \"/workspace/ping-service/src/server.js\",\n  \"content\": \"'use strict';\\n\\nconst app = require('./app');\\nconst port = process.env.PORT || 3000;\\napp.listen(port, () => { console.log(`listening on port ${port}`); });\\n\"\n}"
+}

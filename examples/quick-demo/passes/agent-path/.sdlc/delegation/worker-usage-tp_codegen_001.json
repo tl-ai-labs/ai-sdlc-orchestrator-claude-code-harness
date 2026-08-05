@@ -1,0 +1,38 @@
+{
+  "model": "gemini-3.5-flash",
+  "thinking": "NONE",
+  "sdk": "google-antigravity",
+  "sdk_version": "0.1.9",
+  "vertex_project": "your-project-id",
+  "vertex_location": "global",
+  "usage": {
+    "prompt_token_count": 40904,
+    "cached_content_token_count": 25328,
+    "candidates_token_count": 536,
+    "thoughts_token_count": 1576,
+    "total_token_count": 43016
+  },
+  "tool_call_count": 2,
+  "tool_calls_truncated": false,
+  "tool_calls": [
+    {
+      "name": "edit_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/package.json"
+      },
+      "canonical_path": "/workspace/ping-service/src/package.json",
+      "args_clipped": false
+    },
+    {
+      "name": "view_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/package.json",
+        "start_line": "0",
+        "end_line": "799"
+      },
+      "canonical_path": "/workspace/ping-service/src/package.json",
+      "args_clipped": false
+    }
+  ],
+  "text": "{\n  \"artifact_path\": \"/workspace/ping-service/src/package.json\",\n  \"content\": \"{\\n  \\\"name\\\": \\\"ping-service\\\",\\n  \\\"version\\\": \\\"1.0.0\\\",\\n  \\\"description\\\": \\\"A minimal Express ping service.\\\",\\n  \\\"main\\\": \\\"app.js\\\",\\n  \\\"private\\\": true,\\n  \\\"license\\\": \\\"MIT\\\",\\n  \\\"scripts\\\": {\\n    \\\"start\\\": \\\"node server.js\\\",\\n    \\\"test\\\": \\\"jest\\\"\\n  },\\n  \\\"dependencies\\\": {\\n    \\\"express\\\": \\\"^5.1.0\\\"\\n  },\\n  \\\"devDependencies\\\": {\\n    \\\"jest\\\": \\\"^29.7.0\\\",\\n    \\\"supertest\\\": \\\"^7.1.1\\\"\\n  },\\n  \\\"engines\\\": {\\n    \\\"node\\\": \\\">=20\\\"\\n  }\\n}\\n\"\n}"
+}

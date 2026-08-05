@@ -34,6 +34,9 @@ import {
   parseSelectSpec,
   selectSpecProblem,
   hasVertexCredentials,
+  vertexCredentialState,
+  inspectCredentialFile,
+  agentPathAvailableHint,
   settingsPathFor,
   withAgentSelection,
   withMcpSelection,
@@ -63,7 +66,10 @@ const healthy = {
   hasDist: true,
   hasAdcFile: false,
   env: {},
-  agentWorker: { selected: false, hasVenv: false, hasSdk: false, python: null },
+  // null, not an object with everything false — observeAgentWorker returns null
+  // outright when SDLC_SELECT does not name the agent worker, and a fixture that
+  // invents a shape the real observer never produces tests nothing.
+  agentWorker: null,
 };
 
 // ─── the spec, parsed ────────────────────────────────────────────────────
@@ -146,23 +152,98 @@ test("evaluate surfaces the malformed spec as a blocking problem", () => {
 
 // ─── the credential door ─────────────────────────────────────────────────
 
-test("Vertex credentials are recognised by any of the three ways they arrive", () => {
-  assert.equal(hasVertexCredentials({ env: {}, hasAdcFile: false }), false);
-  assert.equal(hasVertexCredentials({ env: {}, hasAdcFile: true }), true);
-  assert.equal(hasVertexCredentials({ env: { GOOGLE_APPLICATION_CREDENTIALS: "/k.json" } }), true);
-  assert.equal(hasVertexCredentials({ env: { GOOGLE_CLOUD_PROJECT: "proj" } }), true);
+/** A credential file that inspected cleanly, without writing one to a real disk. */
+const goodFile = { present: true, usable: true, type: "authorized_user", detail: null };
+/** One that is present and certainly unusable — the shape a truncated key has. */
+const brokenFile = { present: true, usable: false, type: "service_account", detail: "/k.json is a 'service_account' credential but is missing private_key" };
+const absentFile = { present: false, usable: false, type: null, detail: null };
+
+test("a real credential is the only thing that counts as one", () => {
+  const state = (opts) => vertexCredentialState(opts).state;
+
+  assert.equal(state({ env: {}, adcFile: absentFile }), "none");
+  assert.equal(state({ env: {}, adcFile: goodFile }), "credential");
+  assert.equal(
+    state({ env: { GOOGLE_APPLICATION_CREDENTIALS: "/k.json" }, serviceAccountFile: goodFile }),
+    "credential",
+  );
+
+  // The false positive this replaced. GOOGLE_CLOUD_PROJECT names where to bill,
+  // not who is asking — but it is truthy, it is the variable every Google Cloud
+  // tutorial mentions first, and the old boolean counted it as a login. Someone
+  // who set only that passed every offline check and failed at the first
+  // delegated packet, after the premium phases were billed.
+  assert.equal(state({ env: { GOOGLE_CLOUD_PROJECT: "proj" }, adcFile: absentFile }), "project-only");
+  assert.equal(hasVertexCredentials({ state: "project-only" }), false);
+  assert.equal(hasVertexCredentials({ state: "credential" }), true);
+  assert.equal(hasVertexCredentials(null), false);
+});
+
+test("a credential that exists but cannot sign is broken, not missing", () => {
+  // Existence was the whole of the old check. These two states look identical to
+  // `existsSync` and could not be more different to the user: one person has not
+  // started, the other believes they have finished.
+  assert.equal(
+    vertexCredentialState({ env: { GOOGLE_APPLICATION_CREDENTIALS: "/k.json" }, serviceAccountFile: brokenFile }).state,
+    "broken",
+  );
+  assert.equal(vertexCredentialState({ env: {}, adcFile: brokenFile }).state, "broken");
+});
+
+test("an explicit service-account file that is broken does not fall back to gcloud's", () => {
+  // google-auth does not fall back either: GOOGLE_APPLICATION_CREDENTIALS wins
+  // outright. Reporting the healthy ADC file here would send someone hunting for
+  // a fault in the wrong place while the variable that actually decides sits
+  // untouched.
+  const state = vertexCredentialState({
+    env: { GOOGLE_APPLICATION_CREDENTIALS: "/k.json" },
+    serviceAccountFile: brokenFile,
+    adcFile: goodFile,
+  });
+  assert.equal(state.state, "broken");
+  assert.equal(state.source, "GOOGLE_APPLICATION_CREDENTIALS");
+});
+
+test("inspectCredentialFile only declares failure when it is certain", () => {
+  const read = (contents) => () => contents;
+  const yes = () => true;
+
+  assert.equal(inspectCredentialFile("/x.json", { exists: () => false }).usable, false);
+  assert.equal(inspectCredentialFile("/x.json", { exists: yes, read: read("not json") }).usable, false);
+  assert.equal(inspectCredentialFile("/x.json", { exists: yes, read: read("{}") }).usable, false);
+
+  const missingField = inspectCredentialFile("/x.json", {
+    exists: yes,
+    read: read(JSON.stringify({ type: "service_account", client_email: "a@b.c" })),
+  });
+  assert.equal(missingField.usable, false);
+  assert.match(missingField.detail, /private_key/);
+
+  const complete = inspectCredentialFile("/x.json", {
+    exists: yes,
+    read: read(JSON.stringify({ type: "authorized_user", client_id: "i", client_secret: "s", refresh_token: "r" })),
+  });
+  assert.equal(complete.usable, true);
+
+  // A type this check has never heard of is USABLE. Inventing a failure is worse
+  // than missing one: the value of this script is that a green light is trusted.
+  const unknown = inspectCredentialFile("/x.json", {
+    exists: yes,
+    read: read(JSON.stringify({ type: "some_future_credential" })),
+  });
+  assert.equal(unknown.usable, true);
+  assert.match(unknown.detail, /not one this check knows how to verify/);
 });
 
 test("an AI Studio key does not satisfy the agent path", () => {
   // gemini_worker.py constructs its client with vertex=True and has no
   // API-key branch, so a GEMINI_API_KEY is not a partial credential here — it
   // is the wrong door entirely, and saying so is the whole value of the check.
-  assert.equal(hasVertexCredentials({ env: { GEMINI_API_KEY: "AIza-x" } }), false);
-
   const { ok, problems } = evaluate({
     ...healthy,
     env: { SDLC_SELECT: AGENT_WORKER_SELECT, GEMINI_API_KEY: "AIza-x" },
-    agentWorker: { selected: true, hasVenv: true, hasSdk: true, python: "/py" },
+    vertex: vertexCredentialState({ env: {}, adcFile: absentFile }),
+    agentWorker: { hasVenv: true, sdkImportable: true, detail: null },
   });
   const problem = problems.find((p) => p.id === "agent-worker-credentials");
   assert.ok(problem, "selecting the agent path with no Vertex credentials must block");
@@ -170,6 +251,103 @@ test("an AI Studio key does not satisfy the agent path", () => {
   assert.match(problem.message, /AI Studio path/);
   assert.match(problem.fix, /gcloud auth application-default login/);
   assert.match(problem.fix, /--disable-agent/);
+});
+
+test("a named project with no credential warns on the agent path, and does not block", () => {
+  // The one state that cannot be settled offline. Inside Google Cloud the
+  // credential lives on a metadata server and this state is a working install;
+  // on a laptop it is a dead end. Failing the exit code would break every
+  // legitimate Cloud Build install, so it is said out loud and pointed at the
+  // two-cent probe that actually decides.
+  const { ok, problems } = evaluate({
+    ...healthy,
+    env: { SDLC_SELECT: AGENT_WORKER_SELECT, GOOGLE_CLOUD_PROJECT: "proj" },
+    vertex: vertexCredentialState({ env: { GOOGLE_CLOUD_PROJECT: "proj" }, adcFile: absentFile }),
+    agentWorker: { hasVenv: true, sdkImportable: true, detail: null },
+  });
+  assert.equal(ok, true, "a state that may well be correct must not fail the exit code");
+  const problem = problems.find((p) => p.id === "agent-worker-credentials-unproven");
+  assert.ok(problem, "an unproven credential must still be reported");
+  assert.equal(problem.severity, "warning");
+  assert.match(problem.message, /'proj'/);
+  assert.match(problem.fix, /probe-agent-worker\.mjs/);
+});
+
+test("a broken credential blocks, and says it is present rather than missing", () => {
+  const { ok, problems } = evaluate({
+    ...healthy,
+    env: { ANTHROPIC_API_KEY: "x", GOOGLE_APPLICATION_CREDENTIALS: "/k.json" },
+    vertex: vertexCredentialState({
+      env: { GOOGLE_APPLICATION_CREDENTIALS: "/k.json" },
+      serviceAccountFile: brokenFile,
+    }),
+  });
+  assert.equal(ok, false);
+  const problem = problems.find((p) => p.id === "gemini-credentials-broken");
+  assert.ok(problem);
+  assert.match(problem.message, /not a missing credential/);
+  assert.match(problem.message, /private_key/);
+  assert.match(problem.fix, /takes precedence/);
+
+  // One cause, one finding. A broken credential is not a credential, so the
+  // generic "no Gemini credentials found" warning would fire too if it were not
+  // suppressed — and a report that says a credential is present and unusable on
+  // one line and absent on the next teaches the reader to distrust both.
+  assert.deepEqual(
+    problems.filter((p) => p.id.startsWith("gemini-credentials")).map((p) => p.id),
+    ["gemini-credentials-broken"],
+  );
+  // The suppressed warning was the only place the AI Studio alternative was
+  // offered, so this problem has to carry it. Someone whose service-account file
+  // is broken may well prefer the other door to repairing this one.
+  assert.match(problem.fix, /aistudio\.google\.com/);
+});
+
+test("the gcloud advice says so when gcloud is not installed", () => {
+  // Sending someone to run a command their machine does not have is the same
+  // dead end as the export advice was: the instruction is followed, nothing
+  // happens, and the report still says the same thing next time.
+  const { problems } = evaluate({ ...healthy, env: { ANTHROPIC_API_KEY: "x" }, hasGcloud: false });
+  const problem = problems.find((p) => p.id === "gemini-credentials");
+  assert.match(problem.fix, /not on this machine's PATH/);
+  assert.match(problem.fix, /cloud\.google\.com\/sdk\/docs\/install/);
+
+  const installed = evaluate({ ...healthy, env: { ANTHROPIC_API_KEY: "x" } });
+  assert.ok(
+    !/not on this machine's PATH/.test(installed.problems.find((p) => p.id === "gemini-credentials").fix),
+    "a machine that has gcloud must not be nagged about it",
+  );
+});
+
+// ─── the door that opens after the wizard has already run ────────────────
+
+test("an install on the model path is told when the agent door has opened", () => {
+  // The gap: the wizard asks the agent question only when it can see Google
+  // credentials, which is right at install time and wrong forever after. Someone
+  // who runs `gcloud auth application-default login` a week later has the door
+  // open and no reason ever to re-run the wizard — but they do re-run this check.
+  const hint = agentPathAvailableHint("/plugins/orch", vertexCredentialState({ env: {}, adcFile: goodFile }), {});
+  assert.ok(hint, "a model-path install with real credentials must be told");
+  assert.match(hint, /--enable-agent/);
+  // Information, not a nag. The model path is the cheaper default and most
+  // installs should stay on it, so the line has to say so.
+  assert.match(hint, /staying on it is fine/);
+});
+
+test("that hint is silent for everyone it would only be noise for", () => {
+  const good = vertexCredentialState({ env: {}, adcFile: goodFile });
+  // Already through the door.
+  assert.equal(agentPathAvailableHint("/plugins/orch", good, { SDLC_SELECT: AGENT_WORKER_SELECT }), null);
+  // No door: an AI Studio key cannot reach the agent path at all.
+  assert.equal(
+    agentPathAvailableHint("/plugins/orch", vertexCredentialState({ env: {}, adcFile: absentFile }), { GEMINI_API_KEY: "k" }),
+    null,
+  );
+  // A named project is not a credential, so it is not an open door either.
+  assert.equal(
+    agentPathAvailableHint("/plugins/orch", vertexCredentialState({ env: { GOOGLE_CLOUD_PROJECT: "p" }, adcFile: absentFile }), {}),
+    null,
+  );
 });
 
 test("the credential check is silent for anyone who did not select the agent path", () => {
@@ -184,7 +362,7 @@ test("Vertex credentials present means no credential finding", () => {
     ...healthy,
     hasAdcFile: true,
     env: { SDLC_SELECT: AGENT_WORKER_SELECT },
-    agentWorker: { selected: true, hasVenv: true, hasSdk: true, python: "/py" },
+    agentWorker: { hasVenv: true, sdkImportable: true, detail: null },
   });
   assert.ok(!problems.some((p) => p.id === "agent-worker-credentials"));
 });

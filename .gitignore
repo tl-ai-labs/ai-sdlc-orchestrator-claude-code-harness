@@ -40,6 +40,16 @@ _raw_*.json
 /.sdlc/
 examples/*/passes/*/
 
+# ...except these two, which are shipped evidence rather than someone's leftover
+# run. They are the same brief run twice, once down each Gemini door, and they
+# are the only place a reader can see what the agent path actually produces
+# without paying for a run to find out. Node modules, the npm lock file and the
+# Antigravity SDK's own session caches are left out: none is pipeline output, and
+# the caches are opaque binaries full of the recording machine's paths.
+!examples/quick-demo/passes/model-path/
+!examples/quick-demo/passes/agent-path/
+examples/quick-demo/passes/*/src/node_modules/
+
 # Generated MCP registration — contains absolute paths + copied API keys,
 # per-machine, written by tools/setup.mjs
 .mcp.json

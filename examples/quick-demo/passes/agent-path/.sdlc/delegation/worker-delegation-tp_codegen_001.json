@@ -1,0 +1,67 @@
+{
+  "schema": "delegation-record/1",
+  "task_id": "tp_codegen_001",
+  "phase": "codegen",
+  "task_type": "module_wiring",
+  "module": "manifest",
+  "model_id": "flash-agsdk-worker",
+  "model_name": "gemini-3.5-flash",
+  "cable": {
+    "sdk": "google-antigravity",
+    "sdk_version": "0.1.9",
+    "vertex_project": "your-project-id",
+    "vertex_location": "global",
+    "thinking": "NONE"
+  },
+  "workdir": "/workspace/ping-service/src",
+  "started_at": "2026-08-05T01:56:26.423Z",
+  "duration_ms": 17240,
+  "success": true,
+  "error": null,
+  "cost_usd": 0.046171,
+  "tokens": {
+    "input": 15576,
+    "input_cached": 25328,
+    "output": 2112,
+    "output_reasoning": 1576
+  },
+  "tool_calls": {
+    "count": 2,
+    "truncated": false,
+    "sample": [
+      {
+        "name": "edit_file",
+        "args": {
+          "file_path": "/workspace/ping-service/src/package.json"
+        },
+        "canonical_path": "/workspace/ping-service/src/package.json",
+        "args_clipped": false
+      },
+      {
+        "name": "view_file",
+        "args": {
+          "file_path": "/workspace/ping-service/src/package.json",
+          "start_line": "0",
+          "end_line": "799"
+        },
+        "canonical_path": "/workspace/ping-service/src/package.json",
+        "args_clipped": false
+      }
+    ]
+  },
+  "files": {
+    "added": [
+      "package.json"
+    ],
+    "modified": [],
+    "removed": [],
+    "unchanged": 0,
+    "scanned": 1,
+    "truncated": false,
+    "unreadable": []
+  },
+  "artifacts": {
+    "brief": "worker-task-tp_codegen_001.md",
+    "usage": "worker-usage-tp_codegen_001.json"
+  }
+}

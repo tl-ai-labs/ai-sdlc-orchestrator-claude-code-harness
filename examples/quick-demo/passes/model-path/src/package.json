@@ -1,0 +1,25 @@
+{
+  "name": "ping-service",
+  "version": "1.0.0",
+  "description": "An HTTP service with one endpoint that answers GET /ping.",
+  "main": "app.js",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node"
+  }
+}

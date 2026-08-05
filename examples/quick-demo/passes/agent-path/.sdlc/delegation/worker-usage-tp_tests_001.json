@@ -1,0 +1,73 @@
+{
+  "model": "gemini-3.5-flash",
+  "thinking": "NONE",
+  "sdk": "google-antigravity",
+  "sdk_version": "0.1.9",
+  "vertex_project": "your-project-id",
+  "vertex_location": "global",
+  "usage": {
+    "prompt_token_count": 114604,
+    "cached_content_token_count": 89900,
+    "candidates_token_count": 1874,
+    "thoughts_token_count": 6880,
+    "total_token_count": 123358
+  },
+  "tool_call_count": 6,
+  "tool_calls_truncated": false,
+  "tool_calls": [
+    {
+      "name": "list_directory",
+      "args": {
+        "directory_path": "/workspace/ping-service/src"
+      },
+      "canonical_path": "/workspace/ping-service/src",
+      "args_clipped": false
+    },
+    {
+      "name": "view_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/package.json",
+        "start_line": "0",
+        "end_line": "799"
+      },
+      "canonical_path": "/workspace/ping-service/src/package.json",
+      "args_clipped": false
+    },
+    {
+      "name": "view_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/app.js",
+        "start_line": "0",
+        "end_line": "799"
+      },
+      "canonical_path": "/workspace/ping-service/src/app.js",
+      "args_clipped": false
+    },
+    {
+      "name": "edit_file",
+      "args": {
+        "file_path": "/workspace/ping-service/src/app.test.js"
+      },
+      "canonical_path": "/workspace/ping-service/src/app.test.js",
+      "args_clipped": false
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command_line": "npm test",
+        "working_dir": "/workspace/ping-service/src"
+      },
+      "canonical_path": null,
+      "args_clipped": false
+    },
+    {
+      "name": "edit_file",
+      "args": {
+        "file_path": "/home/user/.gemini/antigravity/brain/81e7d314eb8fac029eaa6fb256bea6b2/test_coverage_report.md"
+      },
+      "canonical_path": "/home/user/.gemini/antigravity/brain/81e7d314eb8fac029eaa6fb256bea6b2/test_coverage_report.md",
+      "args_clipped": false
+    }
+  ],
+  "text": "I will start by listing the contents of the working directory to see existing files and verify the layout.I will view `package.json` to inspect the dependencies and test script.I will view `app.js` to see the module under test and its API handlers.I will create the test file `app.test.js` in the absolute directory `/workspace/ping-service/src` with exactly three testing blocks.I will now run the tests using the `npm test` command to verify that all three tests pass successfully.I will create a markdown representation of the integration test in the brain artifact folder.{\n  \"artifact_path\": \"/workspace/ping-service/src/app.test.js\",\n  \"content\": \"'use strict';\\n\\nconst request = require('supertest');\\nconst app = require('./app');\\n\\nit('GET /ping returns 200', async () => {\\n  const before = Date.now();\\n  const res = await request(app).get('/ping');\\n  const after = Date.now();\\n\\n  expect(res.status).toBe(200);\\n  expect(res.headers['content-type']).toMatch(/application\\\\/json/);\\n  expect(res.body.status).toBe('ok');\\n  expect(Object.keys(res.body).sort()).toEqual(['status', 'time']);\\n  expect(typeof res.body.time).toBe('string');\\n  expect(Number.isNaN(Date.parse(res.body.time))).toBe(false);\\n  expect(res.body.time).toBe(new Date(res.body.time).toISOString());\\n  expect(res.body.time.endsWith('Z')).toBe(true);\\n\\n  const parsedTime = Date.parse(res.body.time);\\n  expect(parsedTime).toBeGreaterThanOrEqual(before - 1000);\\n  expect(parsedTime).toBeLessThanOrEqual(after + 1000);\\n});\\n\\nit('unknown path returns 404 JSON', async () => {\\n  const res = await request(app).get('/nope');\\n\\n  expect(res.status).toBe(404);\\n  expect(res.headers['content-type']).toMatch(/application\\\\/json/);\\n  expect(res.body).toEqual({ error: 'not found' });\\n  expect(res.text.trim().startsWith('<')).toBe(false);\\n});\\n\\nit('wrong method returns 404', async () => {\\n  // Citing FR-9: wrong method POST on /ping returns 404 error response as per product design.\\n  const res = await request(app).post('/ping');\\n\\n  expect(res.status).toBe(404);\\n  expect(res.body).toEqual({ error: 'not found' });\\n});\\n\"\n}"
+}

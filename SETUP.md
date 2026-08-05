@@ -90,17 +90,18 @@ The script reports three kinds of finding:
     subscription and runs under subscription auth.
   - Gemini access — required by any policy that routes mechanical phases to Gemini. The
     Claude-only policy does not need it. There are two ways in, and either satisfies the check:
-    `gcloud auth application-default login` for Vertex AI on a Google Cloud project, which uses
-    no key at all; or `GEMINI_API_KEY` for the AI Studio path. Offer the Vertex option first to
-    anyone who already has a Google Cloud project — it bills that project and needs no secret
-    on disk.
+    `gcloud auth application-default login` for **Gemini Enterprise Agent Platform** (the service
+    Google renamed from Vertex AI — both names are still in circulation, and the API surface and
+    the docs URLs still say `vertex`) on a Google Cloud project, which uses no key at all; or
+    `GEMINI_API_KEY` for the AI Studio path. Offer the Google Cloud option first to anyone who
+    already has a project — it bills that project and needs no secret on disk.
 - **`✓`** — setup is complete.
 
 **Where a credential is set matters as much as whether it is set.** Claude Code launched from the
 desktop app does not inherit a login shell, so a variable exported in `~/.zshrc` or typed into a
 terminal is invisible to it. There are two places that do work:
 
-- **Nowhere — the Vertex path.** `gcloud auth application-default login` writes a credentials file
+- **Nowhere — the Google Cloud path.** `gcloud auth application-default login` writes a credentials file
   to a fixed path that the plugin reads directly, and takes the Google Cloud project from that
   file's quota project. No environment variable is involved, which is why this is the option to
   offer first.
@@ -115,29 +116,46 @@ silently wrong — but the credential the user thought they had set is not in pl
 
 ## 5. Ask how Gemini should work on the mechanical tier
 
-**Ask this only if step 4 reported Vertex AI credentials.** The agent path signs with Application
-Default Credentials and has no API-key door, so on an AI-Studio-key-only install it is not a
-choice — it is an option that cannot work. Skip the question entirely there and go to step 6.
+**Ask this only if step 4 reported Google Cloud credentials.** The agent path signs with
+Application Default Credentials and has no API-key door, so on an AI-Studio-key-only install it is
+not a choice — it is an option that cannot work. Skip the question entirely there and go to step 6.
 Skip it too when there are no Gemini credentials at all.
 
-With Vertex credentials present, there are two doors to the same model and the user picks one.
-Ask in these words:
+With Google Cloud credentials present, there are two doors to the same model, billed to the same
+project, and the user picks one. Ask in these words:
 
-> Gemini can work two ways on the mechanical phases.
+> Gemini can work two ways on the mechanical phases. Both bill the same Google Cloud project.
 >
-> **As a model** — Claude reads your code and sends it over, Gemini sends text back. Cheap and
-> predictable: one request, one answer, per task. This is the default.
+> **As a model, through Gemini Enterprise Agent Platform** (formerly Vertex AI) — Google's own API
+> for the model. Claude reads your code and sends it over, Gemini sends text back. Cheap and
+> predictable: one request, one answer, per task. Nothing to install. This is the default.
 >
-> **As an agent, through Google's Antigravity SDK** — Gemini opens the folder itself, runs
-> commands and edits files, and Claude reviews the result. It needs Python 3.10 or newer and the
-> Antigravity SDK, a Python package this step installs for you. It costs several times more per
-> task: an agent re-sends the whole conversation on every tool call, on top of a fixed
-> multi-thousand-token preamble it carries every turn.
+> **As an agent, through Google's Antigravity SDK** — signing against that same project. Gemini
+> opens the folder itself, runs commands and edits files, and Claude reviews the result. It needs
+> Python 3.10 or newer and the Antigravity SDK, a Python package this step installs for you. It
+> costs several times more per task: an agent re-sends the whole conversation on every tool call,
+> on top of a fixed multi-thousand-token preamble it carries every turn.
+>
+> The model path is the right answer for most work. Pick the agent path when you want Gemini to do
+> the work rather than describe it.
 >
 > Set up the Antigravity SDK agent path as well? (default: no)
 
 On **no**, say nothing further about it and continue. Nothing needs to be written — the model path
 is what an untouched install already does.
+
+**If step 4 found no Google Cloud credentials, say what would open the second door**, rather than
+skipping in silence. Someone who runs `gcloud auth application-default login` a week from now has
+no reason to think of re-running this wizard, and will never be told the option exists:
+
+> The other door — Gemini as an agent, through the Antigravity SDK — signs with Google Cloud
+> credentials only. To open it later: `gcloud auth application-default login`, then re-run the
+> setup check with `--enable-agent`.
+
+The setup check says the same thing on its own from then on: once it can see real credentials on an
+install that is still on the model path, it prints that `--enable-agent` line at the end of every
+run. That is the surface people actually re-run, which is why the reminder lives there and not only
+here.
 
 On **yes**, run the same script from step 3 with `--enable-agent` instead of `--fix`:
 

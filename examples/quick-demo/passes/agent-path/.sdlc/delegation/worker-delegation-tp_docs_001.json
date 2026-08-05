@@ -1,0 +1,84 @@
+{
+  "schema": "delegation-record/1",
+  "task_id": "tp_docs_001",
+  "phase": "docs",
+  "task_type": "readme_section",
+  "module": "docs",
+  "model_id": "flash-agsdk-worker",
+  "model_name": "gemini-3.5-flash",
+  "cable": {
+    "sdk": "google-antigravity",
+    "sdk_version": "0.1.9",
+    "vertex_project": "your-project-id",
+    "vertex_location": "global",
+    "thinking": "NONE"
+  },
+  "workdir": "/workspace/ping-service/src",
+  "started_at": "2026-08-05T02:00:39.841Z",
+  "duration_ms": 57503,
+  "success": true,
+  "error": null,
+  "cost_usd": 0.139203,
+  "tokens": {
+    "input": 17404,
+    "input_cached": 68180,
+    "output": 11430,
+    "output_reasoning": 10512
+  },
+  "tool_calls": {
+    "count": 4,
+    "truncated": false,
+    "sample": [
+      {
+        "name": "list_directory",
+        "args": {
+          "directory_path": "/workspace/ping-service/src"
+        },
+        "canonical_path": "/workspace/ping-service/src",
+        "args_clipped": false
+      },
+      {
+        "name": "view_file",
+        "args": {
+          "file_path": "/workspace/ping-service/src/package.json",
+          "start_line": "0",
+          "end_line": "799"
+        },
+        "canonical_path": "/workspace/ping-service/src/package.json",
+        "args_clipped": false
+      },
+      {
+        "name": "edit_file",
+        "args": {
+          "file_path": "/workspace/ping-service/src/README.md"
+        },
+        "canonical_path": "/workspace/ping-service/src/README.md",
+        "args_clipped": false
+      },
+      {
+        "name": "run_command",
+        "args": {
+          "command_line": "npm test",
+          "working_dir": "/workspace/ping-service/src"
+        },
+        "canonical_path": null,
+        "args_clipped": false
+      }
+    ]
+  },
+  "files": {
+    "added": [
+      "README.md"
+    ],
+    "modified": [],
+    "removed": [],
+    "unchanged": 5,
+    "scanned": 6,
+    "truncated": false,
+    "unreadable": []
+  },
+  "artifacts": {
+    "brief": "worker-task-tp_docs_001.md",
+    "usage": "worker-usage-tp_docs_001.json"
+  }
+}
