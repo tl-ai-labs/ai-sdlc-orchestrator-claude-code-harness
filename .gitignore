@@ -42,9 +42,6 @@ examples/quick-demo/passes/*/src/node_modules/
 # Generated MCP registration — per-machine, absolute paths + copied API keys.
 .mcp.json
 
-# Local Claude Code repo-conventions file. Durable rules live in CONTRIBUTING.md.
-CLAUDE.md
-
 # OS / editor
 .DS_Store
 Thumbs.db
