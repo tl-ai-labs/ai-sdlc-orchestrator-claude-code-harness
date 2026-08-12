@@ -36,4 +36,45 @@ If `examples/<study-id>/passes/<run-id>/` already exists, its contents will be o
 
 When invoked headlessly (e.g. via `claude --print "/run-sdlc-pass ..." --output-format stream-json --verbose`), all four HITL gates auto-approve so the session can complete end-to-end without prompts.
 
+---
+
+## Brownfield-mode flags (added in v1)
+
+When `--mode=brownfield` is set, the pipeline uses the brownfield entry (equivalent to
+`/sdlc-brownfield` but flag-driven for scripted / CI use). Additional required + optional
+flags:
+
+| Flag | Purpose |
+|---|---|
+| `--mode=brownfield` | Switch to brownfield mode. Default is greenfield. |
+| `--intent=<docs\|bugfix\|feature-extend\|feature-new\|refactor\|test\|deps>` | Required in brownfield. The job type. Adds a `Gate 0` before Gate 1. |
+| `--brief=<path>` | Optional: pre-written intent brief (replaces the interview). Any markdown file with the section layout in [docs/brownfield.md](../../docs/brownfield.md) works. |
+| `--gates=<prompt\|auto-approve\|auto-abort>` | Gate behavior. `prompt` (default) is interactive; `auto-approve` accepts every gate (headless friendly); `auto-abort` **v1.5** — approves only when the run's fingerprint matches `.sdlc/project.json`, aborts otherwise. Recommended for CI so drift never silently proceeds. |
+| `--from-config=<path>` | **v1.5** — read gate answers from a committed team config file. Combined with `--gates=auto-abort`, this is the CI-safe flow. |
+| `--policy=<name>` | Same as greenfield. Overrides the plugin default (or a repo-local `routing-policy.yaml` if present). |
+| `--strict-write=off` | Downgrade the write-contract PreToolUse hook from HARD-BLOCK to WARN. Every off-limits or not-in-allowlist write is logged but not refused. Use with care — this defeats the plugin's main safety guarantee. |
+| `--allow-dirty` | Bypass the git-clean check when the git contract's `commit_strategy != none`. |
+| `--recheck` | Force pre-check re-run even when the cached status is still valid. Useful after a plugin version bump. |
+| `--adaptive-profile` | Force Tier 2b adaptive stack profile even when a matching pre-authored adapter exists. Useful when the shipped adapter's conventions don't match this repo. |
+| `--refresh-profile` | Force stack-profile re-scan (implies `--recheck`). Use after a substantial repo restructure. |
+
+**Brownfield output paths:**
+- `run_id`: `<YYYYMMDD-HHMMSS>-<intent>-<slug>`
+- `output_dir`: `.sdlc/runs/<run_id>/`
+- `telemetry_path`: `.sdlc/runs/<run_id>/telemetry.jsonl`
+- `manifest_path`: `.sdlc/runs/<run_id>/manifest.json`
+- `provenance_path`: `.sdlc/runs/<run_id>/provenance.json`
+
+**Brownfield requirements before starting:**
+- Everything greenfield requires, PLUS:
+- `.sdlc/local/write-contract.json` gets written after Gate 0 approval (before any packet
+  dispatches). The PreToolUse hook reads it on every `Write`/`Edit`.
+- The current directory MUST be a git repo (or an ancestor is). Brownfield refuses on non-git
+  folders with a clear message.
+- The pipeline pre-check (§7.4) must have passed or been skipped-with-user-consent for this
+  run's inputs.
+
+See [plugin/commands/sdlc-brownfield.md](sdlc-brownfield.md) for the interactive equivalent
+of these flags (the 7-step operating manual Claude follows in the interactive flow).
+
 Begin now.

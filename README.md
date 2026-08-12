@@ -6,11 +6,44 @@
 
 ## What this is
 
-A Claude Code plugin that runs a nine-phase AI-SDLC pipeline against a project brief. Requirements → design → task planning → codegen → tests → docs → senior review → security review → debug. Four of the phases stop at human approval gates. Two Gemini doors — as a model (Vertex or AI Studio) or as an agent (Antigravity SDK) — reach the same mechanical tier. Two auth modes — `vendor` (bills your Anthropic API key, reconciles to the dashboard) or `estimated` (subscription auth, char-count heuristic). Every telemetry event, every generated file, and the cost report land under the project directory. Nothing is uploaded off the machine.
+A Claude Code plugin that runs an AI-SDLC pipeline against either a project brief (greenfield —
+generate a whole new app) or an existing repository (brownfield — extend the code you already
+have). Requirements → design → task planning → codegen → tests → docs → senior review → security
+review → debug. Four of the phases stop at human approval gates. Two Gemini doors — as a model
+(Vertex or AI Studio) or as an agent (Antigravity SDK) — reach the same mechanical tier. Two
+auth modes — `vendor` (bills your Anthropic API key, reconciles to the dashboard) or
+`estimated` (subscription auth, char-count heuristic). Every telemetry event, every generated
+file, and the cost report land under the project directory. Nothing is uploaded off the machine.
+
+## Greenfield vs. brownfield
+
+Two task commands, one shared setup and machinery:
+
+| You have… | Command | What it does |
+|---|---|---|
+| An **empty folder** | `/sdlc-run` | Generates a whole new application from a project brief. The original greenfield flow. |
+| An **existing repo** (any stack, any conventions) | `/sdlc-brownfield` | Pick one of seven job types (docs, bugfix, feature-extend, feature-new, refactor, test, deps), confirm scope at Gate 0, then run the pipeline with a non-destructive write contract that guarantees off-limits files stay untouched. |
+
+Both use the same install (SETUP.md), same policies, same MCP dispatch layer. `/sdlc-run` in
+an existing repo now warns you and offers `/sdlc-brownfield` instead — treating your real code
+as an empty canvas is almost certainly not what you want.
+
+Brownfield-specific documentation:
+
+- [docs/brownfield.md](docs/brownfield.md) — overview + gate walkthrough
+- [docs/brownfield-write-contract.md](docs/brownfield-write-contract.md) — how the write
+  contract enforces "never touch off-limits"
+- [docs/brownfield-coexistence.md](docs/brownfield-coexistence.md) — coexistence with your
+  other AI tools (Cursor, Aider, Copilot, custom MCP)
+- [docs/brownfield-privacy.md](docs/brownfield-privacy.md) — data flow, private endpoints,
+  regulated repos
+- [docs/brownfield-setup-issues.md](docs/brownfield-setup-issues.md) — the 17 known
+  setup-time issues + their handling
+- [docs/brownfield-routing.md](docs/brownfield-routing.md) — which model does which work
 
 ## The two-prompt flow
 
-The primary UX. Open Claude Code in an empty folder. Nothing to clone, nothing to type by hand.
+The primary UX. Nothing to clone, nothing to type by hand.
 
 **Prompt 1 — setup.** Paste this verbatim:
 
@@ -18,17 +51,28 @@ The primary UX. Open Claude Code in an empty folder. Nothing to clone, nothing t
 Setup this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness
 ```
 
-Claude Code follows [SETUP.md](SETUP.md): registers the marketplace, installs the plugin, builds the bundled MCP server, checks credentials, and asks whether to enable the Antigravity SDK agent path (only when Google Cloud credentials are present).
+Claude Code follows [SETUP.md](SETUP.md): registers the marketplace, installs the plugin,
+builds the bundled MCP server, checks credentials, and asks whether to enable the Antigravity
+SDK agent path (only when Google Cloud credentials are present). For brownfield mode, add
+`--brownfield-check` to `verify-setup.mjs` and it also runs the additional Node/git/permission
+checks and the credential discovery scan.
 
-**Prompt 2 — run.** Start a new session in the same folder, then:
+**Prompt 2 — run.** Start a new session in the same folder, then whichever fits:
 
 ```
-/sdlc-run
+/sdlc-run             # greenfield: empty folder + project brief
+/sdlc-brownfield      # brownfield: existing repo, pick a job type
 ```
 
-The command checks the install, finds a brief in the folder or offers the shipped examples (or writes one from your description), shows which model each phase will run on, confirms the plan, and only then starts spending. Generated code lands in `./src`; telemetry, manifest, and cost report land in `./.sdlc/`.
+Both check the install, show which model each phase will run on, confirm the plan (with a
+Gate 0 in brownfield), and only then start spending. Generated code lands where it should —
+`./src` for greenfield, the paths you confirmed at Gate 0 for brownfield. Telemetry, manifest,
+and cost report always land under `.sdlc/`.
 
-The new session matters. Claude Code registers a plugin's slash commands and starts its MCP servers only when a session begins, so `/sdlc-run` and the bundled server are not live in the install session — a run started there would route every phase to the premium model.
+The new session matters. Claude Code registers a plugin's slash commands and starts its MCP
+servers only when a session begins, so `/sdlc-run`, `/sdlc-brownfield`, and the bundled server
+are not live in the install session — a run started there would route every phase to the
+premium model.
 
 ## Before you start
 
@@ -50,7 +94,11 @@ Nine phases run under a Claude Code subagent (`orchestrator`) that reads a polic
 | Plugin manifest | [plugin/.claude-plugin/plugin.json](plugin/.claude-plugin/plugin.json) |
 | Marketplace entry | [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json) |
 | Orchestrator subagent | [plugin/agents/orchestrator.md](plugin/agents/orchestrator.md) |
-| Slash commands | [plugin/commands/sdlc-run.md](plugin/commands/sdlc-run.md), [plugin/commands/run-sdlc-pass.md](plugin/commands/run-sdlc-pass.md) |
+| Slash commands (greenfield) | [plugin/commands/sdlc-run.md](plugin/commands/sdlc-run.md), [plugin/commands/run-sdlc-pass.md](plugin/commands/run-sdlc-pass.md) |
+| Slash commands (brownfield) | [plugin/commands/sdlc-brownfield.md](plugin/commands/sdlc-brownfield.md), [plugin/commands/sdlc-revert.md](plugin/commands/sdlc-revert.md) |
+| Discovery subagent (brownfield) | [plugin/agents/discovery.md](plugin/agents/discovery.md) |
+| Stack adapters | [plugin/skills/run-ai-sdlc/stacks/](plugin/skills/run-ai-sdlc/stacks/) |
+| Write-contract hook (brownfield) | [plugin/scripts/write-contract-check.mjs](plugin/scripts/write-contract-check.mjs) |
 | MCP server entry | [plugin/mcp/gemini-flash-server/src/server.ts](plugin/mcp/gemini-flash-server/src/server.ts) |
 | Routing | [plugin/mcp/gemini-flash-server/src/routing.ts](plugin/mcp/gemini-flash-server/src/routing.ts) |
 | Adapters | [plugin/mcp/gemini-flash-server/src/adapters/](plugin/mcp/gemini-flash-server/src/adapters/) |
