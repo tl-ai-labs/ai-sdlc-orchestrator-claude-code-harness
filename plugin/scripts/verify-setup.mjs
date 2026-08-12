@@ -843,6 +843,51 @@ function report({ ok, problems }, log) {
   return ok;
 }
 
+/**
+ * Brownfield-mode setup checks. Delegates to env-checks.mjs (Node/git
+ * versions, ~/.claude and .sdlc writability, plugin command-name
+ * conflicts) and credential-discovery.mjs (Anthropic/Gemini/Antigravity
+ * scan across shell env, home configs, shell rc, repo .env* and code
+ * references — names only, never values).
+ *
+ * Both are standalone .mjs so they can also run independently (env-checks
+ * in CI headless mode, credential-discovery from the shepherd's inline
+ * remediation dialog). Here we just spawn them and merge their reports
+ * so the setup-check output has one unified section.
+ *
+ * Returns { ok, blockers, advisories, env, credentials } — the caller
+ * combines this with the existing greenfield-check verdict to decide
+ * the process exit code.
+ */
+export function runBrownfieldChecks(pluginRoot, { spawn = spawnSync } = {}) {
+  const envCheckPath = join(pluginRoot, "scripts", "env-checks.mjs");
+  const credDiscoveryPath = join(pluginRoot, "scripts", "credential-discovery.mjs");
+
+  const envResult = spawn(process.execPath, [envCheckPath, "--json"], {
+    encoding: "utf8",
+    timeout: 10000,
+  });
+  let envReport;
+  try { envReport = JSON.parse(envResult.stdout ?? "{}"); }
+  catch { envReport = { schema_version: 1, ok: false, blockers: 1, error: "env-checks did not emit parseable JSON" }; }
+
+  const credResult = spawn(process.execPath, [credDiscoveryPath, "--include-antigravity"], {
+    encoding: "utf8",
+    timeout: 10000,
+  });
+  let credReport;
+  try { credReport = JSON.parse(credResult.stdout ?? "{}"); }
+  catch { credReport = { schema_version: 1, providers: [], error: "credential-discovery did not emit parseable JSON" }; }
+
+  return {
+    ok: envReport.ok !== false,
+    blockers: envReport.blockers ?? 0,
+    advisories: envReport.advisories ?? 0,
+    env: envReport,
+    credentials: credReport,
+  };
+}
+
 // Direct-execution gate so the test suite can import the pure helpers.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -851,6 +896,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const enableAgent = process.argv.includes("--enable-agent");
   const disableAgent = process.argv.includes("--disable-agent");
   const scope = process.argv.includes("--user") ? "user" : "project";
+  const brownfieldCheck = process.argv.includes("--brownfield-check");
+  const headless = process.argv.includes("--headless");
 
   log("\nAI-SDLC orchestrator — setup check");
 
@@ -932,5 +979,35 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     if (hint) log(hint);
   }
 
-  process.exit(passed ? 0 : 1);
+  // Brownfield-mode checks — opt-in via --brownfield-check. When used from
+  // the setup shepherd this is always set; the existing --fix / --enable-agent
+  // flows keep their current behaviour untouched. Headless (CI) mode passes
+  // both --brownfield-check and --headless.
+  let brownfieldOk = true;
+  if (brownfieldCheck) {
+    log("");
+    log("Brownfield-mode setup checks:");
+    const bf = runBrownfieldChecks(pluginRoot);
+    brownfieldOk = bf.ok;
+    for (const c of bf.env?.checks ?? []) {
+      const mark = c.ok ? "  ✓" : (c.severity === "blocker" ? "  ✗" : "  ⚠");
+      log(`${mark} ${c.id}${c.ok ? "" : " — " + (c.error ?? c.severity)}`);
+      if (!c.ok && Array.isArray(c.remediation)) {
+        for (const line of c.remediation) log("      " + line);
+      } else if (c.note) log("      " + c.note);
+    }
+    log("");
+    log("  Credentials scan (names only, values never read):");
+    for (const p of bf.credentials?.providers ?? []) {
+      const found = p.found ? "found" : "not found";
+      const flavors = p.flavors ? " [" + Object.entries(p.flavors).filter(([, v]) => v).map(([k]) => k).join(", ") + "]" : "";
+      log(`    ${p.name}: ${found}${flavors}${p.required ? " (required)" : (p.optional_and_opt_in ? " (opt-in)" : " (optional)")}`);
+    }
+    if (headless && !brownfieldOk) {
+      log("");
+      log("Headless mode: a blocker check needs human action. Fix the reported items and re-run.");
+    }
+  }
+
+  process.exit((passed && brownfieldOk) ? 0 : 1);
 }
