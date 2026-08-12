@@ -316,6 +316,105 @@ On `incremental` refresh, merge the delta into `current.json` in place; the per-
 - **Non-UTF8 files** — if a `Read` fails on a candidate file, skip it and continue. Don't crash the scan.
 - **Missing git** — you already refused at the precondition step; this shouldn't be reachable.
 
+# Tier 2b — Adaptive stack profile
+
+**Runs only when triggered.** This is the additional step from plan §21 for repos with a stack we don't already know well. When it triggers:
+
+**Trigger conditions (any of):**
+1. Group 3 detected a stack (or dominant stack) that has no matching pre-authored adapter in `plugin/skills/run-ai-sdlc/stacks/`. In v1, we ship `generic.md`, `nest.md`, `python.md`. So a repo whose primary stack is React/Next.js, Go, Rails, Java, Rust, etc. triggers this step.
+2. Repo-root `CLAUDE.md` explicitly declares a custom framework — grep for phrases like `custom framework`, `internal framework`, `bespoke framework`, `in-house framework`, or a `## Framework:` heading pointing at something unfamiliar.
+3. The caller passed `--adaptive-profile` (forces the step regardless of stack detection).
+
+If none apply, skip this section entirely. The pre-authored adapter fragment is enough baseline for downstream phases.
+
+**What the step does:** samples the actual repo to learn its conventions, rather than assuming from generic prompts. This is the primary quality mechanism per D1 (§21). Pre-authored adapters become optional baselines; the learned profile wins on conflict because it reflects reality.
+
+## Sampling procedure
+
+For each detected file "kind," sample 3-5 files and extract patterns. Kinds and how to find them:
+
+- **Controllers / handlers / routes:** grep for framework routing markers (`@Controller`, `@app.route`, `@Route`, `router.get`, `http.HandleFunc`, `class ...Controller`, `views.py`). Or find files whose name matches `*.controller.*`, `*.handler.*`, `*.routes.*`, `*_view.py`.
+- **Services / domain classes:** grep for `class ...Service`, `@Injectable`, `class ...Repository`, `class ...UseCase`. Or files matching `*.service.*`, `*_service.py`.
+- **Tests:** find by test-runner convention — `*.spec.*`, `*.test.*`, `test_*.py`, `*_test.go`. Read one from each of the top 2-3 test directories.
+- **Config validators:** grep for `Joi.object`, `Zod.object`, `z.object`, `Ajv`, `envalid`, `pydantic.BaseSettings`, `viper`, `koanf`.
+- **ORM models / migrations:** files matching `schema.prisma`, `models/*.py`, `entities/*.ts`, `db/migrations/*`, `alembic/versions/*`, `Sequelize.define`.
+- **Entry points:** already noted in Tier 1 group 8. Read them for the framework bootstrap shape (which module wires what).
+
+For each sample, extract:
+- **File naming convention** — `PascalCase.controller.ts` vs `pascal_case.py` vs `kebab-case.ts` vs `snake_case_controller.rb`. Note the whole shape, not just the case (e.g. `.controller.ts` suffix vs `Controller` class-name suffix).
+- **Decorators / annotations** — what precedes public methods and classes. Even a custom `@Route(method, path)` decorator is signal.
+- **Import shapes** — ESM vs CJS, relative vs alias imports (`~/`, `@/`), typical top-of-file layout.
+- **Folder structure** — one class per file? Or feature-folders with `index.ts` barrels? Or `handlers/`, `services/`, `dto/` split?
+- **Test-runner idioms** — `describe/it` (mocha/vitest/jest) vs `test(...)` (node:test) vs pytest fixtures vs Go table-driven. Note how tests are named and organized.
+- **Config approach** — env-driven with validator? YAML/JSON files? A dedicated `config/` module?
+- **ORM / data layer** — Prisma vs TypeORM vs Sequelize vs raw SQL vs Django ORM vs SQLAlchemy vs a custom query builder.
+- **Framework-owned wiring** — how does a new route "register"? (Nest module `controllers` array, Django `urls.py`, FastAPI `include_router`, Rails routes.rb, Next.js file-based).
+
+## Sampling bounds
+
+- **At most 5 files per kind.** Diminishing returns beyond that. Pick recent-most files (`ls -t | head -5` equivalent via Bash + stat) — old files may reflect superseded conventions.
+- **Skip files > 500 lines.** They're likely edge cases; conventions are visible in smaller units.
+- **Skip files under `test/fixtures/`, `**/__snapshots__/`, `**/generated/`.** These aren't authored conventions.
+- **Whole step timeboxed to 20 seconds.** If a very large repo can't be sampled in that time, note it in the profile and record what you found.
+
+## Output — `.sdlc/baseline/stack-profile.md`
+
+Write a concise markdown document. Structure:
+
+```markdown
+# Stack profile — learned from repo scan
+
+## Language & runtime
+<one paragraph — versions, module system, notable strict-mode settings>
+
+## Framework
+<detected framework(s) or "custom in-house — call it '<name>'">
+
+## Conventions detected
+
+### File naming
+- <specific pattern with 1-2 real filenames as examples>
+
+### Handler / controller shape
+```<snippet from a real file — 5-15 lines showing the pattern>```
+
+### Service shape
+<same>
+
+### Test shape
+<same>
+
+### Config
+<how env / config is loaded and validated>
+
+### Data layer
+<ORM or raw or query builder — with a real snippet>
+
+### Framework-owned wiring
+<how new routes register — with a real example>
+
+## Sample files inspected
+- <path> (kind: controller)
+- <path> (kind: service)
+- ...
+
+## Notes for downstream codegen
+- <specific tips for producing code that matches this repo's style>
+```
+
+Real file snippets are the point — codegen packets receive this profile verbatim and pattern-match on the snippets. Prose descriptions alone are less useful.
+
+## Downstream consumption
+
+The packet planner (phase 4) receives both the pre-authored adapter fragment (if any) AND this stack profile. If both exist and disagree, the profile wins. Both are appended to codegen packet inputs, with the profile marked as authoritative.
+
+## Freshness
+
+The profile is cached in `.sdlc/baseline/stack-profile.md` and reused across runs. It's refreshed when:
+- A stack manifest changed and `discovery-refresh.mjs` returned `full` (implies re-scan)
+- User passed `--refresh-profile` (forced)
+- More than 10 successful runs have elapsed since the profile was last built (conservative freshness bound)
+
 # Never do
 
 - Read the value side of any env file. Names only, ever.
