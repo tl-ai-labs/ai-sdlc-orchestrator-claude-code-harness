@@ -196,6 +196,45 @@ Read all events in `<telemetry_path>`. Build rollup manifest using the `buildMan
 
 ---
 
+## Intent matrix — brownfield only
+
+**Applies only when `mode: brownfield`.** Greenfield (`/sdlc-run`) runs the full pipeline
+described above with no matrix-based branching.
+
+In brownfield, one state machine handles seven intents. Which phases fire — and what shape their
+outputs take — depends on the intent picked at Gate 0. Tier assignment (which model runs each
+phase) does NOT change per intent; that's fixed by the loaded policy (§11).
+
+| Intent | Phase 1 · requirements | Phase 2 · architecture | Phase 4 · packet plan | Phase 7 · tests | Phase 8 · security review |
+|---|---|---|---|---|---|
+| **docs** | scoped ("what docs?") | **SKIP** | `doc_addition` / `doc_update` packets | doc-lint only | changed files only |
+| **bugfix** | reproduce + diagnose | **SKIP** unless design-affecting | `bug_reproduce` → `bug_diagnose` → `bug_fix_apply` → `test_add` | regression + focused suite | changed files only |
+| **feature-extend** | delta requirements | delta `change_plan.md` | mixed `existing_file_edit` + `new_file_add` | affected suites | changed files only |
+| **feature-new** | new-feature requirements | full subsystem design (`change_plan.md`) | full mix (`new_file_add`, `test_add`, `doc_addition`, wiring) | affected + new | changed files only |
+| **refactor** | delta (what to preserve) | delta refactor plan | `refactor_extract` + `patch_apply` | **full suite** (invariants) | changed files only |
+| **test** | coverage target | **SKIP** | `test_backfill` / `test_add` | new tests + full suite | test files only |
+| **deps** | upgrade target list | dep-swap plan | `dependency_add` + adjacent-code patches | full suite + smoke | dep-diff + advisory |
+
+**v1 specialization scope (per C6 cut).** Matrix cells are fully specified for the four "known"
+intents (docs, bugfix, feature-extend, feature-new) because they map cleanly to the greenfield
+behavior we already have. The three "new" intents (refactor, test, deps) route to the closest-
+fitting known behavior in v1, with intent-specific prompt overrides landing in v1.5. This means
+v1 ships all seven intents (surface-complete) with the last three at ~70% of full-specialized
+quality; v1.5 tightens them.
+
+**How the orchestrator branches.** After Gate 0 approval (which sets `intent` on the run
+context), the orchestrator consults this table before each phase to decide: SKIP the phase, run
+its default form, or run its intent-specific form. Skipped phases still emit a TelemetryEvent
+with `phase: <name>, task_type: "skipped"` so downstream summaries stay complete.
+
+**Skip semantics.**
+- SKIP means the phase does not run at all — no packet dispatched, no artifact written, no gate
+  fires for that phase. The gate immediately after a skipped phase is also skipped.
+- Docs intent example: Phase 2 (architecture) skips → Gate 2 also skips → orchestrator goes
+  straight from Gate 1 (requirements) to Phase 4 (packet planning).
+
+---
+
 ## HITL gate prompt templates
 
 **Subagent → main-loop bubble-up (all gates).** The orchestrator is a Claude Code subagent —

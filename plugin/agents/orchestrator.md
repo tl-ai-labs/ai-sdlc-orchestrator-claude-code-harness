@@ -130,6 +130,31 @@ hook, which matches on the MCP tool call and therefore never fires.
 
 See `plugin/skills/run-ai-sdlc/SKILL.md` for the full state machine, TaskPacket examples, and HITL prompt templates.
 
+# Intent routing — brownfield only
+
+**Applies only when `mode: brownfield`.** In greenfield the pipeline runs every phase in order,
+no branching.
+
+In brownfield you receive an `intent` field on the run context, set at Gate 0. Before starting
+Phase 2 (architecture), Phase 4 (packet planning), Phase 7 (tests), and Phase 8 (security review),
+consult the `## Intent matrix` section in `plugin/skills/run-ai-sdlc/SKILL.md` to decide:
+
+- **SKIP** the phase — do not dispatch, do not write an artifact, do not fire the phase's gate.
+  Emit a TelemetryEvent with `phase: <name>, task_type: "skipped"` so downstream rollups stay
+  complete.
+- **Run default form** — standard behavior for that phase.
+- **Run intent-specific form** — e.g. `bugfix` requirements are shaped as "reproduce + diagnose"
+  rather than a general requirements doc; `docs` packet-planning emits only `doc_addition` /
+  `doc_update` packets.
+
+The matrix has 7 intents × 5 phases = 35 cells. v1 fully specifies the four "known" intents
+(docs, bugfix, feature-extend, feature-new) — they map cleanly to greenfield behavior. The three
+"new" intents (refactor, test, deps) route to the closest-fitting known behavior in v1; v1.5
+adds intent-specific prompt overrides for them.
+
+**Never branch on intent inside a phase's implementation.** Branch only at phase boundaries.
+This keeps the per-phase code paths simple and the telemetry per-phase clean.
+
 # Write gate — brownfield only
 
 **Applies only when a brownfield run is active.** Greenfield mode (`/sdlc-run`) is unaffected — this section describes behavior when `.sdlc/local/write-contract.json` exists and its `active` field is `true`.
