@@ -129,3 +129,26 @@ hook, which matches on the MCP tool call and therefore never fires.
    On test failures other than env: parse the output, build a debug TaskPacket with the failing test name + error + relevant source slice, route via policy.
 
 See `plugin/skills/run-ai-sdlc/SKILL.md` for the full state machine, TaskPacket examples, and HITL prompt templates.
+
+# Write gate — brownfield only
+
+**Applies only when a brownfield run is active.** Greenfield mode (`/sdlc-run`) is unaffected — this section describes behavior when `.sdlc/local/write-contract.json` exists and its `active` field is `true`.
+
+In brownfield mode, every file write must originate from a validated TaskPacket. Never call raw `Write` or `Edit` for source-code paths outside of packet execution. Direct-tier work you handle yourself (writing `requirements.md`, `change_plan.md`, the senior/security review artifacts) still writes files — those writes must go to paths under `.sdlc/runs/<run-id>/` (auto-allowlisted) or to paths in the confirmed allowlist. Any write to a user-source path from your own tier is a bug in the flow; construct a packet instead.
+
+Three enforcement layers make this promise stick — the third is the only one you cannot talk your way past:
+
+1. **This prompt (soft).** Before every `Write`/`Edit`, resolve the target path against `.sdlc/local/write-contract.json`. If it hits an `off_limits` pattern, or is absent from `allowlist`, refuse the packet and surface the issue to the user via a mini-gate — do not attempt the write. This layer relies on your discipline; the next two exist because prompts drift.
+2. **The packet validator (schema).** Every TaskPacket's `artifact_path` field is validated against the confirmed allowlist before the MCP server dispatches. Off-limits paths are rejected at dispatch time, not at write time.
+3. **The PreToolUse hook (hard).** `plugin/hooks/hooks.json` registers a matcher on `Write|Edit` that invokes `plugin/scripts/write-contract-check.mjs`. The hook reads `.sdlc/local/write-contract.json` and either allows or refuses the tool call at the tool boundary. Refused writes never reach the filesystem. On by default in brownfield mode. The escape hatch is `contract.strict = false` (equivalent to a run passing `--strict-write=off`), which downgrades every enforcement to a warning.
+
+**Merge semantics for sensitive files** (deep-merge, never overwrite) — even when a path is in the allowlist:
+- `package.json` — add missing deps/scripts, never remove or downgrade; new script names must not shadow existing.
+- `.env` / `.env.example` — append missing keys only; never rewrite existing values; **never `cp .env.test .env` when `.env` exists**.
+- `CLAUDE.md`, `.claude/settings.json`, `.mcp.json` — read → parse → deep-merge → write, with a diff shown to the user at a mini-gate before the write.
+- `routing-policy.yaml` — never touched if pre-existing (Gate 0 already surfaces this to the user).
+- `.cursor/rules`, `.aider*`, `.continue/`, `.github/copilot-instructions.md` — default off-limits; only editable if the user explicitly moved them into the allowlist at Gate 0.
+
+**Diff-preview mini-gate** for any packet targeting a file that existed at discovery time: dispatch the packet, receive the proposed content, compute a unified diff against the current file, show the diff to the user, and only write on approval. This is the concrete answer to "we don't know how they use Gemini / Cursor / their own config" — even if discovery misclassified a file's role, the user sees the diff before it lands.
+
+See `plugin/scripts/write-contract-check.mjs` for the hook implementation and the exact schema of `.sdlc/local/write-contract.json`.

@@ -33,6 +33,13 @@ export interface TaskPacket {
   budget: { maxInputTokens: number; maxOutputTokens: number };
   retry_count?: number;
   pass_id: string;
+  /**
+   * Brownfield only. The repo-relative path this packet will write to.
+   * The MCP dispatcher validates this against `.sdlc/baseline/current.json`
+   * allowlist before dispatching. Undefined = packet writes nothing
+   * (analysis / review packet) or greenfield mode.
+   */
+  artifact_path?: string;
 }
 
 export interface TelemetryEvent {
