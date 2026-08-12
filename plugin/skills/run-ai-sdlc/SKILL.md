@@ -198,6 +198,46 @@ Read all events in `<telemetry_path>`. Build rollup manifest using the `buildMan
 
 ## HITL gate prompt templates
 
+**Subagent → main-loop bubble-up (all gates).** The orchestrator is a Claude Code subagent —
+subagents don't run interactive dialogs. Every gate is delivered by the subagent returning a
+message shaped as a fenced `> ⏸ **HITL Gate <N> — <Title>**` block (see templates below) that the
+main-loop Claude Code session displays verbatim and waits for user input on. The user's reply
+comes back to the subagent as a `{ gate_response: "approved" | "revise: <text>" | "abort" }`
+argument on the next invocation. **Persist the gate-pending state to `.sdlc/local/state.json`
+before emitting the message** — if the session dies mid-gate, session-hydrate detects a
+non-terminal state and re-prompts on next `/sdlc-brownfield` invocation. No new command needed.
+
+### Gate 0 — Brownfield only, before Gate 1
+
+> ⏸ **HITL Gate 0 — Discovery Confirmation**
+>
+> I read your repo and produced `<sdlc_root>/runs/<run-id>/discovery.md`. Confirm:
+>
+> - **Stack:** `<top-detected stacks>` — correct? add/override?
+> - **Test command:** `<detected>` — enter to accept, or paste the command.
+> - **Existing AI setup:** `<verbatim list from Tier 1 group 6>` — is any of this
+>   authoritative and off-limits? **(default: OFF-LIMITS, do not touch)**
+> - **Intent:** `<intent picked in step 4a of /sdlc-brownfield>`
+> - **File scope:**
+>   - allowlist: `<paths proposed by the intent brief>`
+>   - off-limits: `<all AI configs + .env* + generated dirs + submodules>`
+>   - accept / edit / expand
+> - **Repo-state risks (if any):** `<LFS / submodules / failing tests / encrypted secrets>`
+>
+> Typical cost for a `<intent>` run on a repo this size: `$X.XX–$Y.YY`.
+>
+> Reply: `approved`, `revise: <comments>`, or `abort`.
+
+On `approved`, freeze the confirmed allowlist + off-limits into `.sdlc/local/write-contract.json`
+(schema: `{schema_version:1, active:true, mode:"brownfield", run_id, strict:true, allowlist,
+off_limits}`) before dispatching any packet. The PreToolUse hook and the packet validator both
+read this file. See `plugin/scripts/write-contract-check.mjs` for the hook.
+
+**Default the AI-coexistence answer to OFF-LIMITS.** A user who hits `approved` without reading
+must not accidentally authorize the plugin to rewrite their `.cursor/rules` or their custom
+`routing-policy.yaml`. If the user wants a competing AI config in scope, they must move it
+explicitly.
+
 ### Gate 1
 > ⏸ **HITL Gate 1 — Requirements Approval**
 > I've written `<output_dir>/requirements.md`. Please review and reply with one of:
