@@ -78,6 +78,17 @@ rules:
     use: opus
     reason: "Risk-bearing, low volume"
 
+  # Brownfield-mode phases (added in the v1 brownfield extension). Both
+  # explicitly premium — a wrong stack detection cascades into every
+  # downstream packet, and the change-plan is the brownfield equivalent
+  # of architecture_design (already premium above).
+  - when: { phase: discovery }
+    use: opus
+    reason: "Judgment: understanding an unknown repo is high-stakes"
+  - when: { phase: change_plan }
+    use: opus
+    reason: "Judgment: delta design for feature-extend / refactor / deps"
+
   - when:
       phase: codegen
       task_type:
@@ -116,3 +127,9 @@ rules:
 
   - default: opus
     reason: "Unrecognized task — fail safe to premium"
+
+# Hard per-run cost cap. When the accumulated cost_usd across telemetry
+# events for the current run exceeds this, the orchestrator aborts with
+# a clear message. Prevents runaway spend on an unexpectedly large repo.
+# Users on custom policies may raise or omit this.
+hard_cost_cap_usd: 50

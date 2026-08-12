@@ -13,7 +13,13 @@ export type Phase =
   | "senior_code_review"
   | "security_review"
   | "refactor"
-  | "final_report";
+  | "final_report"
+  // Brownfield additions (v1). Discovery is scoped to Tier 1 repo read;
+  // change_plan is the brownfield analog of architecture_design (delta doc
+  // rather than full subsystem design). Both routed to premium tier by
+  // default — see plugin/config/policies/*.yaml.
+  | "discovery"
+  | "change_plan";
 
 export interface FileSlice {
   path: string;
