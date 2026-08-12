@@ -127,6 +127,33 @@ Suggested packet types and one packet per:
 
 When the app uses a validating `ConfigModule` (or Joi / Zod / envalid equivalent), packets for `env_docs` and `env_test_fixture` are **required** — omitting either is a senior-reviewer blocker. The two files must be internally consistent: every key listed in `.env.example` must appear in `.env.test` with a schema-valid value.
 
+### Brownfield-mode task types (v1)
+
+The table above is greenfield-Nest-centric. In brownfield mode (`mode: brownfield`), packets use a **stack-agnostic** base set of primitives plus an optional `subtype` hint that the loaded stack adapter (`plugin/skills/run-ai-sdlc/stacks/*.md`) resolves to concrete codegen guidance.
+
+| task_type | Purpose | Common `subtype` values |
+|---|---|---|
+| `new_file_add` | Create a file that didn't exist at discovery time | `nest_controller` · `nest_service` · `django_view` · `fastapi_router` · `test` (see adapter) |
+| `existing_file_edit` | Modify a file that already existed | `module_wiring` · `url_registration` · `router_wiring` · `django_settings` |
+| `patch_apply` | Apply a specific unified diff | (rare — usually `existing_file_edit` is enough) |
+| `doc_addition` | New doc under docs/ or module README | `readme` · `adr` · `runbook` · `api` |
+| `doc_update` | Update an existing doc | — |
+| `test_add` | New test file for new source | `unit` · `integration` · `e2e` |
+| `test_backfill` | Add tests for existing untested code | Same as `test_add` |
+| `bug_reproduce` | Failing test that captures the bug | — |
+| `bug_diagnose` | Root-cause analysis — emit a note, not code | — |
+| `bug_fix_apply` | Apply the fix identified by `bug_diagnose` | — |
+| `refactor_extract` | Extract shared logic into a new utility | — |
+| `dependency_add` | Add a dep + adjacent-code adjustments | `patch` · `minor` · `major` |
+
+**Framework-owned wiring** — new controllers/routes/views usually need a corresponding
+registration edit in a wiring file (Nest module, Django urls.py, FastAPI main.py's
+include_router). Emit these as **paired packets** with the same `pass_id` — atomic per-pair:
+if the wiring edit fails, roll back the new-file packet within the same pair.
+
+**Every brownfield packet MUST set `artifact_path`** (§7.1) so the write-contract validator can
+reject off-limits paths at dispatch time. Missing `artifact_path` is a planner bug.
+
 ### TaskPacket initial output-ceiling budgets
 
 Set `budget.maxOutputTokens` per phase type. The adapter automatically doubles this ceiling on any attempt that terminates with the vendor's max-tokens stop reason (Anthropic `stop_reason: "max_tokens"`, Gemini `finishReason: "MAX_TOKENS"`), up to 3 doublings or the model's absolute output limit declared in the policy YAML (`max_output_tokens_absolute`), whichever comes first. Cached input keeps retry cost low.
