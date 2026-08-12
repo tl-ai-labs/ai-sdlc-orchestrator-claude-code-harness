@@ -17,7 +17,7 @@
 
 Extend the existing `multi-model-orchestrator@tilicho-ai-labs` plugin from "generates a new app from a brief in an empty folder" to "installs onto any existing repo and does one of seven kinds of work (docs / bugfix / feature-extend / feature-new / refactor / test / deps) safely, across many sessions, without touching anything the user hasn't approved."
 
-Ship as a new command `/sdlc-brownfield` (plus supporting `/sdlc-review` and `/sdlc-revert`), all setup folded into two prompts, with a non-destructive write contract enforced at three layers and multi-session machinery (baseline, ledger, provenance, rollback) that makes the second and Nth session on the same real project safe and coherent.
+Ship as a new command `/sdlc-brownfield` (plus supporting `/sdlc-revert`), all setup folded into two prompts, with a non-destructive write contract enforced at three layers and multi-session machinery (baseline, ledger, provenance, rollback) that makes the second and Nth session on the same real project safe and coherent.
 
 Greenfield mode continues to work unchanged.
 
@@ -60,7 +60,7 @@ Seven architectural decisions have been locked. Each has a corresponding plan se
 | D7 | **Credential discovery — "check first, ask second"** — scan shell env, gcloud, home dir configs, shell rc files, repo files, code references before asking user to set up fresh | §26 |
 
 **Plus these v1 commitments:**
-- 7 intents (`docs, bugfix, feature-extend, feature-new, refactor, test, deps`) + separate `/sdlc-review` command
+- 7 intents (`docs, bugfix, feature-extend, feature-new, refactor, test, deps`). Review-oriented capabilities (PR review, threat model, architecture review) deferred to v2 — different product category (competes with CodeQL / Cursor review / etc.); not core to safely-changing-code.
 - All §14 "must-have" multi-session items (§14.12 backlog)
 - Discovery model: tiered (Tier 1 always / Tier 2 at Gate 0 / Tier 2b adaptive profile / Tier 3 on-demand)
 - Safety defaults: write-contract PreToolUse hook **HARD-BLOCK by default** (escape hatch `--strict-write=off`); git-dirty **blocks when `commit_strategy != none`** (escape hatch `--allow-dirty`)
@@ -73,7 +73,6 @@ Seven architectural decisions have been locked. Each has a corresponding plan se
 
 ### 5.1 Commands (new)
 - `/sdlc-brownfield` — main entry point (six-section shepherd on first invocation per project)
-- `/sdlc-review` — read-only PR / diff review (produces review file, writes nothing to source)
 - `/sdlc-revert <run-id>` — single-run rollback via provenance
 
 ### 5.2 Discovery (tiered)
@@ -204,6 +203,7 @@ Under `plugin/examples/`:
 - Failure-mode rows 10–13 from §18 (state corruption recovery, rollback conflict UX, concurrent-run lock UX, plugin version-mismatch recovery)
 
 ### 6.2 Deferred to v2+
+- **Review-oriented capabilities** — PR / diff review command, threat model, architecture review, dead-code/dependency analysis reports. Different product category from safely-changing-code; competes with existing tools (CodeQL, Cursor review, GitHub Copilot review). Ship if real users ask for it.
 - `compute_baseline_manifest` MCP tool (batch SHA in Node)
 - Run archive tarball + pruning
 - `per-run` branch strategy + `draft-on-close` PR
@@ -364,7 +364,6 @@ Blocks / blocked-by relationships. Implement in order below unless you can paral
 
 **Files to create:**
 - `plugin/commands/sdlc-brownfield.md` — main command spec (includes pre-check + shepherd behavior)
-- `plugin/commands/sdlc-review.md` — read-only PR/diff review command
 - `plugin/commands/sdlc-run.md` (edit) — add mode-detection guard (refuses if not empty; suggests `/sdlc-brownfield`)
 
 **Files to edit:**
@@ -602,7 +601,6 @@ Group by directory. All net-new.
 
 ### 8.1 `plugin/commands/`
 - `sdlc-brownfield.md` (§7.7)
-- `sdlc-review.md` (§7.7)
 - `sdlc-revert.md` (§7.15)
 
 ### 8.2 `plugin/agents/`

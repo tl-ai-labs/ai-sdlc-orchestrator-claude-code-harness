@@ -433,7 +433,7 @@
     <div class="stat">
       <div class="num">~80%</div>
       <div class="lbl">of production SDLC work covered</div>
-      <div class="desc">Seven intents map to the day-to-day work teams actually do — feature, bug, refactor, test, deps, docs, plus a separate read-only PR review command.</div>
+      <div class="desc">Seven intents map to the day-to-day work teams actually do — docs, bugfix, feature-extend, feature-new, refactor, test, deps.</div>
     </div>
     <div class="stat">
       <div class="num">10×</div>
@@ -698,7 +698,7 @@
       <p class="lbl">Ships</p>
       <p class="when">v1</p>
       <ul>
-        <li>7 intents + separate read-only review command</li>
+        <li>7 intents (docs, bugfix, feature-extend, feature-new, refactor, test, deps)</li>
         <li>Tiered discovery + adaptive stack profile (for custom frameworks)</li>
         <li>Non-destructive write contract, hard-block hook</li>
         <li>Multi-session state model + ledger</li>
@@ -750,8 +750,8 @@
     <div class="feat"><span class="num">refactor</span><h4>Refactor</h4><p>Rename, extract, consolidate — safety-first across many files.</p></div>
     <div class="feat"><span class="num">test</span><h4>Backfill tests</h4><p>Coverage push, missing tests, flaky-test fixes.</p></div>
     <div class="feat"><span class="num">deps</span><h4>Deps &amp; security</h4><p>Dependency upgrades, CVE patches, deprecated-API replacements.</p></div>
-    <div class="feat"><span class="num">review</span><h4>PR review (no writes)</h4><p>Separate command. Produces a review report, doesn't modify source.</p></div>
   </div>
+  <p style="font-size:13.5px; color:var(--muted); margin-top:12px;">Note: <strong>PR / code review is deferred to v2</strong> — it's a different product category from safely-changing-code (competes with CodeQL, Cursor review, GitHub Copilot review) and not core to v1's value prop.</p>
 </section>
 
 <section>

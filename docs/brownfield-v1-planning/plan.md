@@ -5,7 +5,7 @@
 - **What.** Extend this Claude Code plugin from "generates a new app from a brief in an empty folder" to "installs onto any existing repo and does one of seven kinds of work (docs / bugfix / feature-extend / feature-new / refactor / test / deps) safely, across many sessions, without touching anything the user didn't approve."
 - **Why.** Every install doc today says "open Claude Code in an empty folder." Real users have real repos with real conventions, real AI tools already in place (Cursor / Aider / Copilot / their own MCP servers), real CI, real teammates. The plugin as it stands is a demo, not a product.
 - **How.** A new `/sdlc-brownfield` command runs a tiered discovery (~10 s), presents one Gate 0 confirmation, then routes into an intent-conditional pipeline that reuses most of the existing machinery. A non-destructive write contract enforced at three layers (prompt / packet validator / PreToolUse hook) guarantees off-limits files (theirs and ours) are never touched. Multi-session machinery (ledger, provenance, resume, staleness detection) makes the second and Nth session on the same project safe and coherent.
-- **All decisions locked.** V1 = 7 intents + separate `/sdlc-review` + all §14 must-haves + **adaptive stack profile** (§21) + **pipeline pre-check with max-scope robustness** (§22) + **two-prompt UX contract** (§23) + **explicit model-per-task routing docs** (§24) + **setup shepherd behavior** (§25) + **credential discovery "check first, ask second"** (§26). Discovery = tiered (Tier 1 / Tier 2 at Gate 0 / Tier 2b adaptive profile / Tier 3 on-demand). Safety: write-contract hook **hard block by default**; git-dirty **blocks when `commit_strategy != none`**. Stack adapters: **generic + nest + python** as baselines, adaptive profile as primary quality mechanism. All 15 setup-time robustness issues handled ("handle ≠ solve" principle). Prompt 1 shepherds interactively (auto-do / pause-and-guide / verify); credentials discovered across shell env, gcloud, home dir configs, shell rc files, and repo scan before ever asking user to set up fresh; headless mode for CI exits with clear log on any guide-needed step.
+- **All decisions locked.** V1 = 7 intents (no separate review command — review deferred to v2 as it's a different product category from safely-changing-code) + all §14 must-haves + **adaptive stack profile** (§21) + **pipeline pre-check with max-scope robustness** (§22) + **two-prompt UX contract** (§23) + **explicit model-per-task routing docs** (§24) + **setup shepherd behavior** (§25) + **credential discovery "check first, ask second"** (§26). Discovery = tiered (Tier 1 / Tier 2 at Gate 0 / Tier 2b adaptive profile / Tier 3 on-demand). Safety: write-contract hook **hard block by default**; git-dirty **blocks when `commit_strategy != none`**. Stack adapters: **generic + nest + python** as baselines, adaptive profile as primary quality mechanism. All 15 setup-time robustness issues handled ("handle ≠ solve" principle). Prompt 1 shepherds interactively (auto-do / pause-and-guide / verify); credentials discovered across shell env, gcloud, home dir configs, shell rc files, and repo scan before ever asking user to set up fresh; headless mode for CI exits with clear log on any guide-needed step.
 
 ---
 
@@ -123,7 +123,7 @@ Greenfield mode continues to work — the state machine picks the greenfield pat
 
 Locked as of this design pass:
 
-- **Intent count:** 7 (`docs, bugfix, feature-extend, feature-new, refactor, test, deps`) plus a separate `/sdlc-review` command (no writes). Covers ~80% of the §13 taxonomy.
+- **Intent count:** 7 (`docs, bugfix, feature-extend, feature-new, refactor, test, deps`). Covers ~70% of the §13 taxonomy. A read-only "review" capability is deferred to v2 (different product category — competes with existing code-review tools; not core to safely-changing-code).
 - **§14 v1 must-haves:** all seven (project state model, ledger, staleness detection, git contract, provenance + `/sdlc-revert`, coexistence enforcement, versioned state). Without them, session 2 on the same project is dangerous.
 - **Discovery model:** tiered (Tier 1 always ~10 s / Tier 2 confirm at Gate 0 / Tier 3 on-demand). Replaces the original 60–90 s pre-scan.
 
@@ -150,11 +150,10 @@ Explicitly out of scope for v1:
 
 `/run-sdlc-pass` grows `--mode brownfield --intent <docs|bugfix|feature-extend|feature-new|refactor|test|deps>` for headless / CI use.
 
-**The `/sdlc-review` command spec (A5 fix):** read-only sibling to `/sdlc-brownfield`. Reads a specified diff (`--diff HEAD~5..HEAD`, `--pr 123`, or the current branch's diff against main by default), runs the `senior-reviewer` + `security-reviewer` subagents in a *read-only* mode (no packet planner, no codegen, no writes to source), produces `.sdlc/reviews/<ts>-review.md` with prioritized findings. Uses the same discovery / Gate 0 machinery so scope is confirmed. Intent matrix skips phases 2, 4, 5, 7 entirely.
+**Note on `/sdlc-review`:** an earlier design pass proposed a read-only PR/diff review command. **Dropped from v1** on the honest read that code review is a different product category from safely-changing-code (competes with CodeQL, Cursor review, GitHub Copilot review, etc.) and isn't core to the plugin's main value prop. Deferred to v2 alongside other review-oriented capabilities (threat model, architecture review). See §6 out-of-scope.
 
 Files:
 - New: [plugin/commands/sdlc-brownfield.md](plugin/commands/sdlc-brownfield.md)
-- New: [plugin/commands/sdlc-review.md](plugin/commands/sdlc-review.md) (no-write review command per A5)
 - Edit: [plugin/commands/sdlc-run.md](plugin/commands/sdlc-run.md) — add mode-detection guard (A2)
 - Edit: [plugin/commands/run-sdlc-pass.md](plugin/commands/run-sdlc-pass.md) — add mode/intent flags
 - Edit: [plugin/.claude-plugin/plugin.json](plugin/.claude-plugin/plugin.json) — commands dir already loads by convention, no manifest change
@@ -827,14 +826,14 @@ Legend: ✅ covered · ⚠️ forced through closest fit · ❌ genuine gap (v2 
 | Observability instrumentation | ⚠️ `feature-extend` | Fits |
 | DB migration + backfill | ⚠️ `feature-extend` | Needs migration-preview sub-flow |
 | Schema docs | ✅ `docs` | — |
-| PR review (no writes) | ✅ `/sdlc-review` command | Separate top-level |
+| PR review (no writes) | ❌ deferred to v2 | Different product category; competes with CodeQL / Cursor review / etc. |
 | Architecture / threat-model review | ⚠️ `docs` | Analysis report |
 | Codebase Q&A / explain | ❌ | Deferred to `understand-anything` plugin |
 | Dead-code / cost analysis | ⚠️ `docs` | Analysis report |
 | Large migration | ❌ | v2 or later |
 | Lint / format / hygiene setup | ⚠️ `feature-new` | Small; could route via `deps` or new `chores` |
 
-Coverage: seven intents + `/sdlc-review` cover ~80% of production brownfield work.
+Coverage: seven intents cover ~70% of production brownfield work. Review-oriented work (PR review, threat model, architecture review) deferred to v2.
 
 ---
 
@@ -862,7 +861,6 @@ Coverage: seven intents + `/sdlc-review` cover ~80% of production brownfield wor
 
 **New — v1:**
 - `plugin/commands/sdlc-brownfield.md`
-- `plugin/commands/sdlc-review.md` (per A5)
 - `plugin/commands/sdlc-revert.md`
 - `plugin/agents/discovery.md` (front-matter tools: `Read, Glob, Grep, Bash(git *)` — D6)
 - `plugin/skills/run-ai-sdlc/stacks/{generic,nest,python}.md` (per open decision)
@@ -937,7 +935,7 @@ Cannot rely on unit tests alone — this is a workflow change verified by real r
 **v1 must-have (ships with brownfield GA):**
 
 *Pipeline (Part II):*
-- §1 command surface (`/sdlc-brownfield`, `/sdlc-review`)
+- §1 command surface (`/sdlc-brownfield` + `/sdlc-revert`)
 - §2 tiered discovery
 - §3 Gate 0
 - §4 write contract (all three enforcement layers)
@@ -1413,7 +1411,7 @@ Critical re-read of the plan looking for contradictions, gaps, over-engineering,
 | A2 | **Mode-detection entry point missing.** State machine says "picks greenfield path when `mode: greenfield`" but doesn't say where `mode` is set. If a user runs `/sdlc-run` in an existing repo, what happens? | `/sdlc-run` gains a repo-empty check: if `./src` exists or `.git` exists with files, print "This looks like an existing repo — did you mean `/sdlc-brownfield`?" and refuse until confirmed. `/sdlc-brownfield` sets `mode: brownfield` unconditionally. |
 | A3 | **Non-git-repo case unspecified.** Every Tier 1 step assumes `git`. What if user is in a folder without `.git`? | Discovery detects; if no git → refuse with clear message ("brownfield mode needs git for rollback anchors — run `git init && git add -A && git commit -m 'baseline'` first, then re-run"). Not offering to auto-init; too destructive. |
 | A4 | **Gate prompts inside a subagent.** Orchestrator is a subagent; per platform research subagents can't run interactive dialogs. The gate template shows a `> ⏸ HITL Gate` block but doesn't say how it bubbles to the main-loop session. | Gate rendering is the subagent returning a specifically-shaped message to the main loop; the main loop (Claude Code session) displays it and awaits user input, then re-invokes the subagent with the answer. Document the message shape in `SKILL.md`. |
-| A5 | **`/sdlc-review` command never specified.** It's listed as a v1 deliverable but there's no section describing what it does. | Add short spec: reads current git diff or a specified PR, produces `.sdlc/reviews/<ts>.md` with issue-level findings, no writes to source. Uses the senior-reviewer + security-reviewer subagents in read-only mode. |
+| A5 | **`/sdlc-review` command never specified.** ~~Add short spec~~ **SUPERSEDED — dropped from v1 in a later pass.** Code review is a different product category from safely-changing-code (competes with CodeQL, Cursor review, GitHub Copilot review) and isn't core to the plugin's main value prop. Deferred to v2. See §6 out-of-scope. |
 | A6 | **The write contract's three layers include one that's soft.** Only the PreToolUse hook is an actual interception; the orchestrator "prompt gate" is soft (AI can drift) and the packet validator only catches planned writes, not ad-hoc `Write` calls the orchestrator makes outside a packet. | Be honest in §4: the *only* unbreakable layer is the hook. The prompt gate is best-effort. Recommend hook default-on for brownfield (open decision). Also: orchestrator prompt must forbid raw `Write`/`Edit` outside packets — all writes must go through a packet. |
 | A7 | **Placement rules described as "enforced by the write contract" (§15) but they aren't.** The write contract enforces the allowlist; placement rules only shape what codegen produces. If codegen picks a bad path that's still in the allowlist, the contract accepts it. | Reword §15: placement is a codegen quality concern (adapters guide the packet planner), not a safety concern. Safety is the allowlist. |
 | A8 | **Session-hydrate conflated with skill-load.** §14.3 says it "runs on plugin skill load" — but skills load per-trigger, not per-session. To fire once per session we need the `SessionStart` hook. | Move session-hydrate invocation to the `SessionStart` hook (which the plan already mentions as optional). Make it opt-in by default; recommend on in `.sdlc/project.json`. Don't rely on skill-load for once-per-session behavior. |
@@ -1467,7 +1465,6 @@ Critical re-read of the plan looking for contradictions, gaps, over-engineering,
 - **§2 reworded** — Tier 1 discovery includes explicit git-check ("refuse if not a git repo") (A3).
 - **§14.1 renamed files** — reconcile `baseline.json` naming across sections (A1).
 - **`/sdlc-run` gains a "looks like existing repo" check** (A2).
-- **New short section: `/sdlc-review` command spec** (A5).
 
 None of these changes affects v1 scope size materially — they're clarifications and simplifications. The plan gets sharper, not bigger.
 
@@ -1476,7 +1473,7 @@ None of these changes affects v1 scope size materially — they're clarification
 ## Locked decisions (final)
 
 **Scope:**
-- V1 intent count: **7** (`docs, bugfix, feature-extend, feature-new, refactor, test, deps`) + separate `/sdlc-review` no-write command.
+- V1 intent count: **7** (`docs, bugfix, feature-extend, feature-new, refactor, test, deps`). Review-oriented capabilities (PR review, threat model, architecture review) deferred to v2 — see §6.
 - §14 v1 must-haves: **all seven** (state model, ledger, staleness, git contract, provenance + `/sdlc-revert`, coexistence enforcement, versioned state).
 - Discovery model: **tiered** (Tier 1 always ~10 s / Tier 2 confirm at Gate 0 / Tier 3 on-demand).
 
