@@ -41,3 +41,27 @@ The same goes for `plugin/scripts/` (`verify-setup.mjs`, `probe-agent-worker.mjs
 The MCP server (`plugin/mcp/gemini-flash-server/`) is TypeScript with a build step. Follow the existing conventions in that directory.
 
 There is one Python file, `plugin/mcp/gemini-flash-server/worker/gemini_worker.py`, because the Antigravity SDK it drives is a Python package and there is no other way to reach it. It is deliberately the only one, and it is only ever installed on machines that opted into the agent path — a plugin that quietly required Python of everyone would be a worse trade than the feature is worth. Keep it that way: new work belongs in TypeScript unless it, too, can only be done from Python.
+
+## Writing style
+
+The user-facing docs (`README.md`, `docs/*.md`, this file) and the source comments and docstrings under `plugin/` and `tools/` follow the same voice conventions. They are held by `tools/test/style.test.mjs`, which runs as part of `npm test`.
+
+**User-facing docs**
+
+- Second person, present tense. `You configure X in Y`, never `the user should configure X in Y`.
+- Statement of fact. Not narrative. Not `we explored`, not `as demonstrated by`, not `here's how`.
+- No AI-slop vocabulary. The banned set is `seamless`, `powerful`, `leverage`, `unlock`, `elegant`, `production-grade`, `battle-tested`, `robust`, `thoughtful`, `graceful`, `as demonstrated`, `in summary` (plus their common inflections). The style test greps for every one of them.
+- Tables over prose for reference material. Config keys, env vars, failure modes, phase lists — table first; use prose only where a table cannot carry the meaning.
+- Any code block a reader might run has a real command, real path, real env var. No `<placeholder>` unless it is labelled and immediately explained.
+
+**Source comments and docstrings**
+
+- Default to no comment. Only write one when the WHY is non-obvious: a hidden constraint, a subtle invariant, a workaround for a specific bug.
+- Do not explain what the code does — a well-named identifier already does that.
+- Do not write essay-length block comments. If you find yourself typing "WHY THIS EXISTS / WHAT IT BROKE / THE FIX", that belongs in `docs/architecture.md`, not above a function.
+- Do not embed incident narratives ("this broke on 2026-08-04…") in the code. They belong in the commit message and the PR description.
+- The slop-word ban applies to comments and docstrings too.
+
+**Do-not-touch surfaces.** `SETUP.md` and everything under `plugin/{commands,agents,skills}/` are Claude-instruction files where "the user" is the correct third-person reference — describing what the user's experience should be to another agent that will drive it. The style test excludes these paths on purpose. Historical records (`docs/walkthroughs/`, `examples/*/passes/`) are also excluded.
+
+Claude Code sessions see the same rules in [CLAUDE.md](CLAUDE.md), which lives at the repo root so it loads automatically at session start.
