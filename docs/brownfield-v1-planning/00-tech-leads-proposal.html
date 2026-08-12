@@ -406,7 +406,7 @@
   <p class="meta">Proposal · Brownfield mode for the AI-SDLC Orchestrator plugin · v1 scope</p>
   <span class="eyebrow">Executive summary</span>
   <h1>Extend the SDLC plugin from empty-folder demos to real, existing repositories — safely, across many sessions, with hard guarantees.</h1>
-  <p class="thesis">The AI-SDLC Orchestrator today only works in an empty folder. Every install doc says "open Claude Code in an empty folder." That gates its usefulness at pilot / demo. This proposal takes it to production repos: any stack, unknown pre-existing configuration, real teammates, real CI — without touching anything the operator hasn't approved.</p>
+  <p class="thesis">The AI-SDLC Orchestrator today only works in an empty folder. Every install doc says "open Claude Code in an empty folder." That gates its usefulness at pilot / demo. This proposal takes it to production repos: any stack, unknown pre-existing configuration, real teammates, real CI — without touching anything the operator hasn't approved. Read on for cost impact, the routing mechanism, real usage walkthroughs, the safety story, scope decisions, and the ask.</p>
 </section>
 
 <section>
@@ -500,23 +500,59 @@
     </tbody>
   </table>
 
-  <h3>Per intent, only which phases fire changes — tier assignment stays stable</h3>
-  <div class="features" style="margin-top:8px;">
-    <div class="feat">
-      <span class="num">bugfix example</span>
-      <h4>Reproduce + diagnose + fix + test</h4>
-      <p><span style="color:var(--danger); font-weight:600;">Premium:</span> requirements (reproduce+diagnose), reviews. <span style="color:var(--good); font-weight:600;">Cheap:</span> reproduce+diagnose+fix+test-add packets.</p>
-    </div>
-    <div class="feat">
-      <span class="num">docs example</span>
-      <h4>Generate documentation</h4>
-      <p><span style="color:var(--danger); font-weight:600;">Premium:</span> requirements, reviews. <span style="color:var(--good); font-weight:600;">Cheap:</span> doc-addition packets. Architecture phase skipped.</p>
-    </div>
-    <div class="feat">
-      <span class="num">feature-new example</span>
-      <h4>Build a new subsystem</h4>
-      <p><span style="color:var(--danger); font-weight:600;">Premium:</span> requirements, full architecture design, reviews. <span style="color:var(--good); font-weight:600;">Cheap:</span> full codegen mix.</p>
-    </div>
+  <h3>Per intent — which phases fire, at which tier</h3>
+  <p>Only which phases fire changes per intent — tier assignment stays stable.</p>
+  <div style="overflow-x:auto; margin:14px 0;">
+    <table style="width:100%; border-collapse:collapse; font-size:13px; background:var(--card); border:1px solid var(--card-edge); border-radius:6px; overflow:hidden; min-width:640px;">
+      <thead>
+        <tr>
+          <th style="padding:12px 14px; text-align:left; font-family:ui-sans-serif,system-ui,sans-serif; font-size:11px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); background:var(--card-soft); border-bottom:1px solid var(--card-edge); white-space:nowrap;">Intent</th>
+          <th style="padding:12px 14px; text-align:left; font-family:ui-sans-serif,system-ui,sans-serif; font-size:11px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; color:var(--danger); background:var(--card-soft); border-bottom:1px solid var(--card-edge);">Judgment phases <span style="color:var(--muted); font-weight:500; text-transform:none; letter-spacing:0;">(premium)</span></th>
+          <th style="padding:12px 14px; text-align:left; font-family:ui-sans-serif,system-ui,sans-serif; font-size:11px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; color:var(--good); background:var(--card-soft); border-bottom:1px solid var(--card-edge);">Mechanical phases <span style="color:var(--muted); font-weight:500; text-transform:none; letter-spacing:0;">(Flash)</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--accent); font-weight:600; white-space:nowrap;">docs</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">requirements, senior review, security review</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">doc_addition, doc_update</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--accent); font-weight:600; white-space:nowrap;">bugfix</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">requirements (reproduce + diagnose), senior review, security review</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">bug_reproduce, bug_diagnose, bug_fix_apply, test_add</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--accent); font-weight:600; white-space:nowrap;">feature-extend</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">requirements, architecture (change plan), senior review, security review</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">edit + add mix</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--accent); font-weight:600; white-space:nowrap;">feature-new</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">requirements, architecture (full subsystem), senior review, security review</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">full codegen mix</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--accent); font-weight:600; white-space:nowrap;">refactor</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">requirements (delta), architecture (refactor plan), senior review, security review</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">refactor_extract, patch_apply</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--accent); font-weight:600; white-space:nowrap;">test</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">requirements (coverage target), senior review, security review</td>
+          <td style="padding:12px 14px; border-bottom:1px solid var(--card-edge); color:var(--ink);">test_backfill, test_add</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 14px; font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--accent); font-weight:600; white-space:nowrap;">deps</td>
+          <td style="padding:12px 14px; color:var(--ink);">requirements (upgrade list), architecture (dep-swap plan), senior review, security review</td>
+          <td style="padding:12px 14px; color:var(--ink);">dependency_add, adjacent-code patches</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="padding:14px 18px; background:var(--card-soft); border-left:2px solid var(--accent); border-radius:0 4px 4px 0; margin:14px 0; font-size:13.5px; color:var(--muted); line-height:1.6;">
+    <strong style="color:var(--accent);">Advanced (v1.5).</strong> The policy YAML supports per-task-type overrides. Example: route <code>bug_diagnose</code> to premium even though it's inside the mechanical codegen phase, because diagnosis is really judgment. Not shipping in v1 — phase-level defaults are enough. Users on custom policies can add these rules themselves.
   </div>
 
   <h3>Configurable — teams can override</h3>
@@ -556,6 +592,64 @@
         <li><strong>Pipeline runs</strong> — phase-by-phase, gates at requirements, design, security, and final acceptance</li>
       </ol>
     </div>
+  </div>
+</section>
+
+<section>
+  <h2>Sample task walkthroughs — what real usage looks like</h2>
+  <p>Three sessions on the same repo. Different intents, different developers, no clobbering. Each session sees the prior work via the committed <code>.sdlc/</code> ledger.</p>
+
+  <div style="margin:20px 0;">
+    <div style="display:grid; grid-template-columns:120px 1fr; gap:20px; padding:20px 0; border-top:1px solid var(--rule);">
+      <div style="font-family:ui-serif,Georgia,serif; font-size:13px; color:var(--muted); line-height:1.4;">
+        <strong style="display:block; color:var(--ink); font-size:15px; font-weight:600; margin-bottom:2px;">Monday</strong>
+        Session 1 · first use
+      </div>
+      <div>
+        <h4 style="margin:0 0 8px; font-family:ui-sans-serif,system-ui,sans-serif; font-size:14px; font-weight:600;">Developer runs <code>/sdlc-brownfield</code></h4>
+        <ol style="margin:0; padding-left:20px; font-size:14px; color:var(--muted); line-height:1.65;">
+          <li><strong style="color:var(--ink);">Plugin scans repo.</strong> Detects Node/TypeScript + Nest. Notices <code>.cursor/rules</code> and custom <code>.mcp.json</code> — marks them off-limits.</li>
+          <li><strong style="color:var(--ink);">Gate 0 asks intent.</strong> User picks <strong>docs</strong> — needs a README for the auth module.</li>
+          <li><strong style="color:var(--ink);">Pipeline runs.</strong> Writes <code>docs/auth.md</code>; edits main README to link it.</li>
+          <li><strong style="color:var(--ink);">Report.</strong> 1 new file, 1 edited, $0.14. Nothing outside <code>src/auth/**</code> and <code>docs/</code> touched. Ledger row appended.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:120px 1fr; gap:20px; padding:20px 0; border-top:1px solid var(--rule);">
+      <div style="font-family:ui-serif,Georgia,serif; font-size:13px; color:var(--muted); line-height:1.4;">
+        <strong style="display:block; color:var(--ink); font-size:15px; font-weight:600; margin-bottom:2px;">Tuesday</strong>
+        Session 2 · same user
+      </div>
+      <div>
+        <h4 style="margin:0 0 8px; font-family:ui-sans-serif,system-ui,sans-serif; font-size:14px; font-weight:600;">Same developer runs <code>/sdlc-brownfield</code></h4>
+        <ol style="margin:0; padding-left:20px; font-size:14px; color:var(--muted); line-height:1.65;">
+          <li><strong style="color:var(--ink);">Setup-status: complete.</strong> Baseline is 3 commits old — incremental refresh (~5 s).</li>
+          <li><strong style="color:var(--ink);">Gate 0.</strong> User picks <strong>bugfix</strong> — the <code>/login</code> endpoint returns 500 when password field is missing.</li>
+          <li><strong style="color:var(--ink);">Pipeline runs.</strong> Reproduces the bug → diagnoses → applies fix → adds regression test.</li>
+          <li><strong style="color:var(--ink);">Report.</strong> 2 files edited, 1 test added, $0.32. Cursor rules, <code>.mcp.json</code>, and Monday's docs untouched.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:120px 1fr; gap:20px; padding:20px 0; border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);">
+      <div style="font-family:ui-serif,Georgia,serif; font-size:13px; color:var(--muted); line-height:1.4;">
+        <strong style="display:block; color:var(--ink); font-size:15px; font-weight:600; margin-bottom:2px;">Friday</strong>
+        Session 3 · different developer
+      </div>
+      <div>
+        <h4 style="margin:0 0 8px; font-family:ui-sans-serif,system-ui,sans-serif; font-size:14px; font-weight:600;">Second developer runs <code>/sdlc-brownfield</code></h4>
+        <ol style="margin:0; padding-left:20px; font-size:14px; color:var(--muted); line-height:1.65;">
+          <li><strong style="color:var(--ink);">Sees Monday + Tuesday runs</strong> in <code>.sdlc/ledger.md</code> (committed, pulled with the branch).</li>
+          <li><strong style="color:var(--ink);">Incremental refresh</strong> only re-hashes the 8 files that changed since Tuesday.</li>
+          <li><strong style="color:var(--ink);">Fresh Gate 0.</strong> Their own choice of intent — nothing carries over from other devs' runs.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <div style="padding:14px 18px; background:var(--card-soft); border-left:2px solid var(--accent); border-radius:0 4px 4px 0; margin:16px 0; font-size:13.5px; color:var(--muted); line-height:1.6;">
+    <strong style="color:var(--accent);">Why the second developer sees prior work automatically.</strong> Plugin owns <code>.sdlc/CLAUDE-SDLC.md</code>; the user's <code>CLAUDE.md</code> gets a single <code>@.sdlc/CLAUDE-SDLC.md</code> import line at setup (with a diff preview). Every future session — with or without the plugin installed — loads the plugin-owned context via that import. We never modify user-authored text beyond that one line.
   </div>
 </section>
 
