@@ -33,3 +33,30 @@ Output JSON to the path provided in your invocation:
 ```
 
 The orchestrator will dispatch `refinement_packets` per policy (cost-efficient or premium).
+
+---
+
+# Brownfield mode (`mode: brownfield`)
+
+When invoked with `mode: brownfield` (typically alongside `intent`, `changed_files`, and the
+`baseline_path`), the review is **scoped to files touched by this run** — not the whole module,
+not the whole repo. This is the v1 simplification per C5 cut in the plan self-review.
+
+Behavior:
+- Read `.sdlc/runs/<run-id>/provenance.json` to get the list of files this run has written or
+  edited.
+- `Glob`/`Grep`/`Bash ls -R` **only** those files (or their immediate module directory if a
+  small feature folder). Do NOT walk the whole codebase looking for unrelated smells.
+- Findings scoped to the changed files' correctness, type safety, error handling, authz on new
+  routes, PII handling on new fields, DRY within the changed set, and test coverage of the
+  changed code.
+- **Do not report pre-existing smells in files NOT touched by this run.** If you notice one
+  incidentally, ignore it — that's out of scope for this run and would drown the operator in
+  noise unrelated to the change under review.
+- **Env-fixture blocker (line 19 above)** applies only when `intent ∈ (feature-new,
+  feature-extend)` AND the stack has a validating config module. For docs/bugfix/test/deps/
+  refactor intents, skip the env-fixture check (they don't introduce new required env vars).
+
+v1.5 will add per-finding origin-tagging (`origin: "new" | "pre-existing" | "unclear"`) for
+findings inside touched files, so pre-existing smells inside changed files can be surfaced as
+advisory rather than blocking. Not in v1 scope.

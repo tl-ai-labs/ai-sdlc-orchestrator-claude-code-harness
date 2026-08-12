@@ -181,17 +181,37 @@ Invoke `senior-reviewer` subagent for each module. Collect refinement packets. R
 
 ### Phase 7 — test_run
 
-Bootstrap the env fixture first — this is required for any app whose codegen produced a validating `ConfigModule` (or equivalent) at boot. The codegen phase is contractually required (see Phase 5 acceptance criteria and the senior-reviewer's env-fixture check) to emit `.env.example` (docs) and `.env.test` (fixture values that satisfy the declared schema).
+**Greenfield mode.** Bootstrap the env fixture first — this is required for any app whose codegen produced a validating `ConfigModule` (or equivalent) at boot. The codegen phase is contractually required (see Phase 5 acceptance criteria and the senior-reviewer's env-fixture check) to emit `.env.example` (docs) and `.env.test` (fixture values that satisfy the declared schema).
 
 ```bash
 cd <output_dir>
+# Only copy .env.test → .env when neither exists. Never overwrite an existing .env —
+# a real .env holds real secrets and belongs to the user.
 if [ -f .env.test ] && [ ! -f .env ]; then cp .env.test .env; fi
 npm install --silent && npm test
 ```
 
+**Brownfield mode.** The greenfield env-copy above is refused entirely — the repo already has an `.env` (or an equivalent secrets manager) that the user manages, and copying a codegen-produced fixture would either overwrite real secrets or drop the run into a schema-invalid state. Instead:
+
+```bash
+cd <repo-root>   # NOT <output_dir> — the app-under-test is the user's actual repo
+# Do NOT touch .env under any circumstances. Do NOT copy .env.test → .env.
+```
+
+If codegen introduced new required env vars (via `existing_file_edit` on `.env.example`):
+1. Append the new keys to `.env.example` (this IS a permitted write — .env.example is in the allowlist by default and holds no values, only key names).
+2. Print the list of new keys to the operator with a mini-gate: *"Codegen introduced N new required env vars: X, Y, Z. Populate them in your .env before Phase 7 continues, or say `skip` to run Phase 7 anyway (tests requiring these keys will fail)."*
+3. Wait for the user's response before invoking the test command.
+
+The test command in brownfield is `baseline.test_command` (confirmed at Gate 0), not hardcoded `npm test`. Working directory is the repo root (not `<output_dir>`); in monorepos, use the per-package scope from `baseline.monorepo.packages[].test_command` for whichever package the changed files belong to.
+
+**Both modes:**
+
 On failure:
-- If the error is `Config validation error: "X" is required` or equivalent → the codegen phase missed keys in `.env.test`. Build a debug TaskPacket routed to codegen to add the missing keys with schema-valid values. Do NOT patch `.env` by hand.
+- If the error is `Config validation error: "X" is required` or equivalent → the codegen phase missed keys. In greenfield build a debug TaskPacket routed to codegen to add the missing keys with schema-valid values. In brownfield, ask the user via the mini-gate above; do NOT patch `.env` from the plugin.
 - Any other failure → parse the output, build a `debug` TaskPacket with the failing test name + error + relevant source slice. Route via policy. Retry up to 2 cost-efficient tier attempts; escalate to Opus.
+
+**Test-command probe (optional Phase 0.5 in brownfield).** The pipeline pre-check (§7.4) already ran the discovered test command with `--collect-only` / `--dry-run` at prompt 1 to prove deps are installed. If pre-check step 2 failed for this run, Phase 7 halts with the recorded error rather than attempting the real run.
 
 ### Phase 8 — security_review
 
