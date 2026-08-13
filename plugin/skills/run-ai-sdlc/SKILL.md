@@ -313,6 +313,7 @@ non-terminal state and re-prompts on next `/sdlc-brownfield` invocation. No new 
 >   - off-limits: `<all AI configs + .env* + generated dirs + submodules>`
 >   - accept / edit / expand
 > - **Repo-state risks (if any):** `<LFS / submodules / failing tests / encrypted secrets>`
+> - **Regulated-repo warning (when `baseline.regulated_repo_warning_required`):** *"This repo appears regulated (signals: `<kinds>`). Confirm the active policy uses only compliant endpoints, and that off-limits protects your regulated data folders."*
 >
 > Typical cost for a `<intent>` run on a repo this size: `$X.XX–$Y.YY`.
 >

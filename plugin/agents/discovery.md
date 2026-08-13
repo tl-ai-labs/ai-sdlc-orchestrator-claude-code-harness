@@ -202,6 +202,24 @@ Note if these exist: `src/index.*`, `src/main.*`, `main.py`, `cmd/*/main.go`, `a
 ### Infra hints
 Note presence: `Dockerfile`, `docker-compose*.yml`, `terraform/`, `.github/workflows/`, `.gitlab-ci.yml`, `.circleci/`, `Jenkinsfile`.
 
+## Group 9 — regulated-repo signals
+
+Scan for markers that suggest the repo carries compliance obligations. These aren't detection of regulation itself — that's a human call — but a hint that Gate 0 should surface a warning so the user consciously confirms the active policy uses only compliant endpoints and that off-limits protects the sensitive data.
+
+Check for presence (case-insensitive) of any of:
+
+- Files at repo root: `SECURITY.md`, `PRIVACY.md`, `COMPLIANCE.md`, `HIPAA.md`, `SOC2.md`, `PCI.md`, `GDPR.md`
+- Path segments under `docs/` or repo root (any depth ≤ 3): `HIPAA/`, `PCI/`, `SOC2/`, `SOC-2/`, `regulated/`, `compliance/`
+- CODEOWNERS entries mentioning `security-team`, `compliance-team`, `privacy-team`, `legal`
+
+Record `regulated_repo_signals: [{ kind, path }]` in `baseline.json`. When the list is non-empty, produce a `## Regulated-repo signals` section in `discovery.md` naming each hit, and set `regulated_repo_warning_required: true`.
+
+Gate 0 reads this flag and, when true, prints verbatim:
+
+> *"This repo appears regulated (signals: `<comma-separated kinds>`). Confirm the active policy uses only compliant endpoints, and that off-limits protects your regulated data folders."*
+
+This is not a blocker — the user approves or edits scope as normal.
+
 # Off-limits list — computed from what you found
 
 Assemble `off_limits` as the union of:
