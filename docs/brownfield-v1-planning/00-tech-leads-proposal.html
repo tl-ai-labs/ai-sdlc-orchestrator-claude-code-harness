@@ -557,6 +557,7 @@
 
   <h3>Configurable — teams can override</h3>
   <div class="risks">
+    <div class="risk"><span class="r">Custom routing without hand-editing YAML</span><span class="m">Setup step 6 opens the local <strong>policy console</strong> — per-phase model + thinking-tier picker in the browser; saves a new named YAML into <code>plugin/config/policies/</code>. Shipped <code>opus-only</code> and <code>opus-plus-flash</code> presets are never overwritten. Choice pinned to this project via <code>.sdlc/project.json</code>.</span></div>
     <div class="risk"><span class="r">Team wants everything on Anthropic (no Gemini)</span><span class="m">Ship <code>opus-only</code> policy; higher cost per run but single-vendor</span></div>
     <div class="risk"><span class="r">Team needs on-prem / private-cloud endpoints</span><span class="m">Drop a <code>routing-policy.yaml</code> at repo root pointing at Bedrock / Vertex / self-hosted (v1.5 ships example policies)</span></div>
     <div class="risk"><span class="r">Team wants a specific task-type on premium tier</span><span class="m">Per-task-type overrides in policy YAML (v1.5 — v1 uses phase-level defaults)</span></div>
@@ -565,12 +566,12 @@
 </section>
 
 <section>
-  <h2>How it works — two prompts, six shepherded sections</h2>
-  <p>The user runs two prompts, ever. Setup completes in the first; task work runs in the second. Every step is shepherded — the plugin auto-does what it can, pauses and guides the user when human action is required, verifies each fix before continuing.</p>
+  <h2>How it works — two prompts, seven shepherded sections</h2>
+  <p>The user runs two prompts, ever. Setup completes in the first; task work runs in the second. Every step is shepherded in the terminal — the plugin auto-does what it can, pauses and guides the user when human action is required, verifies each fix before continuing. The only non-terminal moment is the policy step, which pops a local browser page and returns control to the terminal on save.</p>
 
   <div class="flow">
     <div>
-      <span class="head">Prompt 1 · setup — six sections</span>
+      <span class="head">Prompt 1 · setup — seven sections</span>
       <h4>Everything ready in one guided pass</h4>
       <ol>
         <li><strong>Install</strong> — marketplace, plugin, MCP dist</li>
@@ -578,6 +579,7 @@
         <li><strong>Repo detection</strong> — branches the flow</li>
         <li><strong>Credentials</strong> — discover first, ask second (scans shell env, gcloud, home dir configs, repo files, code references)</li>
         <li><strong>Repo setup</strong> — Tier 1 discovery, adaptive profile if triggered, baseline save, pipeline pre-check (6 smoke steps)</li>
+        <li><strong>Policy (browser)</strong> — launches the local policy console (Next.js on <code>localhost:3000</code>) to pick or author this project's routing policy; the choice is written to <code>.sdlc/project.json</code> and shared via git with teammates. Skippable — pipelines then fall back to the shipped <code>opus-plus-flash</code> preset.</li>
         <li><strong>Summary</strong> — status report + next-step guidance</li>
       </ol>
     </div>
@@ -705,6 +707,7 @@
         <li>Provenance + single-run rollback</li>
         <li>Coexistence enforcement (gitignore, formatters, pre-commit, CODEOWNERS)</li>
         <li>Setup shepherd with credential discovery</li>
+        <li>Policy console (browser UI) for per-project routing + thinking-tier choice</li>
         <li>Pipeline pre-check + 15-issue robustness inventory</li>
         <li>Stack adapters: generic, Nest, Python (Django/FastAPI)</li>
         <li>Explicit model-per-task routing docs</li>
