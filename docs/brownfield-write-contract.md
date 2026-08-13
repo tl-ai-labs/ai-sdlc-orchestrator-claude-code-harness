@@ -41,7 +41,7 @@ Behavior:
 1. On every `Write` or `Edit` tool call, Claude Code invokes the hook.
 2. The hook reads `.sdlc/local/write-contract.json` from an ancestor of the current directory.
 3. If the file is missing or `active:false` → allow (greenfield mode or no active run — the
-   hook silently no-ops so `/sdlc-run` in an empty folder is unaffected).
+   hook silently no-ops so `/sdlc:run` in an empty folder is unaffected).
 4. If active:
    - Check the target path against `off_limits` patterns — deny with reason if hit.
    - Check against `allowlist` patterns — allow if hit.

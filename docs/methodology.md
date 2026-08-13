@@ -4,7 +4,7 @@ How the tokens and costs on the report are derived, in plain terms.
 
 ## The mode determines everything
 
-Every telemetry event carries a `provenance` field: `"vendor"` or `"estimated"`. The report labels the whole run according to what's on those events. The mode is chosen per run via the required `--auth=vendor|estimated` flag on `/run-sdlc-pass`. The orchestrator reads the flag at startup and follows that path for every event; if the flag is missing the run aborts. Mode is not inferred from `ANTHROPIC_API_KEY` presence — the flag is the sole source of truth, so identical commands produce identical modes regardless of the shell's env-var state.
+Every telemetry event carries a `provenance` field: `"vendor"` or `"estimated"`. The report labels the whole run according to what's on those events. The mode is chosen per run via the required `--auth=vendor|estimated` flag on `/sdlc:pass`. The orchestrator reads the flag at startup and follows that path for every event; if the flag is missing the run aborts. Mode is not inferred from `ANTHROPIC_API_KEY` presence — the flag is the sole source of truth, so identical commands produce identical modes regardless of the shell's env-var state.
 
 ### Vendor-authoritative mode — `--auth=vendor`
 

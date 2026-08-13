@@ -87,7 +87,7 @@ if (which("claude")) {
   if (!proceed) { rl.close(); process.exit(1); }
 }
 
-// Auth mode is per-run via /run-sdlc-pass --auth=. This just reports.
+// Auth mode is per-run via /sdlc:pass --auth=. This just reports.
 step("API keys — availability");
 if (process.env.ANTHROPIC_API_KEY) {
   ok("ANTHROPIC_API_KEY is set — --auth=vendor is available.");
@@ -218,8 +218,8 @@ const projClaude = join(ROOT, ".claude");
 mkdirSync(join(projClaude, "commands"), { recursive: true });
 mkdirSync(join(projClaude, "agents"),   { recursive: true });
 copyFileSync(
-  join(ROOT, "plugin", "commands", "run-sdlc-pass.md"),
-  join(projClaude, "commands", "run-sdlc-pass.md"),
+  join(ROOT, "plugin", "commands", "pass.md"),
+  join(projClaude, "commands", "pass.md"),
 );
 for (const a of ["orchestrator", "architect", "senior-reviewer", "security-reviewer"]) {
   copyFileSync(
@@ -231,7 +231,7 @@ ok("Slash command + all subagents installed under ./.claude/");
 
 // Bare `gemini-flash-server` key: clone-route servers keep their key
 // verbatim (mcp__gemini-flash-server__*). Plugin route namespaces to
-// mcp__plugin_multi-model-orchestrator_gemini-flash-server__*. The
+// mcp__plugin_sdlc_gemini-flash-server__*. The
 // orchestrator's frontmatter grants both spellings.
 const mcpJsonPath = join(ROOT, ".mcp.json");
 const mcpEntry = {
@@ -274,26 +274,26 @@ if (geminiAsAgent) {
 
 step("Ready");
 console.log(`
-  ${c.bold}Setup complete.${c.reset} Pick an auth mode per run via --auth on /run-sdlc-pass.
+  ${c.bold}Setup complete.${c.reset} Pick an auth mode per run via --auth on /sdlc:pass.
 
   ${c.bold}Interactive${c.reset} (recommended for first run — you see HITL gates):
     ${c.dim}# --permission-mode acceptEdits auto-approves file reads/writes${c.reset}
     ${c.dim}# inside this repo so the run only stops at the four HITL gates.${c.reset}
     claude --permission-mode acceptEdits
     ${c.dim}# then at the prompt (vendor mode — needs ANTHROPIC_API_KEY):${c.reset}
-    > /run-sdlc-pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
+    > /sdlc:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
     ${c.dim}# or estimator mode (subscription auth, no API key required):${c.reset}
-    > /run-sdlc-pass --auth=estimated --run-id=pass1 examples/workforce-ops/brief.md
+    > /sdlc:pass --auth=estimated --run-id=pass1 examples/workforce-ops/brief.md
 
   ${c.bold}Headless${c.reset} (unattended, captured to a log file):
     ${c.dim}# opus-only baseline under vendor mode${c.reset}
-    claude --print "/run-sdlc-pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md" \\
+    claude --print "/sdlc:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md" \\
       --permission-mode acceptEdits \\
       --output-format stream-json --verbose \\
       > examples/workforce-ops/passes/pass1/live-run.log
 
     ${c.dim}# opus + Gemini Flash multi-model under vendor mode${c.reset}
-    claude --print "/run-sdlc-pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md" \\
+    claude --print "/sdlc:pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md" \\
       --permission-mode acceptEdits \\
       --output-format stream-json --verbose \\
       > examples/workforce-ops/passes/pass2/live-run.log
@@ -305,7 +305,7 @@ console.log(`
 
   To run the pipeline against a brief other than the shipped one, copy
   docs/brief-template.md, fill it in, and invoke:
-    /run-sdlc-pass --auth=vendor --study=<your-project> --run-id=pass1 path/to/your-brief.md
+    /sdlc:pass --auth=vendor --study=<your-project> --run-id=pass1 path/to/your-brief.md
 
   Full docs are in docs/. Start with docs/running.md.
 `);

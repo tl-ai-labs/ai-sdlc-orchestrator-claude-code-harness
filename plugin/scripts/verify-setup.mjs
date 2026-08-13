@@ -676,6 +676,38 @@ export function agentProbeHint(pluginRoot, env = {}, ok = true) {
 }
 
 /**
+ * End-of-successful-setup hand-off. Names the four task commands the user can
+ * run in a new session and, when the project already has one set, the current
+ * policy. Suppressed on any check failure — a failing install shouldn't tell
+ * you to "try /sdlc:run next."
+ */
+export function nextStepsBanner(cwd = process.cwd(), ok = true) {
+  if (!ok) return null;
+  let currentPolicy = null;
+  try {
+    const raw = readFileSync(join(cwd, ".sdlc", "project.json"), "utf8");
+    currentPolicy = JSON.parse(raw).default_policy ?? null;
+  } catch { /* no project.json yet — banner still worth printing */ }
+
+  const policyLine = currentPolicy
+    ? `\n  Current policy: ${currentPolicy}   (change: /sdlc:policy change)`
+    : `\n  No policy set yet — run /sdlc:policy change to pick one, or /sdlc:setup --policy=<name>.`;
+
+  return (
+    `\n✓ Setup complete for this project.\n\n` +
+    `  Try one of these in a NEW session in the same folder:\n\n` +
+    `    /sdlc:run          — generate a new app from a brief (empty folder)\n` +
+    `    /sdlc:brownfield   — work on this existing repo (docs, bugfix, feature, refactor, …)\n` +
+    `    /sdlc:policy       — show / change this project's model policy\n` +
+    `    /sdlc:pass         — headless/scripted run (for CI or replays)\n` +
+    policyLine + `\n\n` +
+    `  A NEW session is required: Claude Code builds the slash-command list and\n` +
+    `  starts plugin MCP servers at session boot. In this session the setup\n` +
+    `  changes are on disk but not live.`
+  );
+}
+
+/**
  * Note when the agent door has opened since the wizard ran. The wizard asks
  * once at install; someone running `gcloud auth application-default login` a
  * week later would otherwise never be told. Not a `problem` — the model path
@@ -898,6 +930,17 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const scope = process.argv.includes("--user") ? "user" : "project";
   const brownfieldCheck = process.argv.includes("--brownfield-check");
   const headless = process.argv.includes("--headless");
+  // --project-root=<abs-path> or --project-root <abs-path> overrides
+  // process.cwd() when the caller (a /sdlc:* command file) has already resolved
+  // which project this run is against — see setup.md, policy.md. Passing it
+  // forward closes the cwd-drift hole between the command layer and any
+  // subsequent settings write. Accept BOTH forms — command files write the
+  // space form (`--project-root "$(pwd)"`); the `=` form is what CI uses.
+  const projectRootEq = process.argv.find((a) => a.startsWith("--project-root="));
+  const projectRootSpaceIdx = process.argv.indexOf("--project-root");
+  const projectRoot = projectRootEq
+    ? projectRootEq.slice("--project-root=".length)
+    : (projectRootSpaceIdx >= 0 ? process.argv[projectRootSpaceIdx + 1] : process.cwd());
 
   log("\nAI-SDLC orchestrator — setup check");
 
@@ -975,6 +1018,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     agentProbeHint(pluginRoot, env, passed),
     // Only shown to model-path installs with the agent door open.
     agentPathAvailableHint(pluginRoot, observed.vertex, env),
+    // Next-steps banner — only when everything upstream passed.
+    nextStepsBanner(projectRoot, passed),
   ]) {
     if (hint) log(hint);
   }

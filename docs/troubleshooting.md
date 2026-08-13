@@ -8,8 +8,8 @@ Symptom → cause → fix. If the fix is a command, it is copy-paste-runnable.
 |---|---|
 | `/plugin` (inside Claude Code) | Which plugins are installed and enabled. |
 | `claude --debug` | Prints the plugin's env pass-through, MCP handshake, and tool invocations. |
-| `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs \| tail -1)"` | Full offline check. Reports blocking (`✗`) and warning (`!`) findings, plus fix commands. |
-| `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/probe-agent-worker.mjs \| tail -1)"` | One real Antigravity delegation, ~2¢. Only cheap way to confirm entitlement, region, and credential liveness. |
+| `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs \| tail -1)"` | Full offline check. Reports blocking (`✗`) and warning (`!`) findings, plus fix commands. |
+| `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/probe-agent-worker.mjs \| tail -1)"` | One real Antigravity delegation, ~2¢. Only cheap way to confirm entitlement, region, and credential liveness. |
 
 From a clone:
 
@@ -25,14 +25,14 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 | `Node <n> — this repo needs Node 20 or newer` | Older Node on `PATH`. | `nvm install --lts`, or install from [nodejs.org](https://nodejs.org). |
 | `verify-setup.mjs`: `mcp-dependencies` or `mcp-build` (blocking) | `dist/` and `node_modules/` are not tracked in git; a fresh install carries source only. | Re-run with `--fix` — runs `npm ci` then `npm run build` in the server directory. |
 | `/plugin marketplace add` reports the marketplace already exists | Cached from an earlier session. `add` is a no-op that leaves the cache stale. | `/plugin marketplace update tilicho-ai-labs`, then install again. |
-| `/sdlc-run` isn't in the slash-command menu | Commands register at session start; the install session doesn't have it. | Open a new session in the same folder. |
+| `/sdlc:run` isn't in the slash-command menu | Commands register at session start; the install session doesn't have it. | Open a new session in the same folder. |
 | `/reload-plugins` returns "isn't available in this environment" | The command does not exist in the desktop app. | Open a new session instead. |
 
 ## Auth mode
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `this run requires auth_mode=vendor\|estimated` | `/run-sdlc-pass` invoked without `--auth`. | Add `--auth=vendor` (needs `ANTHROPIC_API_KEY`) or `--auth=estimated` (needs a Claude Code subscription sign-in). |
+| `this run requires auth_mode=vendor\|estimated` | `/sdlc:pass` invoked without `--auth`. | Add `--auth=vendor` (needs `ANTHROPIC_API_KEY`) or `--auth=estimated` (needs a Claude Code subscription sign-in). |
 | Report labels a run "Mixed" | `--auth=estimated` and the policy also dispatched Gemini. Direct-tier events are estimated, Gemini events are vendor-reported. | Expected. `E` next to a phase marks the estimated ones. |
 | Report totals don't match the Anthropic dashboard exactly | The run was `--auth=estimated`. | Re-run with `--auth=vendor` for numbers that reconcile to the console. |
 
@@ -102,5 +102,5 @@ Recorded on the same brief: model path 43k / 34k tokens for $0.84 wall-clock 28 
 An update re-copies the plugin from source, which removes the `dist/` and `node_modules/` produced by `--fix`. Re-run:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --fix
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --fix
 ```

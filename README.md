@@ -21,11 +21,11 @@ Two task commands, one shared setup and machinery:
 
 | You have… | Command | What it does |
 |---|---|---|
-| An **empty folder** | `/sdlc-run` | Generates a whole new application from a project brief. The original greenfield flow. |
-| An **existing repo** (any stack, any conventions) | `/sdlc-brownfield` | Pick one of seven job types (docs, bugfix, feature-extend, feature-new, refactor, test, deps), confirm scope at Gate 0, then run the pipeline with a non-destructive write contract that guarantees off-limits files stay untouched. |
+| An **empty folder** | `/sdlc:run` | Generates a whole new application from a project brief. The original greenfield flow. |
+| An **existing repo** (any stack, any conventions) | `/sdlc:brownfield` | Pick one of seven job types (docs, bugfix, feature-extend, feature-new, refactor, test, deps), confirm scope at Gate 0, then run the pipeline with a non-destructive write contract that guarantees off-limits files stay untouched. |
 
-Both use the same install (SETUP.md), same policies, same MCP dispatch layer. `/sdlc-run` in
-an existing repo now warns you and offers `/sdlc-brownfield` instead — treating your real code
+Both use the same install (SETUP.md), same policies, same MCP dispatch layer. `/sdlc:run` in
+an existing repo now warns you and offers `/sdlc:brownfield` instead — treating your real code
 as an empty canvas is almost certainly not what you want.
 
 Brownfield-specific documentation:
@@ -60,8 +60,8 @@ checks and the credential discovery scan.
 **Prompt 2 — run.** Start a new session in the same folder, then whichever fits:
 
 ```
-/sdlc-run             # greenfield: empty folder + project brief
-/sdlc-brownfield      # brownfield: existing repo, pick a job type
+/sdlc:run             # greenfield: empty folder + project brief
+/sdlc:brownfield      # brownfield: existing repo, pick a job type
 ```
 
 Both check the install, show which model each phase will run on, confirm the plan (with a
@@ -70,7 +70,7 @@ Gate 0 in brownfield), and only then start spending. Generated code lands where 
 and cost report always land under `.sdlc/`.
 
 The new session matters. Claude Code registers a plugin's slash commands and starts its MCP
-servers only when a session begins, so `/sdlc-run`, `/sdlc-brownfield`, and the bundled server
+servers only when a session begins, so `/sdlc:run`, `/sdlc:brownfield`, and the bundled server
 are not live in the install session — a run started there would route every phase to the
 premium model.
 
@@ -94,8 +94,8 @@ Nine phases run under a Claude Code subagent (`orchestrator`) that reads a polic
 | Plugin manifest | [plugin/.claude-plugin/plugin.json](plugin/.claude-plugin/plugin.json) |
 | Marketplace entry | [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json) |
 | Orchestrator subagent | [plugin/agents/orchestrator.md](plugin/agents/orchestrator.md) |
-| Slash commands (greenfield) | [plugin/commands/sdlc-run.md](plugin/commands/sdlc-run.md), [plugin/commands/run-sdlc-pass.md](plugin/commands/run-sdlc-pass.md) |
-| Slash commands (brownfield) | [plugin/commands/sdlc-brownfield.md](plugin/commands/sdlc-brownfield.md), [plugin/commands/sdlc-revert.md](plugin/commands/sdlc-revert.md) |
+| Slash commands (greenfield) | [plugin/commands/run.md](plugin/commands/run.md), [plugin/commands/pass.md](plugin/commands/pass.md) |
+| Slash commands (brownfield) | [plugin/commands/brownfield.md](plugin/commands/brownfield.md), [plugin/commands/revert.md](plugin/commands/revert.md) |
 | Discovery subagent (brownfield) | [plugin/agents/discovery.md](plugin/agents/discovery.md) |
 | Stack adapters | [plugin/skills/run-ai-sdlc/stacks/](plugin/skills/run-ai-sdlc/stacks/) |
 | Write-contract hook (brownfield) | [plugin/scripts/write-contract-check.mjs](plugin/scripts/write-contract-check.mjs) |
@@ -161,7 +161,7 @@ Two policies ship. Pick one per run.
 
 ## What the run produces
 
-Every artifact lands under `./.sdlc/` (for `/sdlc-run`) or `examples/<study-id>/passes/<run-id>/` (for `/run-sdlc-pass`). Generated source lands under `./src/`.
+Every artifact lands under `./.sdlc/` (for `/sdlc:run`) or `examples/<study-id>/passes/<run-id>/` (for `/sdlc:pass`). Generated source lands under `./src/`.
 
 | File | Contents |
 |---|---|
@@ -178,7 +178,7 @@ Full reference in [docs/understanding-output.md](docs/understanding-output.md).
 Re-run the setup check at any time. It reports what is ready, what is missing, and prints the exact command to fix each finding. Nothing is spent.
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --fix
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --fix
 ```
 
 `--fix` rebuilds the bundled MCP server. Also the repair after `/plugin update`, which re-copies the plugin from source and removes the build.
@@ -193,7 +193,7 @@ cd ai-sdlc-orchestrator-claude-code-harness
 node tools/setup.mjs
 ```
 
-`tools/setup.mjs` runs the same checks the plugin route runs, installs the MCP server's dependencies, builds it, and writes `.mcp.json`. Full flag surface for `/run-sdlc-pass` is documented in [docs/running.md](docs/running.md).
+`tools/setup.mjs` runs the same checks the plugin route runs, installs the MCP server's dependencies, builds it, and writes `.mcp.json`. Full flag surface for `/sdlc:pass` is documented in [docs/running.md](docs/running.md).
 
 ## Documentation
 

@@ -43,7 +43,7 @@ Read the JSON. Three cases:
 
 Verify the machinery works on this specific repo before spending money on a real intent.
 
-**On the first `/sdlc-brownfield` per project** OR when `.sdlc/pre-check-status.json` is missing
+**On the first `/sdlc:brownfield` per project** OR when `.sdlc/pre-check-status.json` is missing
 OR when the baseline hint from step 1 says the baseline is stale, run the full 6-step pre-check.
 Otherwise (cached, fresh, plugin version unchanged), report *"pre-check cached from &lt;date&gt;,
 all steps still valid"* and skip to step 3.
@@ -210,7 +210,7 @@ Do not propose a follow-up run.
 
 # Flag surface (headless / repeat runs)
 
-`/run-sdlc-pass` is the flag-driven twin of this command for scripted / CI invocations:
+`/sdlc:pass` is the flag-driven twin of this command for scripted / CI invocations:
 
 ```
 --mode brownfield --intent <docs|bugfix|feature-extend|feature-new|refactor|test|deps>
@@ -224,4 +224,4 @@ Do not propose a follow-up run.
 --refresh-profile                              (force stack-profile re-scan)
 ```
 
-See [plugin/commands/run-sdlc-pass.md](/plugin/commands/run-sdlc-pass.md) for the full flag contract.
+See [plugin/commands/pass.md](/plugin/commands/pass.md) for the full flag contract.

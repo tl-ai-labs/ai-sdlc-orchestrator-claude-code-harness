@@ -19,7 +19,7 @@ cd plugin/examples/brownfield-test-backfill
 npm install
 npm test    # exits 0 with "no test files found" — no tests to run yet
 
-# /sdlc-brownfield  →  test
+# /sdlc:brownfield  →  test
 ```
 
 ## Expected outputs

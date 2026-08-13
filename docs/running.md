@@ -1,14 +1,14 @@
 # Running
 
 **If you installed the plugin rather than cloning the repo, you do not need this
-page to start.** Type `/sdlc-run` in a new session — slash commands register and plugin MCP
+page to start.** Type `/sdlc:run` in a new session — slash commands register and plugin MCP
 servers start when a session starts, so the session that installed the plugin has
 neither the command nor the bundled model server that mechanical phases dispatch
 through. It takes no arguments, asks for whatever it
 needs, and picks the settings described below on your behalf. This page is the
-reference for `/run-sdlc-pass`, the same run with every setting exposed as a
+reference for `/sdlc:pass`, the same run with every setting exposed as a
 flag — useful for repeat runs, for scripting, and for understanding what
-`/sdlc-run` chose for you.
+`/sdlc:run` chose for you.
 
 Two policies ship with this repository. Pick one to start.
 
@@ -49,13 +49,13 @@ claude --permission-mode acceptEdits
 Then, at the prompt:
 
 ```
-/run-sdlc-pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
+/sdlc:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
 ```
 
 Or with the multi-model policy:
 
 ```
-/run-sdlc-pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md
+/sdlc:pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md
 ```
 
 The session pauses at each HITL gate; approve or redirect at each one.
@@ -65,7 +65,7 @@ The session pauses at each HITL gate; approve or redirect at each one.
 Best when you want to script the run, redirect all output to a file, or run overnight without babysitting.
 
 ```bash
-claude --print "/run-sdlc-pass --auth=vendor --policy=opus-only --run-id=pass1 examples/workforce-ops/brief.md" \
+claude --print "/sdlc:pass --auth=vendor --policy=opus-only --run-id=pass1 examples/workforce-ops/brief.md" \
   --permission-mode acceptEdits \
   --output-format stream-json --verbose \
   > examples/workforce-ops/passes/pass1/live-run.log
@@ -92,7 +92,7 @@ Every HITL gate auto-approves. The full transcript lands in `live-run.log`.
 
 ## Bring your own brief
 
-The shipped `examples/workforce-ops/brief.md` is the Workforce Ops case. `/run-sdlc-pass` reads whatever markdown file it is given as a positional argument; substituting a different brief runs the orchestrator against that brief.
+The shipped `examples/workforce-ops/brief.md` is the Workforce Ops case. `/sdlc:pass` reads whatever markdown file it is given as a positional argument; substituting a different brief runs the orchestrator against that brief.
 
 Steps:
 
@@ -101,13 +101,13 @@ Steps:
 3. Pick a `--run-id` for this pass. Interactive form:
 
    ```
-   /run-sdlc-pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md
+   /sdlc:pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md
    ```
 
    Or headless:
 
    ```bash
-   claude --print "/run-sdlc-pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md" \
+   claude --print "/sdlc:pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md" \
      --permission-mode acceptEdits \
      --output-format stream-json --verbose \
      > examples/my-project/passes/pass1/live-run.log
@@ -160,10 +160,10 @@ Each pass writes to a separate directory under `examples/<study-id>/passes/`. To
 
 ```bash
 # headless form
-claude --print "/run-sdlc-pass --auth=vendor --policy=opus-only --run-id=baseline examples/workforce-ops/brief.md" \
+claude --print "/sdlc:pass --auth=vendor --policy=opus-only --run-id=baseline examples/workforce-ops/brief.md" \
   --output-format stream-json --verbose > examples/workforce-ops/passes/baseline/live-run.log
 
-claude --print "/run-sdlc-pass --auth=vendor --policy=opus-plus-flash --run-id=multi-model examples/workforce-ops/brief.md" \
+claude --print "/sdlc:pass --auth=vendor --policy=opus-plus-flash --run-id=multi-model examples/workforce-ops/brief.md" \
   --output-format stream-json --verbose > examples/workforce-ops/passes/multi-model/live-run.log
 
 node tools/report.mjs examples/workforce-ops/passes/baseline

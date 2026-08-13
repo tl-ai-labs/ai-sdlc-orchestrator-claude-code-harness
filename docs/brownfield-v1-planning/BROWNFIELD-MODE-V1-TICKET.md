@@ -15,9 +15,9 @@
 
 ## 1. Summary
 
-Extend the existing `multi-model-orchestrator@tilicho-ai-labs` plugin from "generates a new app from a brief in an empty folder" to "installs onto any existing repo and does one of seven kinds of work (docs / bugfix / feature-extend / feature-new / refactor / test / deps) safely, across many sessions, without touching anything the user hasn't approved."
+Extend the existing `sdlc@tilicho-ai-labs` plugin from "generates a new app from a brief in an empty folder" to "installs onto any existing repo and does one of seven kinds of work (docs / bugfix / feature-extend / feature-new / refactor / test / deps) safely, across many sessions, without touching anything the user hasn't approved."
 
-Ship as a new command `/sdlc-brownfield` (plus supporting `/sdlc-revert`), all setup folded into two prompts, with a non-destructive write contract enforced at three layers and multi-session machinery (baseline, ledger, provenance, rollback) that makes the second and Nth session on the same real project safe and coherent.
+Ship as a new command `/sdlc:brownfield` (plus supporting `/sdlc:revert`), all setup folded into two prompts, with a non-destructive write contract enforced at three layers and multi-session machinery (baseline, ledger, provenance, rollback) that makes the second and Nth session on the same real project safe and coherent.
 
 Greenfield mode continues to work unchanged.
 
@@ -35,7 +35,7 @@ The plugin today assumes an empty folder:
 
 ## 3. Solution (high level)
 
-- **New entry command `/sdlc-brownfield`** — installs and runs against any existing repo.
+- **New entry command `/sdlc:brownfield`** — installs and runs against any existing repo.
 - **Two-prompt UX contract** — prompt 1 does ALL setup (install, env, credentials, discovery, baseline, pre-check) in six shepherded sections; prompt 2 is lean (staleness check → intent brief → Gate 0 → pipeline).
 - **Non-destructive write contract** — enforced at three layers (soft prompt gate / schema packet validator / HARD PreToolUse hook). Off-limits files are refused at the tool boundary.
 - **Seven intents** covering ~80% of production brownfield work.
@@ -65,15 +65,15 @@ Seven architectural decisions have been locked. Each has a corresponding plan se
 - Discovery model: tiered (Tier 1 always / Tier 2 at Gate 0 / Tier 2b adaptive profile / Tier 3 on-demand)
 - Safety defaults: write-contract PreToolUse hook **HARD-BLOCK by default** (escape hatch `--strict-write=off`); git-dirty **blocks when `commit_strategy != none`** (escape hatch `--allow-dirty`)
 - Stack adapters shipped: **generic + nest + python** (Django + FastAPI)
-- Graceful mid-setup recovery (setup-status.json persisted per section; next `/sdlc-brownfield` auto-resumes shepherd)
+- Graceful mid-setup recovery (setup-status.json persisted per section; next `/sdlc:brownfield` auto-resumes shepherd)
 
 ---
 
 ## 5. In scope for v1
 
 ### 5.1 Commands (new)
-- `/sdlc-brownfield` — main entry point (six-section shepherd on first invocation per project)
-- `/sdlc-revert <run-id>` — single-run rollback via provenance
+- `/sdlc:brownfield` — main entry point (six-section shepherd on first invocation per project)
+- `/sdlc:revert <run-id>` — single-run rollback via provenance
 
 ### 5.2 Discovery (tiered)
 - **Tier 1** (~10 s, always runs) — git state, stack manifest, `.gitignore`, competing AI configs, monorepo signals, submodules, LFS
@@ -133,14 +133,14 @@ One linear state machine with intent-conditional phase execution. `intent` field
 - **Append-only ledger** — `.sdlc/ledger.md` (human) + `.sdlc/ledger.json` (machine) with one row per run
 - **Baseline staleness detection** (§14.4) — git-diff + mtime; incremental refresh in ~5–10 s
 - **Git workflow contract** (§14.5) — SAFE DEFAULTS: `branch_strategy: current`, `commit_strategy: none`, `pr: off`. Never `--no-verify`. Configurable in `.sdlc/project.json`
-- **Provenance + /sdlc-revert** (§14.6) — per-file `existed_before / sha_before / sha_after / tracked_in_git / backup_path / packet_id`. Backup copy at write time. Four file-state cases handled (see §7.3)
+- **Provenance + /sdlc:revert** (§14.6) — per-file `existed_before / sha_before / sha_after / tracked_in_git / backup_path / packet_id`. Backup copy at write time. Four file-state cases handled (see §7.3)
 - **Coexistence enforcement** (§14.8) — honor `.gitignore`, run project's own formatters, never `--no-verify`, parse CODEOWNERS (surface, not enforce), competing AI configs default off-limits
 
 ### 5.7 Cross-cutting concerns
 
 - **Credential discovery** (§26) — provider-agnostic scanner walks: shell env → home dir configs (`~/.anthropic/`, `~/.config/gcloud/`, `~/.gemini/`) → shell rc files → repo `.env*` (names only) → repo code references
 - **Setup shepherd** (§25) — sequential, pause-and-guide, verify on every "done." Re-verify with actual check, not trust user. 3 verification failures → offer skip (with consequence) or abort
-- **Graceful mid-setup recovery** — shepherd writes to `.sdlc/local/setup-status.json` per section; next `/sdlc-brownfield` reads it and resumes from where left off
+- **Graceful mid-setup recovery** — shepherd writes to `.sdlc/local/setup-status.json` per section; next `/sdlc:brownfield` reads it and resumes from where left off
 - **Pipeline pre-check** (§22) — 6 smoke steps (discovery, test-command probe, dispatch smoke to each tier, write-contract smoke, rollback smoke, report). Cached to `.sdlc/pre-check-status.json`
 - **Setup-time robustness** (§22) — 17-issue inventory, all handled with detection + clear message (per "handle ≠ solve" principle):
   - Env: Node/git version, MCP dist not built, plugin conflicts, filesystem permissions
@@ -246,7 +246,7 @@ Blocks / blocked-by relationships. Implement in order below unless you can paral
 | 7.12 Testing changes | 7.8 | — |
 | 7.13 Policy + telemetry | — | 7.4 (pre-check dispatch smoke), 7.9 |
 | 7.14 Multi-session state model + ledger | 7.2 | 7.6 (setup-status.json), 7.15 |
-| 7.15 Provenance + `/sdlc-revert` | 7.1, 7.14 | — |
+| 7.15 Provenance + `/sdlc:revert` | 7.1, 7.14 | — |
 | 7.16 Coexistence enforcement | 7.2 | — |
 | 7.17 Robustness handling | 7.6, 7.14 | — |
 | 7.18 Docs + examples | ALL implementation done | — |
@@ -321,7 +321,7 @@ Blocks / blocked-by relationships. Implement in order below unless you can paral
 - ~20 s total, ~$0.02 cost
 - Fail-fast on any step; prints exact remediation with inline choice
 - Cached; subsequent runs skip steps whose inputs haven't changed
-- Invoked automatically at first `/sdlc-brownfield` per project
+- Invoked automatically at first `/sdlc:brownfield` per project
 
 ### 7.5 Credential discovery + shepherd (§26)
 
@@ -363,8 +363,8 @@ Blocks / blocked-by relationships. Implement in order below unless you can paral
 ### 7.7 Gate 0 + intent brief (§3, §6)
 
 **Files to create:**
-- `plugin/commands/sdlc-brownfield.md` — main command spec (includes pre-check + shepherd behavior)
-- `plugin/commands/sdlc-run.md` (edit) — add mode-detection guard (refuses if not empty; suggests `/sdlc-brownfield`)
+- `plugin/commands/brownfield.md` — main command spec (includes pre-check + shepherd behavior)
+- `plugin/commands/run.md` (edit) — add mode-detection guard (refuses if not empty; suggests `/sdlc:brownfield`)
 
 **Files to edit:**
 - `plugin/skills/run-ai-sdlc/SKILL.md` — insert Phase 0/0b/0c states, Gate 0 template, gate-message bubble-up pattern (subagent → main-loop message shape), intent matrix section, task-type table rewrite
@@ -376,7 +376,7 @@ Blocks / blocked-by relationships. Implement in order below unless you can paral
 - **Cost projection printed at end of Gate 0** — one-line estimate from a rough table keyed on `(intent × baseline-size bucket)`: *"Typical cost for a bugfix run on a repo this size: $0.20–$0.80. Approve or abort."* No dedicated mini-gate (per §14.9 C4 cut)
 - Intent brief interview writes `intent_brief.md` with the 6-section heading template
 - Gate messages bubble up from orchestrator subagent to main-loop Claude Code session via specifically-shaped fenced message
-- Mode-detection guard on `/sdlc-run` refuses in a non-empty repo
+- Mode-detection guard on `/sdlc:run` refuses in a non-empty repo
 
 ### 7.8 Intent routing + phase matrix (§5)
 
@@ -465,7 +465,7 @@ Blocks / blocked-by relationships. Implement in order below unless you can paral
 ### 7.14 Multi-session state model + ledger (§14.1, §14.2)
 
 **Files to create:**
-- `plugin/scripts/session-hydrate.mjs` — reads `.sdlc/project.json` + last 3 ledger.json rows; emits summary marker (v1: called at first `/sdlc-brownfield` invocation per session; v1.5: called from `SessionStart` hook)
+- `plugin/scripts/session-hydrate.mjs` — reads `.sdlc/project.json` + last 3 ledger.json rows; emits summary marker (v1: called at first `/sdlc:brownfield` invocation per session; v1.5: called from `SessionStart` hook)
 
 **Outputs (structure):**
 - `.sdlc/project.json` — canonical fingerprint (committed)
@@ -486,10 +486,10 @@ Blocks / blocked-by relationships. Implement in order below unless you can paral
 - Uninstall footprint: single `rm -rf .sdlc/`
 - Concurrent runs: v1 uses `.sdlc/local/run.marker` (PID + start-time + mtime advisory); v1.5 upgrades to portable lock
 
-### 7.15 Provenance + /sdlc-revert (§14.6)
+### 7.15 Provenance + /sdlc:revert (§14.6)
 
 **Files to create:**
-- `plugin/commands/sdlc-revert.md`
+- `plugin/commands/revert.md`
 
 **Outputs (per run):** `.sdlc/runs/<id>/provenance.json` + backup copies at `.sdlc/local/cache/<run-id>/*.bak`
 
@@ -574,13 +574,13 @@ Blocks / blocked-by relationships. Implement in order below unless you can paral
 **Files to edit:**
 - `README.md` — add "Greenfield vs Brownfield" section
 - `SETUP.md` — rewrite as shepherd contract Claude follows verbatim on prompt 1
-- `plugin/commands/run-sdlc-pass.md` — add `--mode`, `--intent`, `--gates`, `--from-config`, `--policy` flags (some flag consumers are v1.5; parser accepts all)
+- `plugin/commands/pass.md` — add `--mode`, `--intent`, `--gates`, `--from-config`, `--policy` flags (some flag consumers are v1.5; parser accepts all)
 
 **Acceptance criteria:**
 - All 6 docs present and complete
 - 6 example repos runnable end-to-end (verification plan §8.3 exercises each)
 - README has clear Greenfield vs Brownfield section pointing users to the right command
-- Keep `plugin/commands/sdlc-run.md` for greenfield — do NOT collapse the two commands
+- Keep `plugin/commands/run.md` for greenfield — do NOT collapse the two commands
 
 ### 7.19 verify-setup.mjs orchestration
 
@@ -600,8 +600,8 @@ Blocks / blocked-by relationships. Implement in order below unless you can paral
 Group by directory. All net-new.
 
 ### 8.1 `plugin/commands/`
-- `sdlc-brownfield.md` (§7.7)
-- `sdlc-revert.md` (§7.15)
+- `brownfield.md` (§7.7)
+- `revert.md` (§7.15)
 
 ### 8.2 `plugin/agents/`
 - `discovery.md` (§7.2)
@@ -690,10 +690,10 @@ Group by directory. All net-new.
 ### 9.9 `plugin/config/policies/opus-plus-flash.yaml`
 - Same — new phase rules + cost cap
 
-### 9.10 `plugin/commands/sdlc-run.md`
-- Add mode-detection guard — refuses if `./src` non-empty or `.git` with tracked files exists; suggests `/sdlc-brownfield` (§7.7 A2 fix)
+### 9.10 `plugin/commands/run.md`
+- Add mode-detection guard — refuses if `./src` non-empty or `.git` with tracked files exists; suggests `/sdlc:brownfield` (§7.7 A2 fix)
 
-### 9.11 `plugin/commands/run-sdlc-pass.md`
+### 9.11 `plugin/commands/pass.md`
 - Add `--mode brownfield --intent <7 values>` flags (v1)
 - Add `--gates auto-approve|auto-abort|prompt`, `--from-config`, `--policy` flags (v1.5 consumers, parser accepts now)
 - Add `--allow-dirty`, `--strict-write=off`, `--recheck`, `--adaptive-profile`, `--refresh-profile` flags
@@ -728,7 +728,7 @@ Cannot rely on unit tests alone — workflow verified by real runs.
 - MCP server tests extended for new `Phase` enum values
 
 ### 10.2 Discovery agent dry-run
-- Run `/sdlc-brownfield` on this very repo (worktree), stop at Gate 0
+- Run `/sdlc:brownfield` on this very repo (worktree), stop at Gate 0
 - Inspect `discovery.md` and `baseline.json` by hand
 - Confirm: stack detected as node/typescript, `.mcp.json` and `plugin/config/policies/*.yaml` flagged in AI-setup group, env keys only (no values)
 
@@ -775,15 +775,15 @@ Assert each recovery path per §18 table.
 
 ### 10.9 Mid-setup interruption drill
 - Kill Claude Code mid-prompt-1 at section 4 (credentials)
-- Reopen, run `/sdlc-brownfield`
+- Reopen, run `/sdlc:brownfield`
 - Verify: shepherd resumes from section 4, completes remaining sections, then continues to task flow
 
 ### 10.10 Mode-detection guard
-- Run `/sdlc-run` in a non-empty repo → assert refusal with expected message
-- Run `/sdlc-brownfield` in an empty folder → assert works or clear-message defer
+- Run `/sdlc:run` in a non-empty repo → assert refusal with expected message
+- Run `/sdlc:brownfield` in an empty folder → assert works or clear-message defer
 
 ### 10.11 Non-git-folder refusal
-- Run `/sdlc-brownfield` in a folder without `.git` → assert refusal with git-init guidance
+- Run `/sdlc:brownfield` in a folder without `.git` → assert refusal with git-init guidance
 
 ### 10.12 CLAUDE.md `@import` hop-budget (B6)
 - Pre-seed CLAUDE.md with 3 levels of imports
@@ -814,7 +814,7 @@ Assert each recovery path per §18 table.
 - **Contract: no hidden state; every failure user-visible** (§18 principle)
 - **Contract: `rm -rf .sdlc/` leaves zero plugin footprint** (uninstall clean)
 - **Contract: no call-home telemetry ever** (§19)
-- Greenfield mode continues to work unchanged (regression test the shipped `/sdlc-run` example)
+- Greenfield mode continues to work unchanged (regression test the shipped `/sdlc:run` example)
 
 ---
 
@@ -830,7 +830,7 @@ Specifically: **do not** implement `/sdlc-precheck`, `/sdlc-doctor`, `/sdlc-init
 
 | Risk | Mitigation |
 |---|---|
-| Write contract has a bug and a file gets overwritten | Three-layer defense (prompt / packet validator / hook); backup-at-write-time enables `/sdlc-revert` recovery |
+| Write contract has a bug and a file gets overwritten | Three-layer defense (prompt / packet validator / hook); backup-at-write-time enables `/sdlc:revert` recovery |
 | Adaptive stack profile misclassifies a custom framework | User confirms at Gate 0; profile refreshable; falls back to generic if no useful patterns found |
 | Users have unusual credential setups we don't cover | Discovery scans 9+ locations per provider; shepherd offers 3 options; explicit skip path with clear consequence |
 | Monorepo detection wrong → tests run on wrong package | User confirms package scope at Gate 0; per-package test command from discovery |

@@ -19,7 +19,7 @@ src/
 cd plugin/examples/brownfield-feature-extend
 npm install && npm test
 # In Claude Code:
-/sdlc-brownfield
+/sdlc:brownfield
 # Pick intent: feature-extend
 ```
 

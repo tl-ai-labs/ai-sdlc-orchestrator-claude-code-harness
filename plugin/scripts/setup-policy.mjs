@@ -2,11 +2,12 @@
 /**
  * Setup-time policy chooser. Invoked by the setup shepherd once per project.
  *
- * The console (plugin/policy-console) is a shared install-level Next.js app —
- * it doesn't know which project launched it. So this script does the coupling:
- * snapshot policies before → launch console + browser → wait for user to save →
- * diff to find the new/modified policy → write its name to the current project's
- * .sdlc/project.json as `default_policy`. Both /sdlc-run and /sdlc-brownfield
+ * The console (plugin/policy-console) is a shared install-level static HTML
+ * page served by a tiny Node http server — it doesn't know which project
+ * launched it. So this script does the coupling: snapshot policies before →
+ * launch server + browser → wait for user to save → diff to find the
+ * new/modified policy → write its name to the current project's
+ * .sdlc/project.json as `default_policy`. Both /sdlc:run and /sdlc:brownfield
  * read that field via session-hydrate.
  *
  * Flow is hybrid on purpose:
@@ -30,6 +31,9 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { createConnection } from "node:net";
 import { platform } from "node:os";
+import { OFF_LIMITS_DEFAULT } from "./lib/off-limits.mjs";
+
+export { OFF_LIMITS_DEFAULT };
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(SCRIPT_DIR, "..");
@@ -40,12 +44,21 @@ const PORT_PROBE_MAX = 10;
 const SERVER_READY_TIMEOUT_MS = 30_000;
 
 function parseArgs(argv) {
-  const out = { policy: null, noBrowser: false, skipInstall: false, printOnly: false };
-  for (const a of argv) {
+  const out = { policy: null, noBrowser: false, skipInstall: false, printOnly: false, projectRoot: null };
+  // Index-based loop so `--policy value` and `--project-root value` (space-separated,
+  // two argv tokens) parse the same as the `=` form. Command files historically
+  // used the space form; without this, --project-root silently stayed null and
+  // resolveProjectRoot() fell back to git-rev-parse-from-cwd — reintroducing
+  // the SiteNotes cross-repo bug.
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
     if (a === "--no-browser") out.noBrowser = true;
     else if (a === "--skip-install") out.skipInstall = true;
     else if (a === "--print-only") out.printOnly = true;
     else if (a.startsWith("--policy=")) out.policy = a.slice("--policy=".length);
+    else if (a === "--policy") out.policy = argv[++i] ?? null;
+    else if (a.startsWith("--project-root=")) out.projectRoot = a.slice("--project-root=".length);
+    else if (a === "--project-root") out.projectRoot = argv[++i] ?? null;
   }
   return out;
 }
@@ -58,7 +71,8 @@ function parseArgs(argv) {
  * Both should still work — fall back to cwd. Returns { root, hasGit } so
  * write flows can surface a transparency note when they fell back.
  */
-function resolveProjectRoot() {
+function resolveProjectRoot(explicit) {
+  if (explicit) return { root: explicit, hasGit: existsSync(join(explicit, ".git")) };
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
   if (r.status === 0) return { root: r.stdout.trim(), hasGit: true };
   return { root: process.cwd(), hasGit: false };
@@ -150,11 +164,19 @@ function openBrowser(url) {
 
 // ── project.json writer ──────────────────────────────────────────────
 
+/**
+ * Malformed project.json is fatal, not empty. Silently returning `{}` (as an
+ * earlier version did) let the next write overwrite hand-edited custom keys
+ * with defaults — destroying user data without a warning. Force the user to
+ * fix or delete the file explicitly.
+ */
 function readProjectJson(sdlcDir) {
   const path = join(sdlcDir, "project.json");
   if (!existsSync(path)) return {};
   try { return JSON.parse(readFileSync(path, "utf8")); }
-  catch { return {}; }
+  catch (err) {
+    fail(`${path} is not valid JSON: ${err?.message ?? err}. Fix or delete the file before rerunning.`);
+  }
 }
 
 function writeProjectJson(sdlcDir, obj) {
@@ -168,9 +190,15 @@ function saveDefaultPolicy(repoRoot, policyName) {
   const sdlcDir = join(repoRoot, ".sdlc");
   const existing = readProjectJson(sdlcDir);
   const merged = {
-    schema_version: existing.schema_version ?? 1,
+    // Spread existing FIRST, then override with the fields this call owns.
+    // Reversed order (`{schema_version: 2, ...existing}`) let an older v1 file
+    // keep its schema_version: 1 forever — the literal was silently discarded.
     ...existing,
+    schema_version: 2,
     default_policy: policyName,
+    // Only set on first write, or when the current list predates schema_version 2.
+    // Users may hand-edit off_limits_default; we don't overwrite it once set.
+    off_limits_default: existing.off_limits_default ?? OFF_LIMITS_DEFAULT,
     last_updated_at: new Date().toISOString(),
   };
   const path = writeProjectJson(sdlcDir, merged);
@@ -232,21 +260,20 @@ async function interactiveFlow(resolved, args) {
   const before = snapshotPolicies();
 
   if (!args.skipInstall && !existsSync(join(CONSOLE_DIR, "node_modules"))) {
-    log("running npm install in the policy console (first-time only)…");
-    const install = spawnSync("npm", ["install", "--silent"], { cwd: CONSOLE_DIR, stdio: "inherit" });
+    log("installing the policy console's one dep (yaml) — first-time only…");
+    const install = spawnSync("npm", ["install", "--omit=dev", "--no-audit", "--no-fund", "--silent"], {
+      cwd: CONSOLE_DIR,
+      stdio: "inherit",
+    });
     if (install.status !== 0) fail("npm install failed in the policy console.");
   }
 
   const port = await findFreePort(DEFAULT_PORT);
-  log(`starting policy console on http://localhost:${port} …`);
+  log(`starting policy console on http://127.0.0.1:${port} …`);
 
-  const server = spawn("npm", ["run", "dev", "--", "-H", "127.0.0.1", "-p", String(port)], {
+  const server = spawn("node", ["policy-server.mjs", "--host", "127.0.0.1", "--port", String(port)], {
     cwd: CONSOLE_DIR,
-    env: {
-      ...process.env,
-      BROWSER: "none",
-      NEXT_TELEMETRY_DISABLED: "1",
-    },
+    env: process.env,
     stdio: ["ignore", "ignore", "inherit"],
     detached: false,
   });
@@ -306,7 +333,7 @@ async function interactiveFlow(resolved, args) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const resolved = resolveProjectRoot();
+  const resolved = resolveProjectRoot(args.projectRoot);
 
   if (args.printOnly) return printOnlyFlow(resolved);
   if (args.policy) return scriptedFlow(args.policy, resolved);

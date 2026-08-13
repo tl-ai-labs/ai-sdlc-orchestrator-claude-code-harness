@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Provenance writer for `/sdlc-revert` (ticket §14.6).
+ * Provenance writer for `/sdlc:revert` (ticket §14.6).
  *
  * The orchestrator calls this around every Write/Edit in a brownfield run so the
  * revert command can restore the pre-run state. Schema matches the reader in
- * plugin/commands/sdlc-revert.md — never drift.
+ * plugin/commands/revert.md — never drift.
  *
  * Contract:
  *   --init      — start a fresh provenance.json for a run (captures git_head_before)
@@ -26,15 +26,25 @@ import { dirname, join, relative, resolve } from "node:path";
 
 function parseArgs(argv) {
   const out = { mode: null, runId: null, path: null, packetId: null, intent: null };
-  for (const a of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    // Index-based to accept both `--flag=value` and `--flag value` forms.
+    // Command files historically wrote the space form; without this, the
+    // --project-root pass-through silently stayed null.
     if (a === "--init") out.mode = "init";
     else if (a === "--before") out.mode = "before";
     else if (a === "--after") out.mode = "after";
     else if (a === "--finalize") out.mode = "finalize";
     else if (a.startsWith("--run-id=")) out.runId = a.slice("--run-id=".length);
+    else if (a === "--run-id") out.runId = argv[++i] ?? null;
     else if (a.startsWith("--path=")) out.path = a.slice("--path=".length);
+    else if (a === "--path") out.path = argv[++i] ?? null;
     else if (a.startsWith("--packet-id=")) out.packetId = a.slice("--packet-id=".length);
+    else if (a === "--packet-id") out.packetId = argv[++i] ?? null;
     else if (a.startsWith("--intent=")) out.intent = a.slice("--intent=".length);
+    else if (a === "--intent") out.intent = argv[++i] ?? null;
+    else if (a.startsWith("--project-root=")) out.projectRoot = a.slice("--project-root=".length);
+    else if (a === "--project-root") out.projectRoot = argv[++i] ?? null;
   }
   return out;
 }
@@ -43,7 +53,18 @@ function warn(msg) { process.stderr.write(`write-provenance: ${msg}\n`); }
 function log(msg) { process.stderr.write(`write-provenance: ${msg}\n`); }
 function failOpen(msg) { warn(msg); process.exit(0); }
 
-function resolveProjectRoot() {
+/**
+ * Where does per-run bookkeeping (`.sdlc/runs/<run-id>/provenance.json`) go?
+ * The command layer knows — it's the project the user is running against.
+ * That answer arrives here as `--project-root=<abs-path>`. When absent, fall
+ * back to `git rev-parse` from cwd, then cwd itself. The command-layer path
+ * is preferred because Bash cwd drifts across a session (an earlier `cd`,
+ * a helper that shells out) and git-toplevel-from-cwd will follow, quietly
+ * writing provenance into whichever git worktree the shell currently sits in.
+ * That's the SiteNotes bug — closed by always passing --project-root.
+ */
+function resolveProjectRoot(explicit) {
+  if (explicit) return explicit;
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
   if (r.status === 0) return r.stdout.trim();
   return process.cwd();
@@ -107,7 +128,7 @@ function main() {
   if (!args.mode) failOpen("no mode given (--init / --before / --after / --finalize)");
   if (!args.runId) failOpen("--run-id=<id> is required");
 
-  const root = resolveProjectRoot();
+  const root = resolveProjectRoot(args.projectRoot);
   const provPath = provenancePath(root, args.runId);
 
   if (args.mode === "init") {

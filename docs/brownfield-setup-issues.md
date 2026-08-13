@@ -54,7 +54,7 @@ The table's "handled by" column names the script or subagent that owns each issu
 ## How to run just the brownfield checks
 
 ```bash
-node ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs --brownfield-check
+node ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs --brownfield-check
 ```
 
 Or run them independently:

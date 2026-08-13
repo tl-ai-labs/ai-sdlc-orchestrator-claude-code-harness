@@ -2,9 +2,9 @@
 
 The AI-SDLC Orchestrator plugin ships in two modes:
 
-- **Greenfield** (`/sdlc-run`) — generates a whole new application from a project brief into an
+- **Greenfield** (`/sdlc:run`) — generates a whole new application from a project brief into an
   empty folder. This is what the plugin was originally built for.
-- **Brownfield** (`/sdlc-brownfield`) — extends an existing repository. Pick one of seven job
+- **Brownfield** (`/sdlc:brownfield`) — extends an existing repository. Pick one of seven job
   types (docs, bugfix, feature-extend, feature-new, refactor, test, deps), confirm scope at
   one Gate 0 confirmation screen, run the pipeline with a non-destructive write contract that
   guarantees off-limits files stay untouched.
@@ -12,8 +12,8 @@ The AI-SDLC Orchestrator plugin ships in two modes:
 Both modes share the same install (SETUP.md), same policies (`opus-only` / `opus-plus-flash`),
 same MCP dispatch layer. What differs is what happens after the setup check completes.
 
-This doc walks brownfield end-to-end. For the greenfield equivalent see [/sdlc-run's operating
-manual](../plugin/commands/sdlc-run.md).
+This doc walks brownfield end-to-end. For the greenfield equivalent see [/sdlc:run's operating
+manual](../plugin/commands/run.md).
 
 ---
 
@@ -23,7 +23,7 @@ manual](../plugin/commands/sdlc-run.md).
 $ claude
   (opens Claude Code in your project directory)
 
-/sdlc-brownfield
+/sdlc:brownfield
   1. Session-hydrate — shows prior runs, checks for resume state
   2. Pipeline pre-check (first time / when baseline stale) — 6 smoke steps
   3. Discovery — reads your repo (Tier 1, ~10s; Tier 2b adaptive if custom stack)
@@ -32,7 +32,7 @@ $ claude
   6. Pipeline — requirements → (architecture) → packet plan → execute → review → tests → security → report
 ```
 
-Two prompts total from installation to done: `Setup this plugin from…` then `/sdlc-brownfield`.
+Two prompts total from installation to done: `Setup this plugin from…` then `/sdlc:brownfield`.
 That's the whole contract. Every setup step (env checks, credential shepherd, discovery, pre-
 check, baseline save) folds into those two — no `/sdlc-precheck`, `/sdlc-doctor`, or other
 sub-commands to remember.
@@ -120,7 +120,7 @@ The plugin's per-project state. Split into committed (team-shared) and gitignore
     ├── setup-status.json — shepherd resume state
     ├── write-contract.json — active run's allowlist/off-limits
     ├── user-policy.yaml  — personal policy override
-    ├── cache/            — per-run backup copies for /sdlc-revert
+    ├── cache/            — per-run backup copies for /sdlc:revert
     └── debug.log
 ```
 

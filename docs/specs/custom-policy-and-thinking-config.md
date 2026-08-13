@@ -9,9 +9,9 @@
 
 ## 1. Problem Statement
 
-Today `/sdlc-run` routes every phase using whichever policy YAML is on disk
+Today `/sdlc:run` routes every phase using whichever policy YAML is on disk
 (`opus-plus-flash` by default, or `opus-only` as a fallback) and the
-[sdlc-run.md](../../plugin/commands/sdlc-run.md) command says so explicitly: *"This first
+[run.md](../../plugin/commands/run.md) command says so explicitly: *"This first
 version runs the default policy. It is not configurable from this command; a user who needs
 different routing edits the policy file directly."* Changing routing means hand-editing YAML —
 finding the right file, knowing the schema (`models`, `select`, `rules`), and understanding phase
@@ -29,7 +29,7 @@ Two things compound this:
    hand, edit it correctly, and remember to point the run at it — with no validation until the
    run fails mid-phase.
 
-The people affected are anyone running `/sdlc-run` who wants routing or thinking-effort
+The people affected are anyone running `/sdlc:run` who wants routing or thinking-effort
 different from the two shipped presets — which, since this is the pipeline's main cost lever, is
 most repeat users. Left unsolved, users either overpay (staying on `opus-only` to avoid YAML
 surgery) or risk a misconfigured policy failing partway through a paid run.
@@ -40,7 +40,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
    hand-editing YAML.
 2. A user can set extended-thinking effort **per SDLC phase** (not just per model), for the
    first time — today this axis does not exist at all.
-3. Configuration happens **in-flow**: the page opens automatically as part of `/sdlc-run`,
+3. Configuration happens **in-flow**: the page opens automatically as part of `/sdlc:run`,
    before spend starts, and the CLI session resumes with the user's choice — no separate app to
    remember to launch.
 4. A saved custom policy is a real, inspectable YAML file the user can find, re-run, hand-edit,
@@ -61,7 +61,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
 - **Not a policy marketplace or sharing mechanism.** No cloud sync, no team library of custom
   policies. Rationale: out of scope until there's evidence multiple people share a project's
   `.sdlc` history; local file + git is enough for v1.
-- **Not a mid-run editor.** Once step 6 of `sdlc-run.md` starts, the policy is locked for that
+- **Not a mid-run editor.** Once step 6 of `run.md` starts, the policy is locked for that
   run — no live reconfiguration between phases. Rationale: telemetry/cost reporting assumes one
   policy per run; changing it mid-flight breaks that invariant and the four approval gates
   already give a natural checkpoint structure.
@@ -71,7 +71,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
 
 ## 4. User Stories
 
-1. As a user running `/sdlc-run`, I want a web page to open automatically before the run starts
+1. As a user running `/sdlc:run`, I want a web page to open automatically before the run starts
    so I can review and adjust routing without leaving my terminal flow or hand-editing files.
 2. As a user, I want to pick from the existing named policies (`opus-only`, `opus-plus-flash`,
    any others later added) as a starting point, so I'm not building routing from scratch.
@@ -98,7 +98,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
 ## 5. User Flow
 
 **Where it slots in:** between the existing step 4 ("Show what will run") and step 5 ("Choose
-telemetry mode") of [sdlc-run.md](../../plugin/commands/sdlc-run.md).
+telemetry mode") of [run.md](../../plugin/commands/run.md).
 
 1. `verify-setup.mjs` passes (existing step 1).
 2. Brief is found/confirmed (existing step 2), output paths confirmed (existing step 3).
@@ -125,7 +125,7 @@ telemetry mode") of [sdlc-run.md](../../plugin/commands/sdlc-run.md).
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant CLI as /sdlc-run (Claude Code)
+    participant CLI as /sdlc:run (Claude Code)
     participant Srv as Local config server
     participant Pg as Browser page
 
@@ -156,7 +156,7 @@ Single page, two linked sections, served from the local server started in flow s
 ### 6.1 Policy section
 - **Base policy selector** — dropdown of everything in `plugin/config/policies/*.yaml` (name +
   one-line description pulled from the YAML's leading comment), defaulted to whatever
-  `sdlc-run.md` step 4 would otherwise have used.
+  `run.md` step 4 would otherwise have used.
 - **Routing table** — one row per SDLC phase (`requirements_analysis`, `architecture_design`,
   `plan_task_packets`, `codegen`, `tests`, `docs`, `senior_code_review`, `security_review`,
   `debug`), each with a dropdown of the base policy's declared model ids (and slot names, e.g.
@@ -166,26 +166,33 @@ Single page, two linked sections, served from the local server started in flow s
   collapsed under the `codegen` row with their own overrides, since they can legitimately diverge
   from the phase-level default.
 - **Live rate readout** — next to each row, the per-million input/output rate of the currently
-  selected model, so cost impact is visible while editing (same numbers `sdlc-run.md` step 4
+  selected model, so cost impact is visible while editing (same numbers `run.md` step 4
   already reports, just live).
 
 ### 6.2 Thinking capacity section — implementation note
-Built differently from this section's original draft, after auditing the real vendor SDKs
-(OQ-6): the tier picker sits **directly next to each phase's model dropdown** (one merged
-row, not a separate section) and writes `reasoning.tier` — the field the one real adapter
-that reads reasoning (`AntigravityWorkerAdapter`) actually consumes — rather than the
-`effort` vocabulary this section originally proposed, which no adapter reads at all.
-Offered tiers are per model: `off`/`minimal`/`low`/`medium`/`high` for both Gemini doors
-(installed `@google/genai`/`google-genai` `ThinkingLevel` enum) — a genuine graded range — and
-**nothing at all for `opus`**, shown as "Not available." Opus genuinely supports thinking
-(`@anthropic-ai/sdk`'s `ThinkingConfigParam`, checked against the *current* `0.116.0` release, not
-the repo's pinned `0.32.1`, which predates thinking entirely), but neither of its real modes is a
-level: `enabled` takes a numeric `budget_tokens` (a dial), and `adaptive` lets Claude pick its own
-depth per call (not a fixed point on a scale). This console offers no picker for either — a product
-decision once that distinction was clear, not a claim that Opus can't think. Picking a model that
-doesn't support the currently-set tier clamps it back to `off` rather than saving a
-silently-invalid combination. Current, authoritative detail:
-[plugin/policy-console/README.md](../../plugin/policy-console/README.md#thinking-tiers-are-per-model-not-a-fixed-set-of-four).
+Built differently from this section's original draft, after auditing the real vendor SDKs and
+docs (OQ-6): the tier picker sits **directly next to each phase's model dropdown** (one merged
+row, not a separate section). Offered tiers are per model, and — this took three corrections to
+get right — the field written depends on which real vendor parameter the model actually has:
+
+- **Gemini** (`flash-completion`, `flash-agsdk-worker`): `off`/`minimal`/`low`/`medium`/`high`,
+  written as `reasoning.tier` — the field `AntigravityWorkerAdapter` (the one adapter that reads
+  reasoning at all) consumes. Sourced from the installed `@google/genai`/`google-genai`
+  `ThinkingLevel` enum.
+- **Opus** (`builtin-anthropic`): `off`/`low`/`medium`/`high`/`xhigh`/`max`, written as
+  `reasoning.effort` — a genuinely different real request parameter,
+  [`output_config.effort`](https://platform.claude.com/docs/en/build-with-claude/effort), not a
+  synonym for Gemini's tier. `claude-opus-4-7` (this repo's pinned Opus model) rejects
+  `thinking: {type: "enabled", budget_tokens}` outright per Anthropic's own docs — 4.7+ models
+  dropped manual-budget thinking — but `output_config.effort` is separate from `thinking` entirely
+  and is documented as supported on `claude-opus-4-7` specifically, with five real levels and
+  Anthropic's own per-model guidance.
+
+Picking a model that doesn't support the currently-set tier clamps it back to `off` rather than
+saving a silently-invalid combination. Current, authoritative detail — including the two earlier,
+wrong conclusions this replaced (that Opus has no thinking ability at all, then that it has none
+worth a picker) — is in
+[plugin/policy-console/README.md](../../plugin/policy-console/README.md#thinking-tiers-are-per-model--two-different-real-vendor-parameters).
 
 ### 6.3 Save controls
 - **Policy name** field, required only when something differs from the base policy; validated
@@ -219,13 +226,13 @@ extension. No new persistence layer — the filesystem *is* the store, consisten
 (inspectable, hand-editable afterward).
 
 ### 7.3 Discovery
-`sdlc-run.md` step 4 / the new flow step 3 lists policies by globbing
+`run.md` step 4 / the new flow step 3 lists policies by globbing
 `plugin/config/policies/*.yaml`, so a custom policy saved in one run is a normal pickable base
 policy in the next (user story 9) — no separate index file to keep in sync.
 
 ## 8. Integration & Validation
 
-- **`sdlc-run.md`** gets a new step inserted between current steps 4 and 5 (see §5); current step
+- **`run.md`** gets a new step inserted between current steps 4 and 5 (see §5); current step
   4's reporting logic is unchanged, just re-pointed at the resolved policy.
 - **Policy loading** — whatever currently parses/validates a policy YAML at run start (used by
   the orchestrator subagent and by `verify-setup.mjs`) must run the identical validation against
@@ -246,7 +253,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
 ## 9. Requirements
 
 ### Must-Have (P0)
-- [ ] Config page auto-opens during `/sdlc-run`, before step 5 (telemetry mode / spend
+- [ ] Config page auto-opens during `/sdlc:run`, before step 5 (telemetry mode / spend
       confirmation).
 - [ ] User can select any existing policy in `plugin/config/policies/` as a starting point.
 - [ ] User can change per-phase model routing for all nine phases plus `codegen`'s task-type
@@ -279,7 +286,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
 
 ## 10. Acceptance Criteria
 
-- Given the user runs `/sdlc-run` with no prior custom policies, when step 3 (existing) finishes,
+- Given the user runs `/sdlc:run` with no prior custom policies, when step 3 (existing) finishes,
   then a browser opens to the config page showing `opus-plus-flash` (today's default) pre-loaded
   as the base policy.
 - Given the user changes `codegen`'s routing from `gemini-flash` to `opus` and sets
@@ -289,7 +296,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   shows `codegen` routed to `opus` at Opus's rates.
 - Given the user clicks **Use as-is** without editing anything, when the run proceeds, then no
   new file is written to `plugin/config/policies/` and behavior is identical to today's
-  (pre-feature) `/sdlc-run`.
+  (pre-feature) `/sdlc:run`.
 - Given the user tries to save a policy named `opus-only` (an existing filename), then the page
   blocks submission with an inline "name already in use" error and no file is overwritten.
 - Given the user routes a phase to a model whose `auth.env` credential is unset in the
@@ -298,7 +305,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
 - Given the page has been open and idle past the timeout, when the timeout elapses, then the CLI
   proceeds automatically on the previously-resolved default policy and states in the transcript
   that it did so.
-- Given a prior run saved `strict-review.yaml`, when `/sdlc-run` is invoked again, then
+- Given a prior run saved `strict-review.yaml`, when `/sdlc:run` is invoked again, then
   `strict-review` appears as a selectable base policy alongside `opus-only` and
   `opus-plus-flash`.
 - Given the session has no way to open a browser (headless), when flow step 3 runs, then the CLI
@@ -311,9 +318,9 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   [plugin/policy-console/](../../plugin/policy-console/) (`npm run dev`), reading and writing
   `plugin/config/policies/*.yaml` directly through Node's `fs` in server components / a server
   action. Self-contained (its own `package.json`), not a dependency of the MCP server.
-- **OQ-2 (engineering) — still open:** How the page hands its result back to a `/sdlc-run` session
+- **OQ-2 (engineering) — still open:** How the page hands its result back to a `/sdlc:run` session
   mid-flow (flow step 3 in §5) isn't wired yet — the console today is a standalone tool a user runs
-  and reads from manually. Auto-launch from `/sdlc-run` and reporting the resolved policy back into
+  and reads from manually. Auto-launch from `/sdlc:run` and reporting the resolved policy back into
   that same CLI session remains future work.
 - **OQ-3 (product, requester):** Are custom policies saved under `plugin/config/policies/`
   intended to be **committed to git** (shareable across a team working in the same checked-out
@@ -329,20 +336,25 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   displays.
 - **OQ-6 (engineering) — resolved:** Every call site that reads `ModelConfig.reasoning`
   (types.ts:107) is now enumerated. Only one exists: `AntigravityWorkerAdapter.ts:157`, via
-  `workerThinkingLevel()`, which reads `reasoning.tier` (`minimal`/`low`/`medium`/`high`) — not
-  `reasoning.effort` (`off`/`low`/`high`/`max`, this section's original proposal). The console was
-  changed to write `tier`, not `effort` (§6.2). `BuiltinAnthropicAdapter` (opus) and
-  `GeminiFlashAdapter` (`flash-completion`) never read `reasoning` at all — a thinking override on
-  either is silently inert regardless of field name. `minimal` is a real, valid member of the
-  vendor `ThinkingLevel` enum on both the Node and Python `google-genai` packages — confirmed by
-  reading their installed type definitions — so it does not crash `flash-agsdk-worker`.
-  **Net effect: only `flash-agsdk-worker` has a working thinking override.** `flash-completion`
-  has a real tier range to offer and just isn't wired — separate, unrelated fact from `opus`, which
-  the console shows as "Not available" by design: it supports thinking on the *current* Anthropic
-  SDK (`0.116.0`; the pinned `0.32.1` predates it entirely), but neither real mode (`adaptive` or
-  numeric `budget_tokens`) is a graded range, so there's nothing to put on this console's tier
-  picker. Wiring `flash-completion` to the vendor's `thinkingLevel` config is backend work, tracked
-  as a known gap in
+  `workerThinkingLevel()`, which reads `reasoning.tier` (`minimal`/`low`/`medium`/`high`).
+  `BuiltinAnthropicAdapter` (opus) and `GeminiFlashAdapter` (`flash-completion`) never read
+  `reasoning` at all — a thinking override on either is silently inert regardless of field name.
+  `minimal` is a real, valid member of the vendor `ThinkingLevel` enum on both the Node and Python
+  `google-genai` packages — confirmed by reading their installed type definitions — so it does not
+  crash `flash-agsdk-worker`.
+
+  This question also surfaced a real, separate parameter that wasn't in scope when first asked:
+  Anthropic's `output_config.effort` — five real levels (`low`/`medium`/`high`/`xhigh`/`max`),
+  documented as supported on `claude-opus-4-7` specifically, independent of `thinking` (which
+  4.7+ models reject in manual-budget form). The console now writes this as `reasoning.effort`
+  for Opus-routed phases and `reasoning.tier` for Gemini-routed ones — two different real fields
+  for two different real vendor parameters, not one vocabulary standardized across models.
+
+  **Net effect: only `flash-agsdk-worker` has a working thinking override today.**
+  `flash-completion` and `opus` both have real, documented graded ranges the console now offers —
+  neither is wired to an adapter yet. Wiring `flash-completion` to the vendor's `thinkingLevel`
+  config, and bumping `@anthropic-ai/sdk` to send `output_config.effort` for `opus`, are backend
+  work, tracked as a known gap in
   [plugin/policy-console/README.md](../../plugin/policy-console/README.md#known-gap-thinking-capacity-isnt-wired-to-any-adapter-yet)
   rather than fixed here — no policy from this console drives a real run yet, so it isn't blocking.
 

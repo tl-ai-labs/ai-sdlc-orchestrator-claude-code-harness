@@ -1,59 +1,75 @@
 # Policy console
 
-A local web app for choosing and customizing an AI-SDLC routing policy — which model runs each
-phase, and (new) thinking capacity per phase. Reads and writes real files in
+A local web page for choosing and customizing an AI-SDLC routing policy — which model runs each
+phase, and thinking capacity per phase. Reads and writes real files in
 [plugin/config/policies/](../config/policies/). See
 [docs/specs/custom-policy-and-thinking-config.md](../../docs/specs/custom-policy-and-thinking-config.md)
 for the full spec.
 
+## What is this
+
+One HTML page + a ~350-line Node http server. No framework, no build step, one npm dep (`yaml`).
+
+| File | Role |
+|---|---|
+| `index.html` | The entire UI. Inline CSS + vanilla JS. Renders a gallery of existing policies and an editor that customizes any base policy into a new saved one. |
+| `policy-server.mjs` | Tiny http server. Serves the HTML, exposes `GET /api/policies`, `POST /api/preview`, `POST /api/save`. Bound to 127.0.0.1 on a caller-chosen port. |
+| `package.json` | One dep: `yaml`. First-time only `npm install` is ~1 second. |
+
 ## Run it
+
+You do not normally run this directly. `plugin/scripts/setup-policy.mjs` (called by the shepherd
+during setup, and by the `/sdlc:policy change` command later) starts the server on the first free
+port ≥3000, opens your browser, and writes the picked/authored policy name to
+`.sdlc/project.json.default_policy` in the current project.
+
+Direct invocation for local development:
 
 ```bash
 cd plugin/policy-console
 npm install
-npm run dev
+node policy-server.mjs --port 3000
 ```
 
-Open `http://localhost:3000`. Pick an existing policy to customize, or add a new one. The
-thinking-tier picker sits next to each phase's model dropdown and only offers the tiers that
-model's real vendor API supports — see below. Saving always writes a new named file — the two
-shipped presets (`opus-only`, `opus-plus-flash`) are never modified.
+Open `http://127.0.0.1:3000`.
 
-## Thinking tiers are per model, and Opus doesn't have a graded range
+## Thinking tiers are per model — two different real vendor parameters
 
 Each phase's model dropdown and thinking-tier picker sit side by side, and the tier options change
-with the model — grounded in the real vendor SDKs, not guessed:
+with the model — grounded in the vendors' own docs, not SDK guesswork:
 
-| Adapter | Picker shows | Source |
-|---|---|---|
-| `mcp:gemini-flash-server` (`flash-completion`) | `off`, `minimal`, `low`, `medium`, `high` | `@google/genai` (Node) `ThinkingLevel` enum |
-| `antigravity-worker` (`flash-agsdk-worker`) | `off`, `minimal`, `low`, `medium`, `high` | `google-genai` (Python) `ThinkingLevel` enum — same vendor enum, both packages agree |
-| `builtin-anthropic` (`opus`) | **Not available** | See below |
+| Adapter | Picker shows | Real request field | Source |
+|---|---|---|---|
+| `mcp:gemini-flash-server` (`flash-completion`) | `off`, `minimal`, `low`, `medium`, `high` | `thinking.thinkingLevel`, written here as `reasoning.tier` | `@google/genai` (Node) / `google-genai` (Python) `ThinkingLevel` enum |
+| `antigravity-worker` (`flash-agsdk-worker`) | `off`, `minimal`, `low`, `medium`, `high` | same as above | same enum, both packages agree |
+| `builtin-anthropic` (`opus`) | `off`, `low`, `medium`, `high`, `xhigh`, `max` | `output_config.effort`, written here as `reasoning.effort` | [platform.claude.com/.../effort](https://platform.claude.com/docs/en/build-with-claude/effort) |
 
-**Opus genuinely supports thinking — it just isn't a graded range**, so there's nothing to put on
-a level picker. `@anthropic-ai/sdk`'s `ThinkingConfigParam` (checked against the *current* `0.116.0`
-release, not the repo's pinned `0.32.1`, which predates thinking entirely) has two real modes:
-`enabled` with a numeric `budget_tokens` (a dial, not a level) and `adaptive` (Claude picks its own
-depth per call, not a fixed point on a scale). Neither maps onto the same off→high shape as
-Gemini's tiers, so this console shows "Not available" rather than a single non-rangeable "auto"
-button — a product decision, not a technical limit. `minimal` is a real, valid tier on both Gemini
-packages (confirmed by reading their installed `types.py`/`node.d.ts`) — an earlier draft of this
-README incorrectly claimed it crashed the Antigravity worker; it doesn't. An even earlier draft
-claimed Opus had no thinking ability at all; it does — that was checked against the wrong SDK
-version, before this console settled on "no graded range" as the actual reason to show nothing.
+**Opus's range is `effort`, not `tier`, and it's a genuinely different request parameter — not two
+names for the same setting.** `claude-opus-4-7` (this repo's pinned Opus model) rejects
+`thinking: {type: "enabled", budget_tokens}` outright — [Anthropic's own
+docs](https://platform.claude.com/docs/en/build-with-claude/extended-thinking) say plainly: *"Claude
+4.7 and later models do not support it and reject requests that use it, returning a 400 error."*
+The real graded control for `claude-opus-4-7` is `output_config.effort`, a top-level field
+independent of `thinking`: five documented levels (`low`/`medium`/`high`/`xhigh`/`max`, default
+`high`), with Anthropic publishing per-model guidance for Opus 4.7 specifically — e.g. `xhigh` as
+the recommended starting point for coding/agentic work. This console writes it as
+`reasoning.effort` (not `reasoning.tier`) so a saved rule always names the field its target model's
+adapter will eventually need to read.
 
-## Known gap: thinking capacity isn't wired to any adapter yet
+## Known gap: thinking capacity isn't wired to every adapter yet
 
-The console writes the chosen tier into the saved policy as `rules[].reasoning.tier`. Today that
-value has **no effect on a real run** for two of the three routing options:
+The console writes the chosen tier into the saved policy as `rules[].reasoning.tier` or
+`rules[].reasoning.effort`, per the table above. Today that value has **no effect on a real run**
+for two of the three routing options:
 
 | Routing option | Adapter | Reads `reasoning`? |
 |---|---|---|
-| `opus` | `BuiltinAnthropicAdapter` | No — never read, never sent to the Anthropic API. Moot today anyway: the console offers no tier to set for it (see above), and the pinned SDK (`0.32.1`) predates thinking regardless |
+| `opus` | `BuiltinAnthropicAdapter` | No — never read, never sent to the Anthropic API. The pinned `@anthropic-ai/sdk` (`0.32.1`) also predates `output_config.effort` entirely, so it couldn't send it even if wired |
 | `flash-completion` | `GeminiFlashAdapter` | No — not read anywhere in that adapter or `geminiTransports.ts`, despite the vendor SDK supporting `thinkingLevel` |
 | `flash-agsdk-worker` | `AntigravityWorkerAdapter` | Yes — the only adapter that reads `reasoning.tier` and passes it through |
 
 So the tiers shown are honest about what each vendor's API allows, but only `flash-agsdk-worker`
-actually acts on the choice today. Wiring `flash-completion` to send `thinkingLevel` is backend
-work, not a console change — tracked as an open item, not fixed here since no policy from this
-console is driving a real run yet.
+actually acts on the choice today. Wiring `flash-completion` to send `thinkingLevel`, and bumping
+`@anthropic-ai/sdk` to send `output_config.effort` for `opus`, are backend work, not console
+changes — tracked as an open item, not fixed here since no policy from this console is driving a
+real run yet.
