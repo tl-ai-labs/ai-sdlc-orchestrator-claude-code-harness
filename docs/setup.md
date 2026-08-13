@@ -75,7 +75,7 @@ On the plugin route, [SETUP.md](../SETUP.md) puts the question to you as step 5 
 You can run the flag yourself at any time, on either route:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
 ```
 
 Or, from a clone:
@@ -104,7 +104,7 @@ node plugin/scripts/probe-agent-worker.mjs
 Or on the plugin route:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/probe-agent-worker.mjs | tail -1)"
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/probe-agent-worker.mjs | tail -1)"
 ```
 
 Cost: about two cents (~12k input, ~150 output — almost entirely the SDK preamble). `verify-setup.mjs` prints this command at the end of its own output when the install selects the agent path and every offline check passes.
@@ -116,7 +116,7 @@ The setup check reads five things — `GEMINI_API_KEY`, `GOOGLE_APPLICATION_CRED
 To walk a row, set what its second column names and run:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)"
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)"
 ```
 
 | # | What is set | Finding | Runs? |

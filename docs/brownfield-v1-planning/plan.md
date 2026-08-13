@@ -4,7 +4,7 @@
 
 - **What.** Extend this Claude Code plugin from "generates a new app from a brief in an empty folder" to "installs onto any existing repo and does one of seven kinds of work (docs / bugfix / feature-extend / feature-new / refactor / test / deps) safely, across many sessions, without touching anything the user didn't approve."
 - **Why.** Every install doc today says "open Claude Code in an empty folder." Real users have real repos with real conventions, real AI tools already in place (Cursor / Aider / Copilot / their own MCP servers), real CI, real teammates. The plugin as it stands is a demo, not a product.
-- **How.** A new `/sdlc-brownfield` command runs a tiered discovery (~10 s), presents one Gate 0 confirmation, then routes into an intent-conditional pipeline that reuses most of the existing machinery. A non-destructive write contract enforced at three layers (prompt / packet validator / PreToolUse hook) guarantees off-limits files (theirs and ours) are never touched. Multi-session machinery (ledger, provenance, resume, staleness detection) makes the second and Nth session on the same project safe and coherent.
+- **How.** A new `/sdlc:brownfield` command runs a tiered discovery (~10 s), presents one Gate 0 confirmation, then routes into an intent-conditional pipeline that reuses most of the existing machinery. A non-destructive write contract enforced at three layers (prompt / packet validator / PreToolUse hook) guarantees off-limits files (theirs and ours) are never touched. Multi-session machinery (ledger, provenance, resume, staleness detection) makes the second and Nth session on the same project safe and coherent.
 - **All decisions locked.** V1 = 7 intents (no separate review command — review deferred to v2 as it's a different product category from safely-changing-code) + all §14 must-haves + **adaptive stack profile** (§21) + **pipeline pre-check with max-scope robustness** (§22) + **two-prompt UX contract** (§23) + **explicit model-per-task routing docs** (§24) + **setup shepherd behavior** (§25) + **credential discovery "check first, ask second"** (§26). Discovery = tiered (Tier 1 / Tier 2 at Gate 0 / Tier 2b adaptive profile / Tier 3 on-demand). Safety: write-contract hook **hard block by default**; git-dirty **blocks when `commit_strategy != none`**. Stack adapters: **generic + nest + python** as baselines, adaptive profile as primary quality mechanism. All 15 setup-time robustness issues handled ("handle ≠ solve" principle). Prompt 1 shepherds interactively (auto-do / pause-and-guide / verify); credentials discovered across shell env, gcloud, home dir configs, shell rc files, and repo scan before ever asking user to set up fresh; headless mode for CI exits with clear log on any guide-needed step.
 
 ---
@@ -65,19 +65,19 @@
 
 ## Context — why brownfield
 
-The plugin today (`multi-model-orchestrator@tilicho-ai-labs`) runs a nine-phase greenfield pipeline that assumes an empty folder — it reads a `brief.md`, writes fresh code to `./src`, hard-codes NestJS+Prisma task types, and never inspects the target repo. Every install doc says "open Claude Code in an empty folder."
+The plugin today (`sdlc@tilicho-ai-labs`) runs a nine-phase greenfield pipeline that assumes an empty folder — it reads a `brief.md`, writes fresh code to `./src`, hard-codes NestJS+Prisma task types, and never inspects the target repo. Every install doc says "open Claude Code in an empty folder."
 
 The new requirement is to install the plugin on an **existing** project — any stack, unknown pre-existing configuration (they may already use Claude Code, Gemini, Cursor, or a custom agent setup) — and use it for open-ended brownfield work: documentation, bug fixes, extending an existing feature, adding a new feature, or one-off tasks we haven't thought of yet.
 
 Two hard constraints from the platform research (all sourced from code.claude.com/docs): Claude Code plugins coexist with user `.claude/` config and are namespaced, so we don't clobber anything by default. But the platform gives **no built-in diff-before-write, no backup, no rollback, no API to enumerate installed plugins/MCP servers**. Any brownfield safety is the plugin's own responsibility, enforced in prompts and optionally in a PreToolUse hook.
 
-Intended outcome: a user can drop this plugin into a real repo, run `/sdlc-brownfield`, and get one of several work products (docs / bugfix / feature / refactor / test / deps) with a hard guarantee that nothing outside a confirmed file-scope was touched, and that their existing AI/tooling configuration was never modified without them re-opening a gate.
+Intended outcome: a user can drop this plugin into a real repo, run `/sdlc:brownfield`, and get one of several work products (docs / bugfix / feature / refactor / test / deps) with a hard guarantee that nothing outside a confirmed file-scope was touched, and that their existing AI/tooling configuration was never modified without them re-opening a gate.
 
 ---
 
 ## The user journey
 
-One command: `/sdlc-brownfield`. The wizard is the product surface; everything downstream is invisible. What the user sees:
+One command: `/sdlc:brownfield`. The wizard is the product surface; everything downstream is invisible. What the user sees:
 
 1. **Setup check** — same `verify-setup.mjs` as greenfield, plus a git-clean check (brownfield needs a rollback anchor).
 2. **Discovery** (~10 s with the tiered model, §2) — "reading your repo." Produces a one-page `discovery.md`.
@@ -124,7 +124,7 @@ Greenfield mode continues to work — the state machine picks the greenfield pat
 Locked as of this design pass:
 
 - **Intent count:** 7 (`docs, bugfix, feature-extend, feature-new, refactor, test, deps`). Covers ~70% of the §13 taxonomy. A read-only "review" capability is deferred to v2 (different product category — competes with existing code-review tools; not core to safely-changing-code).
-- **§14 v1 must-haves:** all seven (project state model, ledger, staleness detection, git contract, provenance + `/sdlc-revert`, coexistence enforcement, versioned state). Without them, session 2 on the same project is dangerous.
+- **§14 v1 must-haves:** all seven (project state model, ledger, staleness detection, git contract, provenance + `/sdlc:revert`, coexistence enforcement, versioned state). Without them, session 2 on the same project is dangerous.
 - **Discovery model:** tiered (Tier 1 always ~10 s / Tier 2 confirm at Gate 0 / Tier 3 on-demand). Replaces the original 60–90 s pre-scan.
 
 Still open (see [Open decisions](#open-questions--decisions-to-lock)):
@@ -144,18 +144,18 @@ Explicitly out of scope for v1:
 
 ## §1 — Entry point & command shape
 
-**One new `/sdlc-brownfield` command + a shared `mode: greenfield|brownfield` field on the orchestrator's inputs.** Not a `--mode` flag on `/sdlc-run` — the wizards diverge too much (`sdlc-run.md:31-71` searches for `# Project Brief`-headed files in an empty folder, which is nonsense for a repo with a real README). Not per-intent commands (`/sdlc-doc`, `/sdlc-bugfix`) — the intent belongs *inside* the brownfield flow and duplicating pre-flight+discovery+gates across 4-5 commands is a maintenance trap.
+**One new `/sdlc:brownfield` command + a shared `mode: greenfield|brownfield` field on the orchestrator's inputs.** Not a `--mode` flag on `/sdlc:run` — the wizards diverge too much (`run.md:31-71` searches for `# Project Brief`-headed files in an empty folder, which is nonsense for a repo with a real README). Not per-intent commands (`/sdlc-doc`, `/sdlc-bugfix`) — the intent belongs *inside* the brownfield flow and duplicating pre-flight+discovery+gates across 4-5 commands is a maintenance trap.
 
-**Mode detection guard on `/sdlc-run`** (A2 fix): the existing `/sdlc-run` command gains an early check — if `./src` exists OR `.git` exists with any tracked files, print *"This looks like an existing repo — did you mean `/sdlc-brownfield`? Pass `--force-greenfield` to proceed anyway (will only work in `./src` after your confirmation at Gate 0)."* and refuse until the user confirms. Prevents accidental greenfield-run on a real repo.
+**Mode detection guard on `/sdlc:run`** (A2 fix): the existing `/sdlc:run` command gains an early check — if `./src` exists OR `.git` exists with any tracked files, print *"This looks like an existing repo — did you mean `/sdlc:brownfield`? Pass `--force-greenfield` to proceed anyway (will only work in `./src` after your confirmation at Gate 0)."* and refuse until the user confirms. Prevents accidental greenfield-run on a real repo.
 
-`/run-sdlc-pass` grows `--mode brownfield --intent <docs|bugfix|feature-extend|feature-new|refactor|test|deps>` for headless / CI use.
+`/sdlc:pass` grows `--mode brownfield --intent <docs|bugfix|feature-extend|feature-new|refactor|test|deps>` for headless / CI use.
 
 **Note on `/sdlc-review`:** an earlier design pass proposed a read-only PR/diff review command. **Dropped from v1** on the honest read that code review is a different product category from safely-changing-code (competes with CodeQL, Cursor review, GitHub Copilot review, etc.) and isn't core to the plugin's main value prop. Deferred to v2 alongside other review-oriented capabilities (threat model, architecture review). See §6 out-of-scope.
 
 Files:
-- New: [plugin/commands/sdlc-brownfield.md](plugin/commands/sdlc-brownfield.md)
-- Edit: [plugin/commands/sdlc-run.md](plugin/commands/sdlc-run.md) — add mode-detection guard (A2)
-- Edit: [plugin/commands/run-sdlc-pass.md](plugin/commands/run-sdlc-pass.md) — add mode/intent flags
+- New: [plugin/commands/brownfield.md](plugin/commands/brownfield.md)
+- Edit: [plugin/commands/run.md](plugin/commands/run.md) — add mode-detection guard (A2)
+- Edit: [plugin/commands/pass.md](plugin/commands/pass.md) — add mode/intent flags
 - Edit: [plugin/.claude-plugin/plugin.json](plugin/.claude-plugin/plugin.json) — commands dir already loads by convention, no manifest change
 
 ---
@@ -166,7 +166,7 @@ New subagent [plugin/agents/discovery.md](plugin/agents/discovery.md), tools: `R
 
 The heavy pre-discovery originally sketched was over-engineering. The tiered model gives the same safety guarantees with much lighter first-run cost.
 
-**Precondition (A3 fix):** if `.git` doesn't exist at repo root, discovery refuses with a clear message: *"Brownfield mode needs git for rollback anchors. Run `git init && git add -A && git commit -m 'baseline'`, then re-run `/sdlc-brownfield`."* Not offering to auto-init — too destructive.
+**Precondition (A3 fix):** if `.git` doesn't exist at repo root, discovery refuses with a clear message: *"Brownfield mode needs git for rollback anchors. Run `git init && git add -A && git commit -m 'baseline'`, then re-run `/sdlc:brownfield`."* Not offering to auto-init — too destructive.
 
 **Bash-permission (A9 fix):** discovery uses `Bash(git *)`. In interactive mode Claude Code prompts on first use; in CI mode users must pre-allow via `.claude/settings.json`: `{"permissions": {"allow": ["Bash(git *)"]}}`. Shipped `plugin/templates/settings-ci-fragment.json` provides this; `docs/brownfield-ci.md` documents it.
 
@@ -443,7 +443,7 @@ Run directory naming: `runs/YYYYMMDD-HHMMSS-<intent>-<8char-slug>/` — sortable
 
 **`.sdlc/ledger.md`** — append-only, human-readable table: timestamp, intent, branch, HEAD SHA before/after, packet count, files touched, gates passed, outcome, spend, plugin version. Never rewritten. Source for the "you have N prior runs" session summary (§14.3).
 
-**`.sdlc/ledger.json`** — machine mirror consumed by `/sdlc-audit`, `/sdlc-resume`, `/sdlc-revert`.
+**`.sdlc/ledger.json`** — machine mirror consumed by `/sdlc-audit`, `/sdlc-resume`, `/sdlc:revert`.
 
 **Commit split:** `runs/*`, `ledger.*`, `project.json` committed; `local/`, `baseline/` gitignored. Baseline is regenerated per-clone to avoid stale-baseline drift across machines.
 
@@ -455,7 +455,7 @@ Run directory naming: `runs/YYYYMMDD-HHMMSS-<intent>-<8char-slug>/` — sortable
 
 **Session-hydrate is a `SessionStart` hook, not skill-load (A8 fix).** Skills load per trigger word, not once per session — we can't rely on skill-load for the "you have N prior runs" summary. Instead: [plugin/hooks/hooks.json](plugin/hooks/hooks.json) registers `session-hydrate.mjs` on the `SessionStart` event. Hook reads `.sdlc/project.json` + last three `ledger.json` rows — cheap. Emits a single line via the hook's `additionalContext` mechanism: `SDLC: 3 prior runs (last: docs, 2d ago); baseline current; no open resume checkpoint.` No chat noise on plain sessions; no per-skill-trigger churn.
 
-Hook is opt-in in v1 (`.sdlc/project.json` field `hooks.session_start: true`); user consents on the first successful `/sdlc-brownfield` run. Rationale: some users prefer no hooks; opt-in respects that.
+Hook is opt-in in v1 (`.sdlc/project.json` field `hooks.session_start: true`); user consents on the first successful `/sdlc:brownfield` run. Rationale: some users prefer no hooks; opt-in respects that.
 
 On first `/sdlc-*` invocation per session, orchestrator prints a two-line summary; `--summary` expands it. This backup path works even when the hook is off.
 
@@ -513,7 +513,7 @@ Refuses to run on a dirty tree when `commit_strategy != none` unless `--allow-di
 
 Provenance recording writes the `.bak` copy at Write time — before the destructive write happens — so uncommitted work can always be restored.
 
-**`/sdlc-revert <run-id>`** (new [plugin/commands/sdlc-revert.md](plugin/commands/sdlc-revert.md)):
+**`/sdlc:revert <run-id>`** (new [plugin/commands/revert.md](plugin/commands/revert.md)):
 1. Read `provenance.json`.
 2. Consult later ledger entries + `git log --follow -- <path>` per file to detect subsequent modifications.
 3. Clean case → apply the per-case revert action from the table above.
@@ -525,7 +525,7 @@ Same subagent → main-loop bubble-up pattern (§3 A4) applies for the revert co
 
 ## §14.7 — Headless / CI mode
 
-Use Claude Code's `claude --bare -p "<prompt>" --permission-mode auto` for the runner. [plugin/commands/run-sdlc-pass.md](plugin/commands/run-sdlc-pass.md) grows:
+Use Claude Code's `claude --bare -p "<prompt>" --permission-mode auto` for the runner. [plugin/commands/pass.md](plugin/commands/pass.md) grows:
 - `--gates auto-approve|auto-abort|prompt` — Gate 0 defaults to `auto-abort` in CI (safer than auto-approve; forces the CI job to be explicit about scope).
 - `--from-config .sdlc/project.json` — read gate answers from the committed project config; Gate 0 auto-approves only when the run's fingerprint matches (same stack, same off-limits). Drift → auto-abort with a clear diff.
 - `--policy ci-strict.yaml` (new [plugin/config/policies/ci-strict.yaml](plugin/config/policies/ci-strict.yaml)) — no writes without `--allow-write`; security-review blocks on any new finding; hard dispatch caps.
@@ -534,7 +534,7 @@ Auth: service account key sourced from `SDLC_CI_KEY` env only, never persisted. 
 
 CI runs write to `.sdlc/runs-ci/` (separate root) and invoke `prune-runs.mjs --keep=5` at close so headless bots don't blow up the repo.
 
-New files: `plugin/config/policies/ci-strict.yaml`, `docs/brownfield-ci.md`, edits to `run-sdlc-pass.md` and `verify-setup.mjs`.
+New files: `plugin/config/policies/ci-strict.yaml`, `docs/brownfield-ci.md`, edits to `pass.md` and `verify-setup.mjs`.
 
 ## §14.8 — Coexistence contract with other tools
 
@@ -627,7 +627,7 @@ Tier 1 discovery finds file presence; Gate 0 defaults them to off-limits. That's
 ## §17 — Team & permissions model
 
 **Roles:**
-- **Operator** — the developer running `/sdlc-brownfield` in their session.
+- **Operator** — the developer running `/sdlc:brownfield` in their session.
 - **Reviewer / gate approver** — same as operator in v1 (Claude Code sessions are single-user).
 - **CODEOWNERS** — governs merge, surfaced during a run but not enforced.
 - **CI / bot** — headless runs (§14.7).
@@ -680,7 +680,7 @@ Every non-happy path — what's on disk, how the next session recovers. Contract
 | 8 | `package.json` changed mid-run (external push) | Baseline mtime check catches it | Halt: "stack manifest changed since run started; packet plan may be invalid. Abort or force continue?" |
 | 9 | Two packets write to same file | Planner enforces unique `artifact_path` per run | Runtime double-write fails second, surfaces as a plan bug + user gate |
 | 10 | `.sdlc/` corrupted (invalid JSON, missing files) | Every reader wraps in try/catch → migrator → if migration fails, refuse | Message: "state is corrupt at `<path>`; run `/sdlc-support-bundle` for diagnostics" |
-| 11 | Rollback fails (git-checkout error, subsequent work built on top) | `/sdlc-revert` refuses in dirty cases | Prints three-way diff; manual resolution expected |
+| 11 | Rollback fails (git-checkout error, subsequent work built on top) | `/sdlc:revert` refuses in dirty cases | Prints three-way diff; manual resolution expected |
 | 12 | Concurrent run attempted in same worktree | `local/run.lock` (flock) held | Second run refused with "another run in progress, PID N, started at T" |
 | 13 | Plugin version mismatch on state read | Schema-version check in every reader | Refuse command; suggest upgrade or `--downgrade-state` (v2) |
 
@@ -853,15 +853,15 @@ Coverage: seven intents cover ~70% of production brownfield work. Review-oriente
   - `brownfield-test-backfill/` — sample with untested service
   - `brownfield-deps-upgrade/` — sample with outdated dep + CVE
 - Update root [README.md](README.md) and [SETUP.md](SETUP.md) with a "Greenfield vs Brownfield" section.
-- Keep [plugin/commands/sdlc-run.md](plugin/commands/sdlc-run.md) as-is for greenfield — do not collapse the two commands.
+- Keep [plugin/commands/run.md](plugin/commands/run.md) as-is for greenfield — do not collapse the two commands.
 
 ---
 
 ## Files to change / add — summary
 
 **New — v1:**
-- `plugin/commands/sdlc-brownfield.md`
-- `plugin/commands/sdlc-revert.md`
+- `plugin/commands/brownfield.md`
+- `plugin/commands/revert.md`
 - `plugin/agents/discovery.md` (front-matter tools: `Read, Glob, Grep, Bash(git *)` — D6)
 - `plugin/skills/run-ai-sdlc/stacks/{generic,nest,python}.md` (per open decision)
 - `plugin/hooks/hooks.json` — PreToolUse Write/Edit matcher (hard block, per §4 A6); SessionStart hook (opt-in per A8)
@@ -899,8 +899,8 @@ Coverage: seven intents cover ~70% of production brownfield work. Review-oriente
 - `plugin/mcp/gemini-flash-server/src/types.ts` — add `discovery`, `change_plan` to Phase enum; add optional `subtype` field to TaskPacket
 - `plugin/mcp/gemini-flash-server/src/adapters/*.ts` — invoke `dispatch-sanitize.mjs` sweep before every provider call (D3)
 - `plugin/config/policies/opus-only.yaml` and `opus-plus-flash.yaml` — rules for discovery + change_plan
-- `plugin/commands/sdlc-run.md` — mode-detection guard (A2)
-- `plugin/commands/run-sdlc-pass.md` — `--mode`, `--intent`, `--gates`, `--from-config`, `--policy` flags
+- `plugin/commands/run.md` — mode-detection guard (A2)
+- `plugin/commands/pass.md` — `--mode`, `--intent`, `--gates`, `--from-config`, `--policy` flags
 - `plugin/scripts/verify-setup.mjs` — brownfield check + git-binary check (D1) + Read-permission smoke test (D2)
 - `README.md`, `SETUP.md`
 
@@ -914,15 +914,15 @@ Coverage: seven intents cover ~70% of production brownfield work. Review-oriente
 Cannot rely on unit tests alone — this is a workflow change verified by real runs.
 
 1. **Unit / integration** — tests for write-contract validator (allow / off-limits / not-in-manifest), baseline reader, session-hydrate reader, dispatch-sanitize sweep, schema_version reader (rejects unknown). Extend MCP server tests for new Phase enum values. Verify-setup tests for git-binary check and Read-permission smoke test.
-2. **Discovery agent dry-run** — run `/sdlc-brownfield` on this very repo, stop at Gate 0, inspect `discovery.md` by hand. Confirm: stack detected as node/typescript; `.mcp.json` and `plugin/config/policies/*.yaml` flagged in AI-setup group; env keys only, no values.
+2. **Discovery agent dry-run** — run `/sdlc:brownfield` on this very repo, stop at Gate 0, inspect `discovery.md` by hand. Confirm: stack detected as node/typescript; `.mcp.json` and `plugin/config/policies/*.yaml` flagged in AI-setup group; env keys only, no values.
 3. **Golden-path e2e per intent** — run each example under `plugin/examples/brownfield-*/` end-to-end. Assert: final report's write-contract audit matches expected file list; `git diff` shows no changes outside allowlist; `.env` never overwritten.
 4. **Coexistence e2e** — temp repo pre-seeded with `.claude/settings.json`, `.mcp.json` (fake foreign MCP), `.cursor/rules`, competing `routing-policy.yaml`. Run brownfield. Assert none changed and Gate 0 named all of them.
-5. **Rollback drill** — after a run, use `/sdlc-revert`; verify repo returns to `baseline.git_head`.
+5. **Rollback drill** — after a run, use `/sdlc:revert`; verify repo returns to `baseline.git_head`.
 6. **Session-continuity e2e** — run three intents in three sessions; assert session 4 shows all three in the ledger, `@import` line in CLAUDE.md unchanged after first run, `.sdlc/CLAUDE-SDLC.md` updated per run.
 7. **Failure-mode drills** — pick 5 rows from the §18 table (crash, disk full, network drop, quit mid-gate, rebase between sessions). Assert each recovery path.
 7b. **Rollback drills across all four file-state cases (A10)** — pre-existing/committed, pre-existing/tracked-uncommitted, pre-existing/untracked, newly-created. Assert each case returns to the pre-run state exactly.
-7c. **Mode-detection guard (A2)** — run `/sdlc-run` in a non-empty repo, assert refusal with the expected message.
-7d. **Non-git-folder refusal (A3)** — run `/sdlc-brownfield` in a folder without `.git`, assert refusal with the expected message.
+7c. **Mode-detection guard (A2)** — run `/sdlc:run` in a non-empty repo, assert refusal with the expected message.
+7d. **Non-git-folder refusal (A3)** — run `/sdlc:brownfield` in a folder without `.git`, assert refusal with the expected message.
 7e. **CLAUDE.md `@import` hop-budget (B6)** — pre-seed CLAUDE.md with 3 levels of imports, assert session-hydrate prints the fallback message and doesn't create a broken import.
 8. **CI mode dry-run** — headless `run-sdlc-pass --mode brownfield --gates auto-abort` against a matching `project.json` and a drifted one. Assert auto-abort on drift.
 9. **Cleanup** — `/plugin uninstall` then `scripts/brownfield-cleanup.mjs`. Confirm zero footprint outside expected paths.
@@ -935,7 +935,7 @@ Cannot rely on unit tests alone — this is a workflow change verified by real r
 **v1 must-have (ships with brownfield GA):**
 
 *Pipeline (Part II):*
-- §1 command surface (`/sdlc-brownfield` + `/sdlc-revert`)
+- §1 command surface (`/sdlc:brownfield` + `/sdlc:revert`)
 - §2 tiered discovery
 - §3 Gate 0
 - §4 write contract (all three enforcement layers)
@@ -952,7 +952,7 @@ Cannot rely on unit tests alone — this is a workflow change verified by real r
 - §14.2 runs directory + ledger (no auto-prune)
 - §14.4 baseline staleness (git + mtime, incremental refresh)
 - §14.5 git contract (safe defaults: `current` / `none` / `off`)
-- §14.6 provenance + `/sdlc-revert`
+- §14.6 provenance + `/sdlc:revert`
 - §14.8 coexistence baseline (gitignore, formatters, pre-commit, CODEOWNERS)
 - §14.10 versioned state + lazy migration harness
 
@@ -996,7 +996,7 @@ Cannot rely on unit tests alone — this is a workflow change verified by real r
 
 **Locked decision (D1).** The pre-authored stack adapter fragments (`nest.md`, `python.md`, `generic.md`) are optional *baselines*, not the primary quality mechanism. The primary mechanism is a **learned stack profile** built at first run per project.
 
-**When it runs:** first `/sdlc-brownfield` invocation per project — as a new **Tier 2b step in discovery**. Triggered when: (a) the detected stack has no matching adapter (would fall to `generic.md`), OR (b) CLAUDE.md declares a custom framework, OR (c) user passes `--adaptive-profile`. Otherwise skipped (well-known stack with a first-class adapter already gives good baseline).
+**When it runs:** first `/sdlc:brownfield` invocation per project — as a new **Tier 2b step in discovery**. Triggered when: (a) the detected stack has no matching adapter (would fall to `generic.md`), OR (b) CLAUDE.md declares a custom framework, OR (c) user passes `--adaptive-profile`. Otherwise skipped (well-known stack with a first-class adapter already gives good baseline).
 
 **What it does:** the discovery agent samples 3–5 existing files of each detected "kind" (controllers, services, tests, config files, migrations) using local `Read` + `Grep`. Extracts conventions from what's actually there: file naming, decorators/annotations, import shapes, folder structure, test-runner patterns, config validator, ORM usage, framework-specific idioms.
 
@@ -1016,7 +1016,7 @@ Cannot rely on unit tests alone — this is a workflow change verified by real r
 
 ### The pre-check — the six smoke steps
 
-Runs automatically as **step 1 of `/sdlc-brownfield`**, before any real work. ~20 seconds, ~$0.02 total.
+Runs automatically as **step 1 of `/sdlc:brownfield`**, before any real work. ~20 seconds, ~$0.02 total.
 
 | # | Step | Purpose |
 |---|---|---|
@@ -1027,7 +1027,7 @@ Runs automatically as **step 1 of `/sdlc-brownfield`**, before any real work. ~2
 | 5 | Rollback smoke | Undo that write via the §14.6 rollback mechanism. Verify the file is gone. |
 | 6 | Report | Pass/fail per step. If any fails, DON'T proceed to Gate 0. Print exact remediation. |
 
-Results cached to `.sdlc/pre-check-status.json` — subsequent `/sdlc-brownfield` invocations skip steps whose inputs haven't changed (test command still the same, policy still the same, plugin version still the same).
+Results cached to `.sdlc/pre-check-status.json` — subsequent `/sdlc:brownfield` invocations skip steps whose inputs haven't changed (test command still the same, policy still the same, plugin version still the same).
 
 ### Setup-time issue inventory — max scope with "handle ≠ solve"
 
@@ -1042,7 +1042,7 @@ Every known risk gets **detection + clear-message handling**. We don't build ela
 | Existing plugin conflict on command names | Detect, list conflicts, ask user to rename or uninstall the conflicting plugin |
 | Filesystem write permission on `.sdlc/` denied | Detect, print permission fix, exit |
 
-**Repo state (first-run inside `/sdlc-brownfield` pre-check + Gate 0):**
+**Repo state (first-run inside `/sdlc:brownfield` pre-check + Gate 0):**
 | Issue | Handling |
 |---|---|
 | No test infrastructure at all | Detect at pre-check step 2. Gate 0 warns: "No test command detected. Proceed without test phase? [y/n]" |
@@ -1070,7 +1070,7 @@ Every known risk gets **detection + clear-message handling**. We don't build ela
 - New: `plugin/scripts/env-checks.mjs` (Node/git/plugin-conflict checks)
 - New: `docs/brownfield-setup-issues.md` (the inventory + mitigations doc)
 - Edit: `plugin/scripts/verify-setup.mjs` (invokes env-checks, prints credential status)
-- Edit: `plugin/commands/sdlc-brownfield.md` (pre-check as step 1, inline remediation UX)
+- Edit: `plugin/commands/brownfield.md` (pre-check as step 1, inline remediation UX)
 - Edit: `plugin/config/policies/*.yaml` (add `hard_cost_cap_usd: 50` field)
 
 ---
@@ -1123,12 +1123,12 @@ Section 6 summary reads:
 ```
 Plugin installed and credentials set.
 Discovery deferred — you're not in a git repo directory.
-When you're in a project, cd in and run /sdlc-brownfield —
+When you're in a project, cd in and run /sdlc:brownfield —
 I'll finish repo setup then.
 ```
-That first `/sdlc-brownfield` in a project directory then runs sections 5.12–19 inline before intent selection.
+That first `/sdlc:brownfield` in a project directory then runs sections 5.12–19 inline before intent selection.
 
-### Prompt 2 — `/sdlc-brownfield` (lean version)
+### Prompt 2 — `/sdlc:brownfield` (lean version)
 
 Repo-aware. Runs per task invocation. In the common case, all setup work was done at prompt 1, so this is short:
 
@@ -1147,7 +1147,7 @@ Repo-aware. Runs per task invocation. In the common case, all setup work was don
 
 The shepherd writes progress to `.sdlc/local/setup-status.json` after **each section completes** — schema: `{sections_done: [1,2,3,4], sections_pending: [5,6], last_prompt_step: {...}, timestamp}`. If a session dies mid-section (Ctrl+C, network drop, machine sleep), the last completed section is recorded; the current section's partial state is discarded (safer to redo one section than to have a half-complete state).
 
-On next `/sdlc-brownfield`:
+On next `/sdlc:brownfield`:
 - Read the file
 - If any sections pending: print *"Setup was interrupted at section &lt;N&gt; (&lt;label&gt;) — resuming from there..."*
 - Re-run all pending sections in order, still shepherded
@@ -1340,8 +1340,8 @@ Setup complete.
   ✓ Node 20.11 · git 2.42 · no plugin conflicts
   ✓ Anthropic API key found
   ⚠ Gemini API key not set — default policy 'opus-plus-flash' needs it.
-      First run of /sdlc-brownfield will offer 'opus-only' as alternative (~10× cost).
-Ready. Run /sdlc-brownfield when you want to start.
+      First run of /sdlc:brownfield will offer 'opus-only' as alternative (~10× cost).
+Ready. Run /sdlc:brownfield when you want to start.
 ```
 
 The user knows exactly what state their setup is in, what will happen at first run, and what to do if they want to change any of it.
@@ -1408,7 +1408,7 @@ Critical re-read of the plan looking for contradictions, gaps, over-engineering,
 | # | Finding | Fix |
 |---|---|---|
 | A1 | **Baseline file naming inconsistent.** §2 says `<output_dir>/baseline.json` (per-run snapshot). §14.1 says `.sdlc/baseline/manifest.json` (committed living baseline). §14.4 references `baseline.git_head`. Three names for two different things. | Rename: **`.sdlc/runs/<id>/baseline.json`** for per-run snapshot; **`.sdlc/baseline/current.json`** for the living project baseline. Update every reference. |
-| A2 | **Mode-detection entry point missing.** State machine says "picks greenfield path when `mode: greenfield`" but doesn't say where `mode` is set. If a user runs `/sdlc-run` in an existing repo, what happens? | `/sdlc-run` gains a repo-empty check: if `./src` exists or `.git` exists with files, print "This looks like an existing repo — did you mean `/sdlc-brownfield`?" and refuse until confirmed. `/sdlc-brownfield` sets `mode: brownfield` unconditionally. |
+| A2 | **Mode-detection entry point missing.** State machine says "picks greenfield path when `mode: greenfield`" but doesn't say where `mode` is set. If a user runs `/sdlc:run` in an existing repo, what happens? | `/sdlc:run` gains a repo-empty check: if `./src` exists or `.git` exists with files, print "This looks like an existing repo — did you mean `/sdlc:brownfield`?" and refuse until confirmed. `/sdlc:brownfield` sets `mode: brownfield` unconditionally. |
 | A3 | **Non-git-repo case unspecified.** Every Tier 1 step assumes `git`. What if user is in a folder without `.git`? | Discovery detects; if no git → refuse with clear message ("brownfield mode needs git for rollback anchors — run `git init && git add -A && git commit -m 'baseline'` first, then re-run"). Not offering to auto-init; too destructive. |
 | A4 | **Gate prompts inside a subagent.** Orchestrator is a subagent; per platform research subagents can't run interactive dialogs. The gate template shows a `> ⏸ HITL Gate` block but doesn't say how it bubbles to the main-loop session. | Gate rendering is the subagent returning a specifically-shaped message to the main loop; the main loop (Claude Code session) displays it and awaits user input, then re-invokes the subagent with the answer. Document the message shape in `SKILL.md`. |
 | A5 | **`/sdlc-review` command never specified.** ~~Add short spec~~ **SUPERSEDED — dropped from v1 in a later pass.** Code review is a different product category from safely-changing-code (competes with CodeQL, Cursor review, GitHub Copilot review) and isn't core to the plugin's main value prop. Deferred to v2. See §6 out-of-scope. |
@@ -1416,14 +1416,14 @@ Critical re-read of the plan looking for contradictions, gaps, over-engineering,
 | A7 | **Placement rules described as "enforced by the write contract" (§15) but they aren't.** The write contract enforces the allowlist; placement rules only shape what codegen produces. If codegen picks a bad path that's still in the allowlist, the contract accepts it. | Reword §15: placement is a codegen quality concern (adapters guide the packet planner), not a safety concern. Safety is the allowlist. |
 | A8 | **Session-hydrate conflated with skill-load.** §14.3 says it "runs on plugin skill load" — but skills load per-trigger, not per-session. To fire once per session we need the `SessionStart` hook. | Move session-hydrate invocation to the `SessionStart` hook (which the plan already mentions as optional). Make it opt-in by default; recommend on in `.sdlc/project.json`. Don't rely on skill-load for once-per-session behavior. |
 | A9 | **Bash permission for git commands not addressed.** Discovery uses `Bash` for `git rev-parse`, `git status`, `git diff`, `git check-ignore`. In CI mode with `--permission-mode auto`, every git command needs explicit allow. | Ship a `.claude/settings.json` fragment for CI: `{"permissions":{"allow":["Bash(git *)"]}}`. Document in `docs/brownfield-ci.md`. Discovery agent's front-matter must declare `Bash(git:*)` explicitly if the plugin conventions support subtool-level scoping. |
-| A10 | **Rollback for uncommitted-file case.** `/sdlc-revert` says `git checkout <sha_before> -- <path>`. This fails when the file was created by the run and never committed (sha_before is null) — rollback is `rm <path>`. Fails also when file existed but was uncommitted at run start (no sha_before in git). | Provenance records `sha_before: null` for newly created files → revert = `rm`. For pre-existing uncommitted files, record their content SHA + a `.bak` copy in `.sdlc/local/cache/` at write time; revert restores from `.bak`. |
+| A10 | **Rollback for uncommitted-file case.** `/sdlc:revert` says `git checkout <sha_before> -- <path>`. This fails when the file was created by the run and never committed (sha_before is null) — rollback is `rm <path>`. Fails also when file existed but was uncommitted at run start (no sha_before in git). | Provenance records `sha_before: null` for newly created files → revert = `rm`. For pre-existing uncommitted files, record their content SHA + a `.bak` copy in `.sdlc/local/cache/` at write time; revert restores from `.bak`. |
 | A11 | **Uninstall doesn't remove the CLAUDE.md `@import` line.** §14.3 adds `@.sdlc/CLAUDE-SDLC.md` to CLAUDE.md; §13's user-journey promise ("delete `.sdlc/` and leave zero footprint") breaks — the import line becomes broken. | `scripts/brownfield-cleanup.mjs` also strips the `@.sdlc/CLAUDE-SDLC.md` line from CLAUDE.md (with diff preview + confirmation). Document in `docs/brownfield.md`. |
 
 ### Bucket B — Should-fix in v1 (real gaps, workable with a "known limitation" note)
 
 | # | Finding | Fix or note |
 |---|---|---|
-| B1 | **Greenfield → brownfield handoff.** User runs `/sdlc-run` today, then wants `/sdlc-brownfield` next week. Does brownfield discover the greenfield `.sdlc/` cleanly? | Test explicitly. Likely works because §14.1 state model is additive. Add to verification plan. |
+| B1 | **Greenfield → brownfield handoff.** User runs `/sdlc:run` today, then wants `/sdlc:brownfield` next week. Does brownfield discover the greenfield `.sdlc/` cleanly? | Test explicitly. Likely works because §14.1 state model is additive. Add to verification plan. |
 | B2 | **Git submodules.** Baseline SHAs, rollback, `git check-ignore` all get tangled with submodules. | v1: discovery detects submodules and warns "submodules are treated as opaque; runs won't touch them." v1.5: real submodule support. |
 | B3 | **Gitignore enforcement for `.sdlc/local/`.** Offered at Gate 0, but if user declines, `local/` gets committed and floods PRs. | Refuse to run at Gate 0 if `.sdlc/local/` isn't gitignored, unless `--allow-uncovered-local` is passed. |
 | B4 | **Intent brief authoring flow underspecified.** §6 says "wizard writes it" — from what inputs? | Spell out: wizard interviews user (2-4 questions per intent), fills in the heading template, shows the draft, asks to confirm/edit, then commits it to `.sdlc/runs/<id>/intent_brief.md`. |
@@ -1464,7 +1464,7 @@ Critical re-read of the plan looking for contradictions, gaps, over-engineering,
 - **§15 reworded** — placement is codegen quality, not safety enforcement (A7).
 - **§2 reworded** — Tier 1 discovery includes explicit git-check ("refuse if not a git repo") (A3).
 - **§14.1 renamed files** — reconcile `baseline.json` naming across sections (A1).
-- **`/sdlc-run` gains a "looks like existing repo" check** (A2).
+- **`/sdlc:run` gains a "looks like existing repo" check** (A2).
 
 None of these changes affects v1 scope size materially — they're clarifications and simplifications. The plan gets sharper, not bigger.
 
@@ -1474,7 +1474,7 @@ None of these changes affects v1 scope size materially — they're clarification
 
 **Scope:**
 - V1 intent count: **7** (`docs, bugfix, feature-extend, feature-new, refactor, test, deps`). Review-oriented capabilities (PR review, threat model, architecture review) deferred to v2 — see §6.
-- §14 v1 must-haves: **all seven** (state model, ledger, staleness, git contract, provenance + `/sdlc-revert`, coexistence enforcement, versioned state).
+- §14 v1 must-haves: **all seven** (state model, ledger, staleness, git contract, provenance + `/sdlc:revert`, coexistence enforcement, versioned state).
 - Discovery model: **tiered** (Tier 1 always ~10 s / Tier 2 confirm at Gate 0 / Tier 3 on-demand).
 
 **Safety defaults:**

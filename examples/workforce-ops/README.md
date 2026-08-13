@@ -11,7 +11,7 @@ against.
 From the repo root:
 
 ```
-/run-sdlc-pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
+/sdlc:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
 ```
 
 Output lands in [passes/pass1/](passes/) (created on run). See the top-level
@@ -29,6 +29,6 @@ generated source tree; otherwise the directory is empty until you run.
 
 The pipeline is not coupled to this case. Copy
 [../../docs/brief-template.md](../../docs/brief-template.md), fill it in
-under `examples/<your-study-id>/brief.md`, and invoke `/run-sdlc-pass` with
+under `examples/<your-study-id>/brief.md`, and invoke `/sdlc:pass` with
 `--study=<your-study-id>`. See
 [docs/running.md#bring-your-own-brief](../../docs/running.md#bring-your-own-brief).

@@ -1,6 +1,6 @@
 # Brief template
 
-`/run-sdlc-pass` reads the brief file at the path it is given. The
+`/sdlc:pass` reads the brief file at the path it is given. The
 requirements phase and the `architect` subagent expect the section headings
 listed below; the wording under each is up to the author.
 
@@ -8,7 +8,7 @@ Copy this file, fill in the sections, save it anywhere in the repo (or
 outside it), and point the command at the new path:
 
 ```
-/run-sdlc-pass --auth=vendor --study=<your-study-id> --run-id=pass1 path/to/your-brief.md
+/sdlc:pass --auth=vendor --study=<your-study-id> --run-id=pass1 path/to/your-brief.md
 ```
 
 Output lands in `examples/<your-study-id>/passes/<run-id>/`. `--study` groups
@@ -18,10 +18,10 @@ Workforce Ops case that ships with the repo.
 Related: [running.md](running.md#bring-your-own-brief) for the full workflow,
 [methodology.md](methodology.md) for what the pipeline records.
 
-This page is for people working in a clone. `/sdlc-run` runs from wherever the
+This page is for people working in a clone. `/sdlc:run` runs from wherever the
 user is standing — usually an empty folder — and `docs/` is not copied on
 install, so the wizard carries the same section set inline in
-`plugin/commands/sdlc-run.md`. **A heading changed here must be changed there
+`plugin/commands/run.md`. **A heading changed here must be changed there
 too**; `tools/test/command.test.mjs` compares the two and fails if they drift.
 
 ---

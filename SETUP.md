@@ -41,7 +41,7 @@ harmless when the cache is already current.
 ## 2. Install the plugin
 
 ```
-/plugin install multi-model-orchestrator@tilicho-ai-labs
+/plugin install sdlc@tilicho-ai-labs
 ```
 
 Check the version it reports against `.claude-plugin/marketplace.json` on the repo's default
@@ -70,7 +70,7 @@ configured server path does not exist.
 Locate the installed plugin and run its setup script:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --fix
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --fix
 ```
 
 `--fix` installs the server's dependencies and builds it. The script re-checks afterwards and
@@ -149,7 +149,7 @@ here.
 On **Antigravity SDK**, run the same script from step 3 with `--enable-agent` instead of `--fix`:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
 ```
 
 That flag writes the selection into `.claude/settings.local.json` in the current folder — this
@@ -176,7 +176,7 @@ terminal; everything after it returns to the terminal.
 
 Per-project, not install-wide — a compliance-sensitive repo may want Opus everywhere while a
 side project runs on Flash. The choice is stored in `.sdlc/project.json.default_policy` in the
-current repo and picked up by every subsequent `/sdlc-run` or `/sdlc-brownfield` in that folder.
+current repo and picked up by every subsequent `/sdlc:run` or `/sdlc:brownfield` in that folder.
 Applies equally to greenfield and brownfield projects.
 
 **Confirm you are in the project directory** (the shepherd needs to write
@@ -184,14 +184,14 @@ Applies equally to greenfield and brownfield projects.
 then the shepherd invokes:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/setup-policy.mjs | tail -1)"
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/setup-policy.mjs | tail -1)"
 ```
 
 The shepherd does not paraphrase this away or offer to skip. Every project that hits this step
 picks a policy — either by authoring a new one in the browser, or by naming an existing shipped
 one (`opus-only` / `opus-plus-flash`) at the follow-up terminal prompt. `.sdlc/project.json`
-must have a `default_policy` field when this step returns; the task commands (`/sdlc-run`,
-`/sdlc-brownfield`) refuse to run without it, because "which model handled this" is the top
+must have a `default_policy` field when this step returns; the task commands (`/sdlc:run`,
+`/sdlc:brownfield`) refuse to run without it, because "which model handled this" is the top
 question at any post-run review and answering "I don't know, the wizard guessed" is not
 acceptable.
 
@@ -229,9 +229,9 @@ node ".../scripts/setup-policy.mjs" --print-only
 State plainly what is installed, which policies are available given the credentials present, and
 tell the user which of the two task commands to run next:
 
-- **`/sdlc-run`** — when the user is in an **empty folder** and wants the plugin to generate a
+- **`/sdlc:run`** — when the user is in an **empty folder** and wants the plugin to generate a
   whole new application from a brief. Original greenfield flow.
-- **`/sdlc-brownfield`** — when the user is in an **existing repo** (any stack, any conventions)
+- **`/sdlc:brownfield`** — when the user is in an **existing repo** (any stack, any conventions)
   and wants the plugin to do one of seven kinds of work: docs, bugfix, feature-extend,
   feature-new, refactor, test, or deps.
 
@@ -240,7 +240,7 @@ user is standing in.
 
 **Say this in the same breath: the command is not available in this session.** Claude Code builds
 its list of slash commands when a session starts, and nothing written to disk afterwards can add
-one to a session already running. The install is complete and correct; `/sdlc-run` simply arrives
+one to a session already running. The install is complete and correct; `/sdlc:run` simply arrives
 one session late. Tell the user to open a new session in the same folder and type it there, where
 it will be in the menu.
 
@@ -264,7 +264,7 @@ the restart it was meant to save.
 The same script, without `--fix`, re-checks an existing install and changes nothing:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)"
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)"
 ```
 
 Run it after `/plugin update`. An update re-copies the plugin from source, which removes the
@@ -292,12 +292,12 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 
 ## Brownfield addendum
 
-If the user's intent is to use `/sdlc-brownfield` (extend an existing repo — not generate a new
+If the user's intent is to use `/sdlc:brownfield` (extend an existing repo — not generate a new
 project from scratch), the plugin runs **additional prerequisite checks** after step 3's
 `--fix`. Same script, extra flag:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --brownfield-check
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --brownfield-check
 ```
 
 `--brownfield-check` runs the greenfield checks in step 3–4 AND then appends:
@@ -325,7 +325,7 @@ The shepherd behavior contract for prompt 1 in brownfield mode (documented in pl
   `.sdlc/local/setup-status.json` with all seven sections pending). At the end of each
   section, run `--section=<name>` with the section slug above. On completion of `summary`,
   run `--all-done` (clears the resume hint). `session-hydrate.mjs` reads this file on every
-  subsequent command; if a session dies mid-setup, the next `/sdlc-brownfield` picks up from
+  subsequent command; if a session dies mid-setup, the next `/sdlc:brownfield` picks up from
   the first pending section — no user intervention needed, no new command required.
 - **Final summary always.** Line-by-line status of what was done, what the user did, what was
   skipped (with consequences noted).

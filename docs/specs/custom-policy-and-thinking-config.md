@@ -9,9 +9,9 @@
 
 ## 1. Problem Statement
 
-Today `/sdlc-run` routes every phase using whichever policy YAML is on disk
+Today `/sdlc:run` routes every phase using whichever policy YAML is on disk
 (`opus-plus-flash` by default, or `opus-only` as a fallback) and the
-[sdlc-run.md](../../plugin/commands/sdlc-run.md) command says so explicitly: *"This first
+[run.md](../../plugin/commands/run.md) command says so explicitly: *"This first
 version runs the default policy. It is not configurable from this command; a user who needs
 different routing edits the policy file directly."* Changing routing means hand-editing YAML —
 finding the right file, knowing the schema (`models`, `select`, `rules`), and understanding phase
@@ -29,7 +29,7 @@ Two things compound this:
    hand, edit it correctly, and remember to point the run at it — with no validation until the
    run fails mid-phase.
 
-The people affected are anyone running `/sdlc-run` who wants routing or thinking-effort
+The people affected are anyone running `/sdlc:run` who wants routing or thinking-effort
 different from the two shipped presets — which, since this is the pipeline's main cost lever, is
 most repeat users. Left unsolved, users either overpay (staying on `opus-only` to avoid YAML
 surgery) or risk a misconfigured policy failing partway through a paid run.
@@ -40,7 +40,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
    hand-editing YAML.
 2. A user can set extended-thinking effort **per SDLC phase** (not just per model), for the
    first time — today this axis does not exist at all.
-3. Configuration happens **in-flow**: the page opens automatically as part of `/sdlc-run`,
+3. Configuration happens **in-flow**: the page opens automatically as part of `/sdlc:run`,
    before spend starts, and the CLI session resumes with the user's choice — no separate app to
    remember to launch.
 4. A saved custom policy is a real, inspectable YAML file the user can find, re-run, hand-edit,
@@ -61,7 +61,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
 - **Not a policy marketplace or sharing mechanism.** No cloud sync, no team library of custom
   policies. Rationale: out of scope until there's evidence multiple people share a project's
   `.sdlc` history; local file + git is enough for v1.
-- **Not a mid-run editor.** Once step 6 of `sdlc-run.md` starts, the policy is locked for that
+- **Not a mid-run editor.** Once step 6 of `run.md` starts, the policy is locked for that
   run — no live reconfiguration between phases. Rationale: telemetry/cost reporting assumes one
   policy per run; changing it mid-flight breaks that invariant and the four approval gates
   already give a natural checkpoint structure.
@@ -71,7 +71,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
 
 ## 4. User Stories
 
-1. As a user running `/sdlc-run`, I want a web page to open automatically before the run starts
+1. As a user running `/sdlc:run`, I want a web page to open automatically before the run starts
    so I can review and adjust routing without leaving my terminal flow or hand-editing files.
 2. As a user, I want to pick from the existing named policies (`opus-only`, `opus-plus-flash`,
    any others later added) as a starting point, so I'm not building routing from scratch.
@@ -98,7 +98,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
 ## 5. User Flow
 
 **Where it slots in:** between the existing step 4 ("Show what will run") and step 5 ("Choose
-telemetry mode") of [sdlc-run.md](../../plugin/commands/sdlc-run.md).
+telemetry mode") of [run.md](../../plugin/commands/run.md).
 
 1. `verify-setup.mjs` passes (existing step 1).
 2. Brief is found/confirmed (existing step 2), output paths confirmed (existing step 3).
@@ -125,7 +125,7 @@ telemetry mode") of [sdlc-run.md](../../plugin/commands/sdlc-run.md).
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant CLI as /sdlc-run (Claude Code)
+    participant CLI as /sdlc:run (Claude Code)
     participant Srv as Local config server
     participant Pg as Browser page
 
@@ -156,7 +156,7 @@ Single page, two linked sections, served from the local server started in flow s
 ### 6.1 Policy section
 - **Base policy selector** — dropdown of everything in `plugin/config/policies/*.yaml` (name +
   one-line description pulled from the YAML's leading comment), defaulted to whatever
-  `sdlc-run.md` step 4 would otherwise have used.
+  `run.md` step 4 would otherwise have used.
 - **Routing table** — one row per SDLC phase (`requirements_analysis`, `architecture_design`,
   `plan_task_packets`, `codegen`, `tests`, `docs`, `senior_code_review`, `security_review`,
   `debug`), each with a dropdown of the base policy's declared model ids (and slot names, e.g.
@@ -166,7 +166,7 @@ Single page, two linked sections, served from the local server started in flow s
   collapsed under the `codegen` row with their own overrides, since they can legitimately diverge
   from the phase-level default.
 - **Live rate readout** — next to each row, the per-million input/output rate of the currently
-  selected model, so cost impact is visible while editing (same numbers `sdlc-run.md` step 4
+  selected model, so cost impact is visible while editing (same numbers `run.md` step 4
   already reports, just live).
 
 ### 6.2 Thinking capacity section — implementation note
@@ -226,13 +226,13 @@ extension. No new persistence layer — the filesystem *is* the store, consisten
 (inspectable, hand-editable afterward).
 
 ### 7.3 Discovery
-`sdlc-run.md` step 4 / the new flow step 3 lists policies by globbing
+`run.md` step 4 / the new flow step 3 lists policies by globbing
 `plugin/config/policies/*.yaml`, so a custom policy saved in one run is a normal pickable base
 policy in the next (user story 9) — no separate index file to keep in sync.
 
 ## 8. Integration & Validation
 
-- **`sdlc-run.md`** gets a new step inserted between current steps 4 and 5 (see §5); current step
+- **`run.md`** gets a new step inserted between current steps 4 and 5 (see §5); current step
   4's reporting logic is unchanged, just re-pointed at the resolved policy.
 - **Policy loading** — whatever currently parses/validates a policy YAML at run start (used by
   the orchestrator subagent and by `verify-setup.mjs`) must run the identical validation against
@@ -253,7 +253,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
 ## 9. Requirements
 
 ### Must-Have (P0)
-- [ ] Config page auto-opens during `/sdlc-run`, before step 5 (telemetry mode / spend
+- [ ] Config page auto-opens during `/sdlc:run`, before step 5 (telemetry mode / spend
       confirmation).
 - [ ] User can select any existing policy in `plugin/config/policies/` as a starting point.
 - [ ] User can change per-phase model routing for all nine phases plus `codegen`'s task-type
@@ -286,7 +286,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
 
 ## 10. Acceptance Criteria
 
-- Given the user runs `/sdlc-run` with no prior custom policies, when step 3 (existing) finishes,
+- Given the user runs `/sdlc:run` with no prior custom policies, when step 3 (existing) finishes,
   then a browser opens to the config page showing `opus-plus-flash` (today's default) pre-loaded
   as the base policy.
 - Given the user changes `codegen`'s routing from `gemini-flash` to `opus` and sets
@@ -296,7 +296,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   shows `codegen` routed to `opus` at Opus's rates.
 - Given the user clicks **Use as-is** without editing anything, when the run proceeds, then no
   new file is written to `plugin/config/policies/` and behavior is identical to today's
-  (pre-feature) `/sdlc-run`.
+  (pre-feature) `/sdlc:run`.
 - Given the user tries to save a policy named `opus-only` (an existing filename), then the page
   blocks submission with an inline "name already in use" error and no file is overwritten.
 - Given the user routes a phase to a model whose `auth.env` credential is unset in the
@@ -305,7 +305,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
 - Given the page has been open and idle past the timeout, when the timeout elapses, then the CLI
   proceeds automatically on the previously-resolved default policy and states in the transcript
   that it did so.
-- Given a prior run saved `strict-review.yaml`, when `/sdlc-run` is invoked again, then
+- Given a prior run saved `strict-review.yaml`, when `/sdlc:run` is invoked again, then
   `strict-review` appears as a selectable base policy alongside `opus-only` and
   `opus-plus-flash`.
 - Given the session has no way to open a browser (headless), when flow step 3 runs, then the CLI
@@ -318,9 +318,9 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   [plugin/policy-console/](../../plugin/policy-console/) (`npm run dev`), reading and writing
   `plugin/config/policies/*.yaml` directly through Node's `fs` in server components / a server
   action. Self-contained (its own `package.json`), not a dependency of the MCP server.
-- **OQ-2 (engineering) — still open:** How the page hands its result back to a `/sdlc-run` session
+- **OQ-2 (engineering) — still open:** How the page hands its result back to a `/sdlc:run` session
   mid-flow (flow step 3 in §5) isn't wired yet — the console today is a standalone tool a user runs
-  and reads from manually. Auto-launch from `/sdlc-run` and reporting the resolved policy back into
+  and reads from manually. Auto-launch from `/sdlc:run` and reporting the resolved policy back into
   that same CLI session remains future work.
 - **OQ-3 (product, requester):** Are custom policies saved under `plugin/config/policies/`
   intended to be **committed to git** (shareable across a team working in the same checked-out

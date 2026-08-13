@@ -158,7 +158,7 @@ async function main() {
 
   console.log("");
   console.log("Cleanup complete. To finish uninstalling the plugin itself, run:");
-  console.log("  /plugin uninstall multi-model-orchestrator@tilicho-ai-labs");
+  console.log("  /plugin uninstall sdlc@tilicho-ai-labs");
   console.log("(or /plugin marketplace remove tilicho-ai-labs to also drop the marketplace registration).");
 }
 

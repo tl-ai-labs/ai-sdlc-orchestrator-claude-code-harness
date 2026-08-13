@@ -18,13 +18,13 @@ Additional plugin content:
 | Path | Contents |
 |---|---|
 | [plugin/agents/](../plugin/agents/) | Subagents: `orchestrator`, `architect`, `senior-reviewer`, `security-reviewer`. |
-| [plugin/commands/sdlc-run.md](../plugin/commands/sdlc-run.md) | The two-prompt-flow entry point. Takes no arguments; asks for what it needs. |
-| [plugin/commands/run-sdlc-pass.md](../plugin/commands/run-sdlc-pass.md) | Every setting as a flag; the form used for scripting and repeat runs. |
+| [plugin/commands/run.md](../plugin/commands/run.md) | The two-prompt-flow entry point. Takes no arguments; asks for what it needs. |
+| [plugin/commands/pass.md](../plugin/commands/pass.md) | Every setting as a flag; the form used for scripting and repeat runs. |
 | [plugin/skills/run-ai-sdlc/](../plugin/skills/run-ai-sdlc/) | Skill body loaded by the orchestrator. |
 | [plugin/hooks/hooks.json](../plugin/hooks/hooks.json) | `PostToolUse` hook matching the MCP tool name under both install routes. |
 | [plugin/config/policies/](../plugin/config/policies/) | Two policy YAMLs. |
 
-The hook matcher is a regex because the plugin route namespaces MCP tools with the plugin name (`mcp__plugin_multi-model-orchestrator_gemini-flash-server__execute_with_model`) while the clone route registers them bare (`mcp__gemini-flash-server__execute_with_model`). Both forms match.
+The hook matcher is a regex because the plugin route namespaces MCP tools with the plugin name (`mcp__plugin_sdlc_gemini-flash-server__execute_with_model`) while the clone route registers them bare (`mcp__gemini-flash-server__execute_with_model`). Both forms match.
 
 ## 2. MCP server
 
@@ -141,7 +141,7 @@ One JSON object per LLM call, appended to `<pass-dir>/telemetry.jsonl`. `manifes
 
 ## 8. Auth modes
 
-Chosen per run. `/sdlc-run` asks; `/run-sdlc-pass --auth=<mode>` requires the flag.
+Chosen per run. `/sdlc:run` asks; `/sdlc:pass --auth=<mode>` requires the flag.
 
 | Mode | Billed to | Every event | Direct-tier tokens | Mechanical-tier tokens |
 |---|---|---|---|---|
@@ -158,7 +158,7 @@ Two ways in. Both end up running the same MCP server.
 
 | Route | Entry | What arrives |
 |---|---|---|
-| Plugin (default) | Two-prompt flow → [SETUP.md](../SETUP.md) → `/plugin install` → `verify-setup.mjs --fix` | `plugin/` under `~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/`. The MCP server's `dist/` and `node_modules/` are not tracked in git; `--fix` builds them. |
+| Plugin (default) | Two-prompt flow → [SETUP.md](../SETUP.md) → `/plugin install` → `verify-setup.mjs --fix` | `plugin/` under `~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/`. The MCP server's `dist/` and `node_modules/` are not tracked in git; `--fix` builds them. |
 | Clone | `git clone` → [tools/setup.mjs](../tools/setup.mjs) | The full repo, plus a project-level `.mcp.json` that registers the built server directly. |
 
 `.mcp.json` on the clone route holds an exhaustive `env` block, because a stdio MCP server inherits nothing from its parent. `verify-setup.mjs --enable-agent` writes the `SDLC_SELECT` selection into both `.claude/settings.local.json` (read by Claude Code) and `.mcp.json` (read by the server); a settings-only write would be dropped at the server boundary.

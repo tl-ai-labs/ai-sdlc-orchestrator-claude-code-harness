@@ -25,7 +25,7 @@ Before any other read, check `git rev-parse --is-inside-work-tree`. If it return
 
 > ⚠️ Brownfield mode requires a git repo for rollback anchors and change tracking.
 > Please initialize one: `git init && git add -A && git commit -m 'baseline'`
-> Then re-run `/sdlc-brownfield`.
+> Then re-run `/sdlc:brownfield`.
 
 …and exit without writing anything. Do not offer to auto-init — that is destructive and it is not your call to make.
 

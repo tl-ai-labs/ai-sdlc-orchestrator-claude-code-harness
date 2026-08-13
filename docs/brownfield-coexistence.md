@@ -15,7 +15,7 @@ Real repos have four flavors of overlap with what the plugin does:
 |---|---|---|
 | **Adjacent** | You use Cursor for editor autocomplete; the plugin handles SDLC | Zero conflict. Both tools run in different contexts. |
 | **Overlapping** | You also use Aider or a custom code-gen script | Coexists at rest; **don't run them simultaneously on the same files.** The plugin does not detect a concurrent Aider session. |
-| **Layered** | Your existing Claude Code setup already registers MCP servers (custom Gemini adapter, etc.) | Claude Code namespaces plugin MCP tools separately (`mcp__plugin_multi-model-orchestrator_...`). Both coexist. |
+| **Layered** | Your existing Claude Code setup already registers MCP servers (custom Gemini adapter, etc.) | Claude Code namespaces plugin MCP tools separately (`mcp__plugin_sdlc_...`). Both coexist. |
 | **Configured** | Your repo ships `routing-policy.yaml` at root, overriding the plugin's default policy | The plugin's policy loader **silently honors your file** — discovery surfaces this at Gate 0 so it's never a surprise. |
 
 ## Per-tool detection (v1 — presence only)
@@ -90,7 +90,7 @@ The plugin coexists with your normal development tools too:
   during a plugin run, or using different branches.
 
 - **"I have a custom MCP server that also uses Gemini — will they compete?"**
-  No. Claude Code namespaces plugin MCP tools (`mcp__plugin_multi-model-orchestrator_...`).
+  No. Claude Code namespaces plugin MCP tools (`mcp__plugin_sdlc_...`).
   Your MCP server keeps its own tool names. The plugin's dispatcher never calls your MCP —
   it uses its own bundled server.
 

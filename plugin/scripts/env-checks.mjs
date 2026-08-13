@@ -35,10 +35,12 @@ import { homedir } from "node:os";
 // Our own command names — hardcoded because we OWN them. If a future ticket
 // adds one, add it here so conflict detection stays honest.
 const OUR_COMMAND_NAMES = new Set([
-  "sdlc-run",           // existing greenfield
-  "run-sdlc-pass",      // existing greenfield
-  "sdlc-brownfield",    // v1
-  "sdlc-revert",        // v1
+  "run",           // greenfield
+  "pass",          // headless / scripted
+  "brownfield",    // existing repo
+  "revert",        // undo a brownfield run
+  "setup",         // one-shot setup
+  "policy",        // show / change policy
 ]);
 
 const MIN_NODE_MAJOR = 20;
@@ -154,7 +156,7 @@ function checkSdlcDirWritable() {
   const root = findRepoRoot();
   if (!root) {
     return check("sdlc-dir-writable", "advisory", true, {
-      note: "Not in a git repo — .sdlc/ writability check deferred to first /sdlc-brownfield invocation in a project.",
+      note: "Not in a git repo — .sdlc/ writability check deferred to first /sdlc:brownfield invocation in a project.",
     });
   }
   const dir = join(root, ".sdlc", "local");
@@ -233,7 +235,7 @@ function checkPluginConflicts() {
         const manifest = JSON.parse(readFileSync(p, "utf8"));
         const pluginName = manifest?.name ?? ent.name;
         // Skip ourselves
-        if (pluginName === "multi-model-orchestrator") continue;
+        if (pluginName === "sdlc") continue;
         scanned.push({ plugin: pluginName, manifest: p });
 
         // Commands can be declared as an array of { name } or as a `commands: "./dir"` pointer.

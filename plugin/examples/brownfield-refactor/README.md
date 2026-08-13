@@ -18,7 +18,7 @@ src/
 ```bash
 cd plugin/examples/brownfield-refactor
 npm install && npm test
-# /sdlc-brownfield  →  refactor
+# /sdlc:brownfield  →  refactor
 ```
 
 ## Expected outputs

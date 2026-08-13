@@ -12,7 +12,7 @@ start the run until step 5 is confirmed.
 
 **Before anything else,** check the current directory. This command is the **greenfield** entry
 point — it generates a whole new application from a brief into `./src`. If the user is standing in
-an **existing repo** (any of the signals below), they almost certainly want `/sdlc-brownfield`
+an **existing repo** (any of the signals below), they almost certainly want `/sdlc:brownfield`
 instead, and running greenfield here would treat their real code as an empty canvas.
 
 Signals of an existing repo:
@@ -25,17 +25,17 @@ If any of these hold, **stop and offer the choice** before continuing:
 
 > This looks like an existing repo, not an empty folder.
 >
-> - **`/sdlc-brownfield`** is for extending an existing project — pick one of seven job types
+> - **`/sdlc:brownfield`** is for extending an existing project — pick one of seven job types
 >   (docs / bugfix / feature-extend / feature-new / refactor / test / deps), confirm scope at
 >   Gate 0, and run with a write contract that guarantees your existing files stay untouched.
-> - **`/sdlc-run`** (this command) will treat this folder as the target for a fresh generated
+> - **`/sdlc:run`** (this command) will treat this folder as the target for a fresh generated
 >   application. That may not be what you want.
 >
 > Which do you want to run? (`brownfield` / `run --force-greenfield` / `abort`)
 
 Only proceed with the rest of this command if the user replies `run --force-greenfield` or
 explicitly confirms they want greenfield in this folder. If they reply `brownfield`, exit and
-tell them to run `/sdlc-brownfield` in their next turn.
+tell them to run `/sdlc:brownfield` in their next turn.
 
 # 1. Check the setup before anything else
 

@@ -359,15 +359,15 @@ test("SETUP.md quotes the names the catalogue actually publishes", () => {
   );
 });
 
-test("every document that hands a fresh install to /sdlc-run says to open a new session", () => {
+test("every document that hands a fresh install to /sdlc:run says to open a new session", () => {
   // Claude Code builds its slash-command list when a session starts, and
   // nothing written to disk afterwards can add a command to a session that is
-  // already running. So a successful install leaves `/sdlc-run` genuinely
+  // already running. So a successful install leaves `/sdlc:run` genuinely
   // absent from the very session that performed it. The plugin is fine; the
   // command arrives one session late.
   //
   // Caught on 2026-08-04 during the first end-to-end install: setup reported
-  // success, the documented next prompt was `/sdlc-run`, and it was not in the
+  // success, the documented next prompt was `/sdlc:run`, and it was not in the
   // menu. The install session then offered `/reload-plugins`, which the
   // desktop app does not have — leaving a working install and no way forward.
   //
@@ -378,7 +378,7 @@ test("every document that hands a fresh install to /sdlc-run says to open a new 
     assert.match(
       text,
       /new session/i,
-      `${file} sends the user to /sdlc-run without saying it needs a session opened ` +
+      `${file} sends the user to /sdlc:run without saying it needs a session opened ` +
         `after the install — the command will not be in the menu of the one that installed it`,
     );
     // These documents put every command the reader is meant to type inside a

@@ -34,14 +34,14 @@ If `examples/<study-id>/passes/<run-id>/` already exists, its contents will be o
 
 **HITL gates active:** Gate 1 (requirements), Gate 2 (design), Gate 3 (security review), Gate 4 (final acceptance).
 
-When invoked headlessly (e.g. via `claude --print "/run-sdlc-pass ..." --output-format stream-json --verbose`), all four HITL gates auto-approve so the session can complete end-to-end without prompts.
+When invoked headlessly (e.g. via `claude --print "/sdlc:pass ..." --output-format stream-json --verbose`), all four HITL gates auto-approve so the session can complete end-to-end without prompts.
 
 ---
 
 ## Brownfield-mode flags (added in v1)
 
 When `--mode=brownfield` is set, the pipeline uses the brownfield entry (equivalent to
-`/sdlc-brownfield` but flag-driven for scripted / CI use). Additional required + optional
+`/sdlc:brownfield` but flag-driven for scripted / CI use). Additional required + optional
 flags:
 
 | Flag | Purpose |
@@ -74,7 +74,7 @@ flags:
 - The pipeline pre-check (§7.4) must have passed or been skipped-with-user-consent for this
   run's inputs.
 
-See [plugin/commands/sdlc-brownfield.md](sdlc-brownfield.md) for the interactive equivalent
+See [plugin/commands/brownfield.md](brownfield.md) for the interactive equivalent
 of these flags (the 7-step operating manual Claude follows in the interactive flow).
 
 Begin now.
