@@ -17,7 +17,7 @@ import { buildCustomPolicy, renderPolicyYaml } from "@/lib/buildPolicy";
 import { savePolicy } from "@/app/actions";
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
-const TIER_LABEL: Record<Tier, string> = { off: "off", minimal: "min", low: "low", medium: "med", high: "high", adaptive: "auto" };
+const TIER_LABEL: Record<Tier, string> = { off: "off", minimal: "min", low: "low", medium: "med", high: "high", xhigh: "xh", max: "max" };
 
 const BLANK_MODEL_FORM = {
   id: "",
@@ -301,8 +301,8 @@ export default function Editor({
             <div>
               <h2>Routing &amp; thinking capacity — per phase</h2>
               <p>
-                The thinking picker sits next to each model and shows that model&rsquo;s own real range — Gemini has one, Opus doesn&rsquo;t
-                (see <span className="mono">plugin/policy-console/README.md</span>).
+                The thinking picker sits next to each model and shows that model&rsquo;s own real range — Gemini&rsquo;s named levels,
+                Opus&rsquo;s effort levels (see <span className="mono">plugin/policy-console/README.md</span>).
               </p>
             </div>
           </div>

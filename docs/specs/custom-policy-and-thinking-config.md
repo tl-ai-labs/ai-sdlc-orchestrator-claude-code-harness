@@ -170,22 +170,29 @@ Single page, two linked sections, served from the local server started in flow s
   already reports, just live).
 
 ### 6.2 Thinking capacity section — implementation note
-Built differently from this section's original draft, after auditing the real vendor SDKs
-(OQ-6): the tier picker sits **directly next to each phase's model dropdown** (one merged
-row, not a separate section) and writes `reasoning.tier` — the field the one real adapter
-that reads reasoning (`AntigravityWorkerAdapter`) actually consumes — rather than the
-`effort` vocabulary this section originally proposed, which no adapter reads at all.
-Offered tiers are per model: `off`/`minimal`/`low`/`medium`/`high` for both Gemini doors
-(installed `@google/genai`/`google-genai` `ThinkingLevel` enum) — a genuine graded range — and
-**nothing at all for `opus`**, shown as "Not available." Opus genuinely supports thinking
-(`@anthropic-ai/sdk`'s `ThinkingConfigParam`, checked against the *current* `0.116.0` release, not
-the repo's pinned `0.32.1`, which predates thinking entirely), but neither of its real modes is a
-level: `enabled` takes a numeric `budget_tokens` (a dial), and `adaptive` lets Claude pick its own
-depth per call (not a fixed point on a scale). This console offers no picker for either — a product
-decision once that distinction was clear, not a claim that Opus can't think. Picking a model that
-doesn't support the currently-set tier clamps it back to `off` rather than saving a
-silently-invalid combination. Current, authoritative detail:
-[plugin/policy-console/README.md](../../plugin/policy-console/README.md#thinking-tiers-are-per-model-not-a-fixed-set-of-four).
+Built differently from this section's original draft, after auditing the real vendor SDKs and
+docs (OQ-6): the tier picker sits **directly next to each phase's model dropdown** (one merged
+row, not a separate section). Offered tiers are per model, and — this took three corrections to
+get right — the field written depends on which real vendor parameter the model actually has:
+
+- **Gemini** (`flash-completion`, `flash-agsdk-worker`): `off`/`minimal`/`low`/`medium`/`high`,
+  written as `reasoning.tier` — the field `AntigravityWorkerAdapter` (the one adapter that reads
+  reasoning at all) consumes. Sourced from the installed `@google/genai`/`google-genai`
+  `ThinkingLevel` enum.
+- **Opus** (`builtin-anthropic`): `off`/`low`/`medium`/`high`/`xhigh`/`max`, written as
+  `reasoning.effort` — a genuinely different real request parameter,
+  [`output_config.effort`](https://platform.claude.com/docs/en/build-with-claude/effort), not a
+  synonym for Gemini's tier. `claude-opus-4-7` (this repo's pinned Opus model) rejects
+  `thinking: {type: "enabled", budget_tokens}` outright per Anthropic's own docs — 4.7+ models
+  dropped manual-budget thinking — but `output_config.effort` is separate from `thinking` entirely
+  and is documented as supported on `claude-opus-4-7` specifically, with five real levels and
+  Anthropic's own per-model guidance.
+
+Picking a model that doesn't support the currently-set tier clamps it back to `off` rather than
+saving a silently-invalid combination. Current, authoritative detail — including the two earlier,
+wrong conclusions this replaced (that Opus has no thinking ability at all, then that it has none
+worth a picker) — is in
+[plugin/policy-console/README.md](../../plugin/policy-console/README.md#thinking-tiers-are-per-model--two-different-real-vendor-parameters).
 
 ### 6.3 Save controls
 - **Policy name** field, required only when something differs from the base policy; validated
@@ -329,20 +336,25 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   displays.
 - **OQ-6 (engineering) — resolved:** Every call site that reads `ModelConfig.reasoning`
   (types.ts:107) is now enumerated. Only one exists: `AntigravityWorkerAdapter.ts:157`, via
-  `workerThinkingLevel()`, which reads `reasoning.tier` (`minimal`/`low`/`medium`/`high`) — not
-  `reasoning.effort` (`off`/`low`/`high`/`max`, this section's original proposal). The console was
-  changed to write `tier`, not `effort` (§6.2). `BuiltinAnthropicAdapter` (opus) and
-  `GeminiFlashAdapter` (`flash-completion`) never read `reasoning` at all — a thinking override on
-  either is silently inert regardless of field name. `minimal` is a real, valid member of the
-  vendor `ThinkingLevel` enum on both the Node and Python `google-genai` packages — confirmed by
-  reading their installed type definitions — so it does not crash `flash-agsdk-worker`.
-  **Net effect: only `flash-agsdk-worker` has a working thinking override.** `flash-completion`
-  has a real tier range to offer and just isn't wired — separate, unrelated fact from `opus`, which
-  the console shows as "Not available" by design: it supports thinking on the *current* Anthropic
-  SDK (`0.116.0`; the pinned `0.32.1` predates it entirely), but neither real mode (`adaptive` or
-  numeric `budget_tokens`) is a graded range, so there's nothing to put on this console's tier
-  picker. Wiring `flash-completion` to the vendor's `thinkingLevel` config is backend work, tracked
-  as a known gap in
+  `workerThinkingLevel()`, which reads `reasoning.tier` (`minimal`/`low`/`medium`/`high`).
+  `BuiltinAnthropicAdapter` (opus) and `GeminiFlashAdapter` (`flash-completion`) never read
+  `reasoning` at all — a thinking override on either is silently inert regardless of field name.
+  `minimal` is a real, valid member of the vendor `ThinkingLevel` enum on both the Node and Python
+  `google-genai` packages — confirmed by reading their installed type definitions — so it does not
+  crash `flash-agsdk-worker`.
+
+  This question also surfaced a real, separate parameter that wasn't in scope when first asked:
+  Anthropic's `output_config.effort` — five real levels (`low`/`medium`/`high`/`xhigh`/`max`),
+  documented as supported on `claude-opus-4-7` specifically, independent of `thinking` (which
+  4.7+ models reject in manual-budget form). The console now writes this as `reasoning.effort`
+  for Opus-routed phases and `reasoning.tier` for Gemini-routed ones — two different real fields
+  for two different real vendor parameters, not one vocabulary standardized across models.
+
+  **Net effect: only `flash-agsdk-worker` has a working thinking override today.**
+  `flash-completion` and `opus` both have real, documented graded ranges the console now offers —
+  neither is wired to an adapter yet. Wiring `flash-completion` to the vendor's `thinkingLevel`
+  config, and bumping `@anthropic-ai/sdk` to send `output_config.effort` for `opus`, are backend
+  work, tracked as a known gap in
   [plugin/policy-console/README.md](../../plugin/policy-console/README.md#known-gap-thinking-capacity-isnt-wired-to-any-adapter-yet)
   rather than fixed here — no policy from this console drives a real run yet, so it isn't blocking.
 
