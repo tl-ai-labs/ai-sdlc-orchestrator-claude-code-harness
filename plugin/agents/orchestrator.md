@@ -177,3 +177,36 @@ Three enforcement layers make this promise stick — the third is the only one y
 **Diff-preview mini-gate** for any packet targeting a file that existed at discovery time: dispatch the packet, receive the proposed content, compute a unified diff against the current file, show the diff to the user, and only write on approval. This is the concrete answer to "we don't know how they use Gemini / Cursor / their own config" — even if discovery misclassified a file's role, the user sees the diff before it lands.
 
 See `plugin/scripts/write-contract-check.mjs` for the hook implementation and the exact schema of `.sdlc/local/write-contract.json`.
+
+# Provenance recording — brownfield only
+
+**Applies only when a brownfield run is active** (same trigger as the Write gate above). Every file the run touches must land in `.sdlc/runs/<run-id>/provenance.json` so `/sdlc-revert <run-id>` can restore the pre-run state. Uncommitted files (dirty tracked or untracked) additionally need a backup copy taken **before** the write — git has no record of their pre-run content, so the backup is the only recovery path.
+
+Do this per Write/Edit; the helper handles sha computation, git-tracked detection, and backup placement:
+
+1. **Once at run start** — before any packet dispatch:
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --init --run-id=<run-id> --intent=<intent>
+   ```
+
+2. **Before every Write/Edit** — do this immediately before invoking the tool:
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --before --run-id=<run-id> --path=<file> --packet-id=<packet-id>
+   ```
+   The helper computes `sha_before`, records whether the file was tracked-in-git, and copies uncommitted files to `.sdlc/runs/<run-id>/backups/`. Any packet-driven write MUST be preceded by this call.
+
+3. **Immediately after every Write/Edit succeeds**:
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --after --run-id=<run-id> --path=<file>
+   ```
+   The helper computes `sha_after` and stamps `written_at`. If it can't find a matching `--before` record it logs a warning and returns — but reaching that warning is a bug in your flow.
+
+4. **Once at run end** — after the last packet writes but before the final report:
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --finalize --run-id=<run-id>
+   ```
+   The helper captures `git_head_after` and the list of commits between it and `git_head_before`, so the dirty-case check in `/sdlc-revert` has what it needs to detect a subsequent run touching the same files.
+
+**Fail-open by design.** The helper never blocks the pipeline — on unexpected error it warns to stderr and exits 0. A missing provenance record only breaks `/sdlc-revert` for that one file; it never breaks the run. Discipline in the orchestrator prompt (this section) is what keeps the record complete.
+
+Schema of `provenance.json` matches the reader in `plugin/commands/sdlc-revert.md` §1 — never drift.
