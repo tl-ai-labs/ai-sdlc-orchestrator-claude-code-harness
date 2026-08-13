@@ -314,6 +314,7 @@ non-terminal state and re-prompts on next `/sdlc-brownfield` invocation. No new 
 >   - accept / edit / expand
 > - **Repo-state risks (if any):** `<LFS / submodules / failing tests / encrypted secrets>`
 > - **Regulated-repo warning (when `baseline.regulated_repo_warning_required`):** *"This repo appears regulated (signals: `<kinds>`). Confirm the active policy uses only compliant endpoints, and that off-limits protects your regulated data folders."*
+> - **`.gitignore` needs `.sdlc/` entry (when `baseline.gitignore_covers_sdlc: false`):** *"Your .gitignore doesn't cover .sdlc/. Add `.sdlc/` to .gitignore as part of this run? [Y/n]"*  On yes, add `.gitignore` to the allowlist so the codegen phase can create-or-append it (a codegen packet or a small helper write, per intent). On no, note in the final report so the user gets the same follow-up prompt that surfaced in the docs-gen v1 run.
 >
 > Typical cost for a `<intent>` run on a repo this size: `$X.XX–$Y.YY`.
 >

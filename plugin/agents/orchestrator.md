@@ -99,7 +99,42 @@ hook, which matches on the MCP tool call and therefore never fires.
    - Gate 2: after `design.md` is written
    - Gate 3: after `security_review.md` is written
    - Gate 4: after final report
-4. **TaskPacket discipline.** Every cross-model dispatch carries: `id`, `phase`, `task_type`, `module`, `instruction` (<300 tokens), `inputs` (sliced — never full Opus chat history), `outputSchema`, `acceptance` (testable bullets), `budget`. See `plugin/skills/run-ai-sdlc/SKILL.md` for full schema and examples.
+4. **TaskPacket discipline.** Every cross-model dispatch to `execute_with_model` MUST carry all of these required fields, in a single object under the tool's `packet` argument:
+
+   | Field | Type | Notes |
+   |---|---|---|
+   | `id` | string | Unique per dispatch (e.g. `tp_codegen_001`, `smoke-1`) |
+   | `phase` | string | One of the Phase values in `plugin/mcp/gemini-flash-server/src/types.ts` |
+   | `task_type` | string | E.g. `controller_handler`, `dto`, `doc_addition`, `smoke` |
+   | `module` | string | Coarse grouping for telemetry (e.g. `auth`, `cross`, `smoke`) |
+   | `instruction` | string | <300 tokens |
+   | `inputs` | `FileSlice[]` | **Required. Use `[]` for smoke/analysis packets that read no files.** Never omit — downstream adapters call `inputs.filter(...)` |
+   | `outputSchema` | object | JSON Schema for the expected output |
+   | `acceptance` | string[] | Testable bullets |
+   | `budget` | `{ maxInputTokens: number; maxOutputTokens: number }` | Both required |
+   | `pass_id` | string | The run's pass_id (e.g. `pre-check`, or the current run_id) |
+   | `artifact_path` | string (optional) | Brownfield only — the repo-relative path this packet writes; validated against the write-contract allowlist before dispatch |
+   | `retry_count` | number (optional) | Defaults to 0 |
+   | `subtype` | string (optional) | Adapter-specific refinement |
+
+   The MCP server validates required fields on entry and refuses with a clean "missing field X" error rather than crashing downstream. See `plugin/skills/run-ai-sdlc/SKILL.md` for canonical examples per phase.
+
+   **Example — a smoke-test packet** (used at pre-check dispatch step):
+
+   ```json
+   {
+     "id": "smoke-1",
+     "phase": "docs",
+     "task_type": "smoke",
+     "module": "smoke",
+     "pass_id": "pre-check",
+     "instruction": "Return the literal string OK and nothing else.",
+     "inputs": [],
+     "outputSchema": { "type": "object", "properties": { "result": { "type": "string" } }, "required": ["result"] },
+     "acceptance": ["result is exactly the string OK"],
+     "budget": { "maxInputTokens": 1000, "maxOutputTokens": 64 }
+   }
+   ```
 5. **Persist the packet plan — required.** After `design.md` is approved at Gate 2 and BEFORE you begin dispatching any codegen/tests/docs/debug work, do the planning step explicitly:
    - Decompose `design.md` into TaskPackets (one per file-sized unit of work).
    - Write the full list to `<output_dir>/packets.json` as a JSON array of TaskPacket objects.

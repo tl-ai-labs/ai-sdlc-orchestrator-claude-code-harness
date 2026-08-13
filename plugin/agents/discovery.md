@@ -67,9 +67,12 @@ git rev-parse HEAD
 git rev-parse --abbrev-ref HEAD
 git status --short --branch
 git remote -v
+[ -f .gitignore ] && grep -F '.sdlc' .gitignore
 ```
 
 Record: `git_head` (SHA), `git_branch`, `git_dirty` (true if `git status --short` outputs any lines), `remotes` (list of `{name, url}`).
+
+**Also record `gitignore_covers_sdlc`.** True when a `.gitignore` exists at repo root AND contains a line matching `.sdlc/` (any of `.sdlc`, `.sdlc/`, `.sdlc/**`). False otherwise. When false, run-generated artifacts under `.sdlc/` — including `packets.json`, `changes.md`, and `backups/<file>` (which may echo source content of files touched this run) — will be untracked but visible to `git add -A`, and a distracted commit could push them.
 
 ## Group 2 — directory topology (bounded)
 
@@ -234,11 +237,12 @@ These become the default off-limits at Gate 0. The user can override individual 
 
 # Coexistence risks — human summary
 
-Look at what you found in group 6 and produce a short "Coexistence risks" section in `discovery.md`:
+Look at what you found in group 6 (and group 1) and produce a short "Coexistence risks" section in `discovery.md`:
 - **Cursor rules detected** → *"You have Cursor rules at `<path>`. The plugin will never touch them, but if you have Cursor's auto-lint running on save, changes we make may trigger it."*
 - **Aider config detected** → *"You have an Aider config. If it has auto-commit enabled, running the plugin alongside may tangle git history."*
 - **Custom `.mcp.json` detected** → *"You have `<N>` custom MCP servers registered. They stay untouched. If any name suggests generation (codegen, gemini, openai, codellama), our plugin's dispatcher won't call it — we use our own bundled server."*
 - **Repo-local `routing-policy.yaml` detected** → *"Your repo ships `routing-policy.yaml` at `<path>`. Our policy loader will pick it up automatically. Confirm this is intentional, or pass `--policy <name>` at run start to use a shipped policy instead."*
+- **`.sdlc/` not gitignored** (when `gitignore_covers_sdlc: false`) → *"Your `.gitignore` doesn't cover `.sdlc/`. Run artifacts under `.sdlc/` (packets, backups, telemetry) will be untracked but visible to `git add -A`. Gate 0 will offer to add `.gitignore` (create if missing, append if present) to this run's allowlist so the plugin can add the entry as part of the run."*
 
 These are surfaced verbatim at Gate 0.
 
