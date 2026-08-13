@@ -151,6 +151,29 @@ function openBrowser(url) {
 
 // ── project.json writer ──────────────────────────────────────────────
 
+/**
+ * Constant off-limits that apply to every brownfield ticket in this project
+ * — credentials, MCP configs, generated dirs, other-AI-tool state, VCS
+ * internals. Setup writes these once so Gate 0 doesn't have to re-ask about
+ * them every ticket. The write-contract hook still enforces them at packet
+ * time by merging this list into the run's off_limits when Gate 0 approves.
+ * Ticket-specific off-limits (e.g. "don't touch payments/" during a docs
+ * job) are added on top per-run, not here.
+ */
+export const OFF_LIMITS_DEFAULT = [
+  ".env",
+  ".env.*",
+  ".mcp.json",
+  ".cursor/rules/**",
+  ".claude/settings.local.json",
+  "node_modules/**",
+  "dist/**",
+  "build/**",
+  ".next/**",
+  ".sdlc/**",
+  ".git/**",
+];
+
 function readProjectJson(sdlcDir) {
   const path = join(sdlcDir, "project.json");
   if (!existsSync(path)) return {};
@@ -169,9 +192,12 @@ function saveDefaultPolicy(repoRoot, policyName) {
   const sdlcDir = join(repoRoot, ".sdlc");
   const existing = readProjectJson(sdlcDir);
   const merged = {
-    schema_version: existing.schema_version ?? 1,
+    schema_version: 2,
     ...existing,
     default_policy: policyName,
+    // Only set on first write, or when the current list predates schema_version 2.
+    // Users may hand-edit off_limits_default; we don't overwrite it once set.
+    off_limits_default: existing.off_limits_default ?? OFF_LIMITS_DEFAULT,
     last_updated_at: new Date().toISOString(),
   };
   const path = writeProjectJson(sdlcDir, merged);

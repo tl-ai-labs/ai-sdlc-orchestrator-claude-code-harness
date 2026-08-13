@@ -309,9 +309,11 @@ non-terminal state and re-prompts on next `/sdlc:brownfield` invocation. No new 
 >   authoritative and off-limits? **(default: OFF-LIMITS, do not touch)**
 > - **Intent:** `<intent picked in step 4a of /sdlc:brownfield>`
 > - **File scope:**
->   - allowlist: `<paths proposed by the intent brief>`
->   - off-limits: `<all AI configs + .env* + generated dirs + submodules>`
->   - accept / edit / expand
+>   - allowlist: `<paths proposed by the intent brief>` — accept / edit
+>   - off-limits: **project defaults from `.sdlc/project.json.off_limits_default`** apply
+>     (`.env*`, `.mcp.json`, `node_modules/**`, `.cursor/rules/**`, `.claude/settings.local.json`,
+>     `dist/**`, `.sdlc/**`, `.git/**`) — add anything else this ticket must not touch
+>   - AI configs detected in the repo are added on top (see previous bullet)
 > - **Repo-state risks (if any):** `<LFS / submodules / failing tests / encrypted secrets>`
 > - **Regulated-repo warning (when `baseline.regulated_repo_warning_required`):** *"This repo appears regulated (signals: `<kinds>`). Confirm the active policy uses only compliant endpoints, and that off-limits protects your regulated data folders."*
 > - **`.gitignore` needs `.sdlc/` entry (when `baseline.gitignore_covers_sdlc: false`):** *"Your .gitignore doesn't cover .sdlc/. Add `.sdlc/` to .gitignore as part of this run? [Y/n]"*  On yes, add `.gitignore` to the allowlist so the codegen phase can create-or-append it (a codegen packet or a small helper write, per intent). On no, note in the final report so the user gets the same follow-up prompt that surfaced in the docs-gen v1 run.
@@ -320,10 +322,14 @@ non-terminal state and re-prompts on next `/sdlc:brownfield` invocation. No new 
 >
 > Reply: `approved`, `revise: <comments>`, or `abort`.
 
-On `approved`, freeze the confirmed allowlist + off-limits into `.sdlc/local/write-contract.json`
+On `approved`, freeze the write contract to `.sdlc/local/write-contract.json`
 (schema: `{schema_version:1, active:true, mode:"brownfield", run_id, strict:true, allowlist,
-off_limits}`) before dispatching any packet. The PreToolUse hook and the packet validator both
-read this file. See `plugin/scripts/write-contract-check.mjs` for the hook.
+off_limits}`). Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
+(the project-level constants — `.env*`, `.mcp.json`, `node_modules/**`, etc., written by setup)
+with the AI-configs from `baseline.ai_configs_detected` and any ticket-specific paths the user
+added at Gate 0. The PreToolUse hook and the packet validator both read the merged list — the
+UX shrinks (Gate 0 doesn't re-ask about constants each ticket), the enforcement is unchanged.
+See `plugin/scripts/write-contract-check.mjs` for the hook.
 
 **Default the AI-coexistence answer to OFF-LIMITS.** A user who hits `approved` without reading
 must not accidentally authorize the plugin to rewrite their `.cursor/rules` or their custom
