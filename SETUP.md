@@ -179,49 +179,58 @@ side project runs on Flash. The choice is stored in `.sdlc/project.json.default_
 current repo and picked up by every subsequent `/sdlc:run` or `/sdlc:brownfield` in that folder.
 Applies equally to greenfield and brownfield projects.
 
-**Confirm you are in the project directory** (the shepherd needs to write
-`<project-root>/.sdlc/project.json`; if the shell is elsewhere, cd into the project first),
-then the shepherd invokes:
+**Confirm you are in the project directory**, then offer the user this choice — do not skip
+straight to a two-preset picker, and do not omit the browser option:
 
-```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/setup-policy.mjs | tail -1)"
-```
+1. **Open the browser to author or customize a policy (Recommended)** —
 
-The shepherd does not paraphrase this away or offer to skip. Every project that hits this step
-picks a policy — either by authoring a new one in the browser, or by naming an existing shipped
-one (`opus-only` / `opus-plus-flash`) at the follow-up terminal prompt. `.sdlc/project.json`
-must have a `default_policy` field when this step returns; the task commands (`/sdlc:run`,
-`/sdlc:brownfield`) refuse to run without it, because "which model handled this" is the top
-question at any post-run review and answering "I don't know, the wizard guessed" is not
-acceptable.
+   ```bash
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/setup-policy.mjs | tail -1)" --project-root "$(pwd)"
+   ```
 
-What the script does, step by step:
+2. **Use `opus-plus-flash`** (shipped preset — Opus judgment + Flash mechanical, cost-efficient) —
 
-1. Starts the policy console (`plugin/policy-console/`, a local Next.js app) on the first free
-   port from 3000 upward, bound to `127.0.0.1` (loopback only), with Next.js telemetry disabled.
-   First run only, `npm install` inside that folder — subsequent runs skip it.
+   ```bash
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/setup-policy.mjs | tail -1)" --policy=opus-plus-flash --project-root "$(pwd)"
+   ```
+
+3. **Use `opus-only`** (shipped preset — Opus for every phase, highest cost, single-model baseline) —
+
+   ```bash
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/setup-policy.mjs | tail -1)" --policy=opus-only --project-root "$(pwd)"
+   ```
+
+4. **Skip — set later via `/sdlc:policy change`**. `/sdlc:run` and `/sdlc:brownfield` will refuse
+   to start until a policy is picked.
+
+Whichever the user chooses, `.sdlc/project.json` must have a `default_policy` field when this
+step returns — the task commands read it via session-hydrate and refuse to run without it.
+
+What the browser option does, step by step:
+
+1. Starts the policy console (`plugin/policy-console/`, a single HTML page served by a tiny
+   Node http server, ~350 lines) on the first free port from 3000 upward, bound to `127.0.0.1`
+   (loopback only). First run only, `npm install` for one dep (`yaml`) — ~1 second.
 2. Opens the URL in the default browser (`open` on macOS, `xdg-open` on Linux). On a headless
    machine, pass `--no-browser` and the URL prints instead.
-3. Waits at a `Press Enter when ready:` prompt while the user picks or authors a policy in the
-   console. Save always writes a new named YAML into `plugin/config/policies/` — the shipped
-   `opus-only` and `opus-plus-flash` presets are never overwritten.
-4. On Enter, diffs the policies directory against the pre-launch snapshot:
-   - one new or modified file → uses it silently
-   - zero saves → prints the existing on-disk list and asks the user to type a name
-   - multiple new/modified files → prints just those and asks the user to type a name
-5. Writes the chosen name to `.sdlc/project.json` and kills the dev server. Terminal control
-   returns; the shepherd continues to section 6.
+3. Watches `plugin/config/policies/` via `fs.watch`. When the user clicks Save in the browser,
+   the newly-written YAML fires a filesystem event and the script picks it up automatically —
+   no need to return to the terminal to press Enter.
+4. Writes the chosen policy name (bare stem, no `.yaml`) to `.sdlc/project.json.default_policy`
+   in the `--project-root` directory and kills the server. Terminal control returns to the
+   shepherd, which continues to section 6.
 
-Scripted / CI equivalent when the name is already known — no browser, no interactivity:
+Passing `--project-root "$(pwd)"` is required: the script writes bookkeeping into the caller's
+project, not into whichever git worktree an earlier `cd` may have drifted the shell into.
 
-```bash
-node ".../scripts/setup-policy.mjs" --policy=opus-plus-flash
-```
+Non-interactive fallback (browser closed without saving): after a 10-minute timeout the script
+exits cleanly with "no save detected"; nothing gets written and the shepherd surfaces the
+outcome so the user can re-run.
 
 To inspect the current project's saved default from any terminal:
 
 ```bash
-node ".../scripts/setup-policy.mjs" --print-only
+node ".../scripts/setup-policy.mjs" --print-only --project-root "$(pwd)"
 ```
 
 ## 6. Hand over

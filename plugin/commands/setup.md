@@ -84,28 +84,38 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-setup.mjs" --enable-agent --project-r
 Add `--user` if the caller passed `--user`. This writes `SDLC_SELECT=gemini-flash=flash-agsdk-worker`
 to the settings file and builds the Python environment the agent path needs.
 
-# 4. Policy pick — silent if `--policy=` given, browser only if not
+# 4. Policy pick
 
 Read the current default: `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only
 --project-root "$(pwd)"`. If it prints a policy name, the project already has one — print
 `current policy: <name>` and skip to step 5.
 
-If the current default is empty:
+If `--policy=<name>` was supplied, honor it silently — no prompt, no browser:
 
-- **`--policy=<name>` supplied:** silently set it —
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --policy=<name> --project-root "$(pwd)"
+```
 
-  ```bash
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --policy=<name> --project-root "$(pwd)"
-  ```
+**Otherwise, ASK the user with these four options in this exact order.** Use whatever picker the
+main-loop provides (`AskUserQuestion` is fine). The browser is the FIRST option — do not skip it
+in favor of the two presets, and do not collapse this step into a two-preset picker.
 
-- **no flag:** open the policy console (the one and only browser moment in the whole flow) —
+1. **Open the browser to author or customize a policy (Recommended)** — the only path to a
+   non-preset policy. Runs:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --project-root "$(pwd)"
+   ```
+   The script starts a local server, opens the browser, and detects the save automatically via
+   filesystem watch — no need to switch back to the terminal.
+2. **Use `opus-plus-flash`** — shipped preset: Claude Opus for judgment phases, Gemini Flash for
+   mechanical. The cost-efficient default. Runs `setup-policy.mjs --policy=opus-plus-flash …`.
+3. **Use `opus-only`** — shipped preset: Claude Opus for every phase. Highest cost, single-model
+   baseline. Runs `setup-policy.mjs --policy=opus-only …`.
+4. **Skip — set later with `/sdlc:policy change`** — leaves `default_policy` unset. Subsequent
+   `/sdlc:run` and `/sdlc:brownfield` will refuse to start until a policy is picked.
 
-  ```bash
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --project-root "$(pwd)"
-  ```
-
-  The user picks or authors a policy in the browser, then presses Enter in the terminal. The
-  script writes the chosen name to `.sdlc/project.json.default_policy` and returns control here.
+Do not suggest "Type something" as a hidden fifth option — the user's typed name may not match a
+shipped preset, which fails downstream. The four options above cover every real path.
 
 # 5. Print the next-steps banner
 

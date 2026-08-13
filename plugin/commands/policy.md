@@ -33,12 +33,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --project-root "$(pwd)"
 ```
 
 Same script setup uses. Starts the local policy console on the first free port ≥3000, opens the
-browser, waits at `Press Enter when ready:` while the user picks or authors a policy, then writes
-the chosen name to `.sdlc/project.json.default_policy` and returns control here.
+browser, watches `plugin/config/policies/` via `fs.watch`. When the user clicks Save in the
+browser, the newly-written YAML fires a filesystem event and the script auto-detects it — no
+need to return to the terminal to press anything. The chosen name (bare stem, no `.yaml`) then
+lands in `.sdlc/project.json.default_policy` and control returns here.
 
-Do not paraphrase or offer to skip. `change` means "open the console"; if the user wants to skip,
-they close the browser without saving and press Enter — the script then falls through to a
-type-a-name prompt that lists on-disk policies.
+Do not paraphrase or offer to skip. `change` means "open the console." If the user wants to
+skip, they close the browser without saving and the script exits cleanly after a 10-minute
+idle timeout with "no save detected" — nothing gets written to `.sdlc/project.json`.
 
 # Shape 3 — `--policy=<name>`: silent set
 
