@@ -134,7 +134,53 @@ Write the brief to `.sdlc/runs/<run-id>/intent_brief.md` with this heading contr
 Fill in "Files in scope" and "Files off-limits" with your best guess based on discovery + intent
 + the user's description. These are proposals; Gate 0 lets the user adjust before commit.
 
-# 5. Gate 0 — Discovery Confirmation
+# 5. Resolve project policy (may open the browser once)
+
+Before rendering Gate 0, resolve which routing policy this run will load. Read the current
+project default:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only
+```
+
+Two cases:
+
+**Case A — the command prints a policy name.** The user has already picked a default for this
+project. Use that name as the Gate 0 policy default. Continue to step 6.
+
+**Case B — the command prints an empty line.** No project default is set. Do NOT silently fall
+back to `opus-plus-flash`. Instead run this mini-gate verbatim, on its own line, and wait for a
+reply:
+
+> **No routing policy is set for this project.** Configure it now?
+>
+> - `yes` — I'll start the policy console (browser page at `http://localhost:3000`) so you can
+>   pick per-phase models and thinking tiers. Save in the browser, then press Enter here to
+>   continue. The choice is written to `.sdlc/project.json` and every future `/sdlc-brownfield`
+>   in this repo will use it.
+> - `skip` — proceed with the shipped default `opus-plus-flash` for this run only. You can
+>   set a project default later by re-running setup.
+
+On `yes`, invoke the interactive shepherd flow of the same script:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs"
+```
+
+This is the only moment the pipeline opens a browser. Everything before and after runs in the
+terminal. The script snapshots existing policies, launches the console on the first free port
+from 3000 upward (loopback-only, telemetry-disabled), auto-opens the browser (`--no-browser` for
+headless), waits for the user to Save + press Enter, detects which YAML was saved, and writes
+`default_policy` to `.sdlc/project.json`. When it returns, re-read via `--print-only` and use
+that name for Gate 0. Do not re-launch the console at Gate 0; step 5 owns the browser moment.
+
+On `skip`, use `opus-plus-flash` as the Gate 0 policy default. Do not write anything to
+`project.json` — a skip should not persist.
+
+On any other reply, re-ask the same mini-gate. Do not treat silence or an unrelated reply as
+consent to launch the browser.
+
+# 6. Gate 0 — Discovery Confirmation
 
 The one confirmation moment before real work begins. Print the gate template from
 [plugin/skills/run-ai-sdlc/SKILL.md](/plugin/skills/run-ai-sdlc/SKILL.md) (search for "Gate 0"),
@@ -181,7 +227,7 @@ On `revise: <comments>` — rewrite the affected parts and re-show Gate 0.
 On `abort` — clear `.sdlc/local/write-contract.json` (set active:false), do not delete the
 run directory (leave it as a partial record), and stop.
 
-# 6. Run the pipeline
+# 7. Run the pipeline
 
 Delegate to the `orchestrator` subagent per [plugin/skills/run-ai-sdlc/SKILL.md](/plugin/skills/run-ai-sdlc/SKILL.md).
 Pass:
@@ -190,13 +236,13 @@ Pass:
 - `run_id: <YYYYMMDD-HHMMSS-<intent>-<slug>>`
 - `intent_brief_path: .sdlc/runs/<run-id>/intent_brief.md`
 - `baseline_path: .sdlc/baseline/current.json`
-- `policy: <default or user-selected>`
+- `policy: <resolved in step 5>`
 
 The orchestrator then drives phases 1 through 9 with gates 1, 2, 3, 4 as usual — but branched by
 intent (see the Intent matrix in SKILL.md). At each gate, relay the gate prompt to the user; do
 not answer on their behalf.
 
-# 7. Close out
+# 8. Close out
 
 After the orchestrator emits the final report:
 
