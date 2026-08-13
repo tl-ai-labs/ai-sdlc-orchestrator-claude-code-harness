@@ -24,7 +24,7 @@
  *   node setup-policy.mjs --print-only       # print resolved default_policy from project.json; no writes
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, watch, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -42,6 +42,8 @@ const POLICIES_DIR = join(PLUGIN_ROOT, "config", "policies");
 const DEFAULT_PORT = 3000;
 const PORT_PROBE_MAX = 10;
 const SERVER_READY_TIMEOUT_MS = 30_000;
+const POLICY_SAVE_TIMEOUT_MS = 10 * 60_000; // 10 minutes to save a policy in the browser
+const POLICY_SAVE_DEBOUNCE_MS = 400;         // let a write settle before diffing
 
 function parseArgs(argv) {
   const out = { policy: null, noBrowser: false, skipInstall: false, printOnly: false, projectRoot: null };
@@ -214,15 +216,54 @@ function prompt(question) {
   });
 }
 
-async function pickPolicyName(existing) {
-  process.stderr.write("\nAvailable policies:\n");
-  for (const name of existing) process.stderr.write(`  • ${name}\n`);
-  const ans = await prompt("\nType the policy name to use as this project's default: ");
-  if (!ans) fail("no policy name provided.");
-  if (!existing.includes(ans)) {
-    fail(`policy "${ans}" not found in ${POLICIES_DIR}. Save it in the console first.`);
-  }
-  return ans;
+/**
+ * Wait for a save to land in POLICIES_DIR. Resolves with the source that
+ * triggered ("watch" | "enter" | "timeout"). Filesystem-signaled by default;
+ * Enter is a parallel path for real terminals; timeout is the safety net.
+ * The whole reason this exists instead of a plain readline prompt: Claude
+ * Code's Bash tool doesn't attach an interactive stdin, so the previous
+ * `await prompt("Press Enter…")` blocked forever and the coupling stalled
+ * after the browser save landed on disk.
+ */
+function waitForPolicySave(before, timeoutMs) {
+  return new Promise((resolvePromise) => {
+    let done = false;
+    let watcher = null;
+    let rl = null;
+    let debounceTimer = null;
+    let timeoutTimer = null;
+
+    const finish = (source) => {
+      if (done) return;
+      done = true;
+      if (watcher) try { watcher.close(); } catch { /* already closed */ }
+      if (rl) try { rl.close(); } catch { /* already closed */ }
+      if (debounceTimer) clearTimeout(debounceTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      resolvePromise(source);
+    };
+
+    try {
+      watcher = watch(POLICIES_DIR, () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          const { added, modified } = diffPolicies(before);
+          if (added.length + modified.length > 0) finish("watch");
+        }, POLICY_SAVE_DEBOUNCE_MS);
+      });
+      watcher.on("error", () => { /* fall back to enter/timeout */ });
+    } catch { /* watch may fail on some FS; the other paths still cover us */ }
+
+    if (process.stdin.isTTY) {
+      try {
+        rl = createInterface({ input: process.stdin, output: process.stderr });
+        rl.on("error", () => {});
+        rl.question("(or press Enter to check now): ", () => finish("enter"));
+      } catch { /* stdin unavailable */ }
+    }
+
+    timeoutTimer = setTimeout(() => finish("timeout"), timeoutMs);
+  });
 }
 
 // ── main flows ───────────────────────────────────────────────────────
@@ -292,19 +333,35 @@ async function interactiveFlow(resolved, args) {
 
   process.stderr.write("\n");
   process.stderr.write(`  → Configure your policy in the browser, then click Save.\n`);
-  process.stderr.write(`  → When done, return here and press Enter.\n`);
-  process.stderr.write(`  → To skip (pipelines will fall back to opus-plus-flash),\n`);
-  process.stderr.write(`    press Enter now and again at the next prompt.\n\n`);
-  await prompt("Press Enter when ready: ");
+  process.stderr.write(`  → The terminal detects your save automatically (no Enter needed).\n`);
+  process.stderr.write(`  → To skip (pipelines will fall back to opus-plus-flash), press Ctrl-C.\n\n`);
+
+  // Wait for a save (or Enter in a real TTY, or timeout). fs.watch is the
+  // primary path because Claude Code's Bash tool doesn't provide interactive
+  // stdin — `await prompt("Press Enter…")` would block forever there, and the
+  // whole flow would stall AFTER the browser save landed on disk, leaving
+  // `.sdlc/project.json` unwritten.
+  const source = await waitForPolicySave(before, POLICY_SAVE_TIMEOUT_MS);
+  log(`(save detected via ${source})`);
 
   const { added, modified } = diffPolicies(before);
-  const candidates = [...added, ...modified];
+  // Strip the .yaml extension — `default_policy` in project.json is a policy
+  // *name* (`opus-only`, `opus-plus-flash`), not a filename. Downstream
+  // consumers (session-hydrate, MCP policy loader, /sdlc:policy print) all
+  // treat it as the bare stem; the old single-candidate branch left the
+  // extension on, producing `default_policy="foo.yaml"` and 404s downstream.
+  const candidates = [...added, ...modified].map((f) => f.replace(/\.ya?ml$/, ""));
 
   let chosen;
   if (candidates.length === 1) {
     chosen = candidates[0];
     log(`detected saved policy: "${chosen}"`);
   } else if (candidates.length === 0) {
+    if (!process.stdin.isTTY) {
+      log("no save detected before timeout — nothing written to .sdlc/project.json. Re-run and save a policy in the browser.");
+      cleanup();
+      return;
+    }
     const existing = listPolicies();
     process.stderr.write("\nNo new policy detected.\n");
     process.stderr.write("Available on-disk policies:\n");
@@ -322,8 +379,17 @@ async function interactiveFlow(resolved, args) {
     }
     chosen = ans;
   } else {
-    log(`multiple new/modified policies detected: ${candidates.join(", ")}`);
-    chosen = await pickPolicyName(candidates);
+    // Multiple saves — pick most recent by mtime. Non-TTY sessions (Claude
+    // Code Bash) can't answer a picker prompt; the most-recent one is what a
+    // user would answer anyway. `candidates` are extension-stripped names, so
+    // reconstruct the on-disk filename for statSync.
+    const withMtime = candidates.map((name) => ({
+      name,
+      mtime: statSync(join(POLICIES_DIR, name + ".yaml")).mtimeMs,
+    }));
+    withMtime.sort((a, b) => b.mtime - a.mtime);
+    chosen = withMtime[0].name;
+    log(`multiple new/modified policies detected (${candidates.join(", ")}); using most recent: "${chosen}"`);
   }
 
   const path = saveDefaultPolicy(resolved.root, chosen);
