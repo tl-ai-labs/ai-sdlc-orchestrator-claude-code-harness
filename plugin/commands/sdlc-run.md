@@ -129,9 +129,14 @@ Tell the user both paths. If `./src` already contains files, say so and ask befo
 # 4. Show what will run
 
 State the routing plainly, as fact. Read it from the policy rather than reciting it from memory.
-Resolve which policy to load in this order: `project.default_policy` from session-hydrate
-(the per-project choice saved by setup), otherwise `opus-plus-flash`. Load the file at
-`${CLAUDE_PLUGIN_ROOT}/config/policies/<name>.yaml`.
+Resolve the policy name before loading:
+
+1. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only`. Its stdout is the
+   `default_policy` field from `.sdlc/project.json` in the current directory, or an empty line
+   if no `.sdlc/` exists yet (setup was skipped or this is a fresh folder).
+2. If that output is empty, use `opus-plus-flash`.
+
+Then load `${CLAUDE_PLUGIN_ROOT}/config/policies/<resolved-name>.yaml`.
 
 Report, in a short list:
 - which model handles the judgment phases — requirements, design, task planning, senior review,

@@ -246,7 +246,8 @@ async function interactiveFlow(repoRoot, args) {
   process.stderr.write("\n");
   process.stderr.write(`  → Configure your policy in the browser, then click Save.\n`);
   process.stderr.write(`  → When done, return here and press Enter.\n`);
-  process.stderr.write(`  → To skip and use the shipped opus-plus-flash preset, press Enter without saving.\n\n`);
+  process.stderr.write(`  → To skip (pipelines will fall back to opus-plus-flash),\n`);
+  process.stderr.write(`    press Enter now and again at the next prompt.\n\n`);
   await prompt("Press Enter when ready: ");
 
   const { added, modified } = diffPolicies(before);
@@ -257,9 +258,22 @@ async function interactiveFlow(repoRoot, args) {
     chosen = candidates[0];
     log(`detected saved policy: "${chosen}"`);
   } else if (candidates.length === 0) {
-    log("no new policy detected — pick from the existing list or skip to defaults.");
     const existing = listPolicies();
-    chosen = await pickPolicyName(existing);
+    process.stderr.write("\nNo new policy detected.\n");
+    process.stderr.write("Available on-disk policies:\n");
+    for (const name of existing) process.stderr.write(`  • ${name}\n`);
+    const ans = await prompt(
+      "\nType a policy name to use as this project's default, or press Enter to skip: ",
+    );
+    if (!ans) {
+      log("skipped — no default_policy written; pipelines will use opus-plus-flash.");
+      cleanup();
+      return;
+    }
+    if (!existing.includes(ans)) {
+      fail(`policy "${ans}" not found in ${POLICIES_DIR}.`);
+    }
+    chosen = ans;
   } else {
     log(`multiple new/modified policies detected: ${candidates.join(", ")}`);
     chosen = await pickPolicyName(candidates);

@@ -9,7 +9,7 @@ Invoke the `orchestrator` subagent to execute one full SDLC run.
 
 **Argument parsing (the orchestrator must do this):**
 - `--auth=<vendor|estimated>` — **required**. Picks the telemetry mode for the whole run. `vendor` dispatches every LLM call via the MCP server so telemetry carries real vendor-reported tokens; `estimated` uses a char-count heuristic for direct-tier calls. If the flag is missing or carries any other value, abort — see rule 6 in the orchestrator's system prompt for the exact abort text.
-- `--policy=<name>` — routing policy name. Defaults to `opus-only`.
+- `--policy=<name>` — routing policy name. When absent, resolves to the current project's `default_policy` field from `.sdlc/project.json` (written by the setup-time policy console — see [SETUP.md](../../SETUP.md) §5b), or `opus-plus-flash` if no project default is set.
 - `--study=<study-id>` — case-study identifier. Defaults to `workforce-ops`. Set this to a project-specific id when running against a brief other than the shipped `examples/workforce-ops/brief.md`, so telemetry and packets stay grouped by project.
 - `--run-id=<run-id>` — run identifier within the study. Defaults to `pass1`.
 - The remaining positional argument is the path to the brief file. Any markdown brief on disk works — see `docs/brief-template.md` for the section layout the requirements phase expects.
@@ -51,7 +51,7 @@ flags:
 | `--brief=<path>` | Optional: pre-written intent brief (replaces the interview). Any markdown file with the section layout in [docs/brownfield.md](../../docs/brownfield.md) works. |
 | `--gates=<prompt\|auto-approve\|auto-abort>` | Gate behavior. `prompt` (default) is interactive; `auto-approve` accepts every gate (headless friendly); `auto-abort` **v1.5** — approves only when the run's fingerprint matches `.sdlc/project.json`, aborts otherwise. Recommended for CI so drift never silently proceeds. |
 | `--from-config=<path>` | **v1.5** — read gate answers from a committed team config file. Combined with `--gates=auto-abort`, this is the CI-safe flow. |
-| `--policy=<name>` | Same as greenfield. Overrides the plugin default (or a repo-local `routing-policy.yaml` if present). |
+| `--policy=<name>` | Same as greenfield. Overrides the setup-time project default (`.sdlc/project.json.default_policy`) and, if present, any repo-local `routing-policy.yaml`. |
 | `--strict-write=off` | Downgrade the write-contract PreToolUse hook from HARD-BLOCK to WARN. Every off-limits or not-in-allowlist write is logged but not refused. Use with care — this defeats the plugin's main safety guarantee. |
 | `--allow-dirty` | Bypass the git-clean check when the git contract's `commit_strategy != none`. |
 | `--recheck` | Force pre-check re-run even when the cached status is still valid. Useful after a plugin version bump. |
