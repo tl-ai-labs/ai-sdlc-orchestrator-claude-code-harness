@@ -31,6 +31,9 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { createConnection } from "node:net";
 import { platform } from "node:os";
+import { OFF_LIMITS_DEFAULT } from "./lib/off-limits.mjs";
+
+export { OFF_LIMITS_DEFAULT };
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(SCRIPT_DIR, "..");
@@ -42,12 +45,20 @@ const SERVER_READY_TIMEOUT_MS = 30_000;
 
 function parseArgs(argv) {
   const out = { policy: null, noBrowser: false, skipInstall: false, printOnly: false, projectRoot: null };
-  for (const a of argv) {
+  // Index-based loop so `--policy value` and `--project-root value` (space-separated,
+  // two argv tokens) parse the same as the `=` form. Command files historically
+  // used the space form; without this, --project-root silently stayed null and
+  // resolveProjectRoot() fell back to git-rev-parse-from-cwd — reintroducing
+  // the SiteNotes cross-repo bug.
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
     if (a === "--no-browser") out.noBrowser = true;
     else if (a === "--skip-install") out.skipInstall = true;
     else if (a === "--print-only") out.printOnly = true;
     else if (a.startsWith("--policy=")) out.policy = a.slice("--policy=".length);
+    else if (a === "--policy") out.policy = argv[++i] ?? null;
     else if (a.startsWith("--project-root=")) out.projectRoot = a.slice("--project-root=".length);
+    else if (a === "--project-root") out.projectRoot = argv[++i] ?? null;
   }
   return out;
 }
@@ -154,33 +165,18 @@ function openBrowser(url) {
 // ── project.json writer ──────────────────────────────────────────────
 
 /**
- * Constant off-limits that apply to every brownfield ticket in this project
- * — credentials, MCP configs, generated dirs, other-AI-tool state, VCS
- * internals. Setup writes these once so Gate 0 doesn't have to re-ask about
- * them every ticket. The write-contract hook still enforces them at packet
- * time by merging this list into the run's off_limits when Gate 0 approves.
- * Ticket-specific off-limits (e.g. "don't touch payments/" during a docs
- * job) are added on top per-run, not here.
+ * Malformed project.json is fatal, not empty. Silently returning `{}` (as an
+ * earlier version did) let the next write overwrite hand-edited custom keys
+ * with defaults — destroying user data without a warning. Force the user to
+ * fix or delete the file explicitly.
  */
-export const OFF_LIMITS_DEFAULT = [
-  ".env",
-  ".env.*",
-  ".mcp.json",
-  ".cursor/rules/**",
-  ".claude/settings.local.json",
-  "node_modules/**",
-  "dist/**",
-  "build/**",
-  ".next/**",
-  ".sdlc/**",
-  ".git/**",
-];
-
 function readProjectJson(sdlcDir) {
   const path = join(sdlcDir, "project.json");
   if (!existsSync(path)) return {};
   try { return JSON.parse(readFileSync(path, "utf8")); }
-  catch { return {}; }
+  catch (err) {
+    fail(`${path} is not valid JSON: ${err?.message ?? err}. Fix or delete the file before rerunning.`);
+  }
 }
 
 function writeProjectJson(sdlcDir, obj) {
@@ -194,8 +190,11 @@ function saveDefaultPolicy(repoRoot, policyName) {
   const sdlcDir = join(repoRoot, ".sdlc");
   const existing = readProjectJson(sdlcDir);
   const merged = {
-    schema_version: 2,
+    // Spread existing FIRST, then override with the fields this call owns.
+    // Reversed order (`{schema_version: 2, ...existing}`) let an older v1 file
+    // keep its schema_version: 1 forever — the literal was silently discarded.
     ...existing,
+    schema_version: 2,
     default_policy: policyName,
     // Only set on first write, or when the current list predates schema_version 2.
     // Users may hand-edit off_limits_default; we don't overwrite it once set.

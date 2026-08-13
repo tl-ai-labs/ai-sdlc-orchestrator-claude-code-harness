@@ -930,12 +930,17 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const scope = process.argv.includes("--user") ? "user" : "project";
   const brownfieldCheck = process.argv.includes("--brownfield-check");
   const headless = process.argv.includes("--headless");
-  // --project-root=<abs-path> overrides process.cwd() when the caller (a
-  // /sdlc:* command file) has already resolved which project this run is
-  // against — see setup.md, policy.md. Passing it forward closes the cwd-drift
-  // hole between the command layer and any subsequent settings write.
-  const projectRootFlag = process.argv.find((a) => a.startsWith("--project-root="));
-  const projectRoot = projectRootFlag ? projectRootFlag.slice("--project-root=".length) : process.cwd();
+  // --project-root=<abs-path> or --project-root <abs-path> overrides
+  // process.cwd() when the caller (a /sdlc:* command file) has already resolved
+  // which project this run is against — see setup.md, policy.md. Passing it
+  // forward closes the cwd-drift hole between the command layer and any
+  // subsequent settings write. Accept BOTH forms — command files write the
+  // space form (`--project-root "$(pwd)"`); the `=` form is what CI uses.
+  const projectRootEq = process.argv.find((a) => a.startsWith("--project-root="));
+  const projectRootSpaceIdx = process.argv.indexOf("--project-root");
+  const projectRoot = projectRootEq
+    ? projectRootEq.slice("--project-root=".length)
+    : (projectRootSpaceIdx >= 0 ? process.argv[projectRootSpaceIdx + 1] : process.cwd());
 
   log("\nAI-SDLC orchestrator — setup check");
 

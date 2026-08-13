@@ -328,12 +328,15 @@ The shepherd behavior contract for prompt 1 in brownfield mode (documented in pl
 - **3 verification failures → offer skip or abort.** Don't loop forever.
 - **Never restart from scratch.** After a fix, continue from where you were.
 - **Persist progress via `setup-status-write.mjs`.** At the start of prompt 1, run
-  `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-status-write.mjs" --reset` (initializes
-  `.sdlc/local/setup-status.json` with all seven sections pending). At the end of each
-  section, run `--section=<name>` with the section slug above. On completion of `summary`,
-  run `--all-done` (clears the resume hint). `session-hydrate.mjs` reads this file on every
-  subsequent command; if a session dies mid-setup, the next `/sdlc:brownfield` picks up from
-  the first pending section — no user intervention needed, no new command required.
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-status-write.mjs" --reset --project-root "$(pwd)"`
+  (initializes `.sdlc/local/setup-status.json` with all seven sections pending). At the end
+  of each section, run `--section=<name> --project-root "$(pwd)"` with the section slug above.
+  On completion of `summary`, run `--all-done --project-root "$(pwd)"` (clears the resume hint).
+  Every call passes `--project-root "$(pwd)"` so the state file lands in the project the user
+  is standing in, not in whichever git worktree an earlier `cd` may have drifted into.
+  `session-hydrate.mjs` reads this file on every subsequent command; if a session dies
+  mid-setup, the next `/sdlc:brownfield` picks up from the first pending section — no user
+  intervention needed, no new command required.
 - **Final summary always.** Line-by-line status of what was done, what the user did, what was
   skipped (with consequences noted).
 

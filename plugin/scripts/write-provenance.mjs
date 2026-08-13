@@ -26,16 +26,25 @@ import { dirname, join, relative, resolve } from "node:path";
 
 function parseArgs(argv) {
   const out = { mode: null, runId: null, path: null, packetId: null, intent: null };
-  for (const a of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    // Index-based to accept both `--flag=value` and `--flag value` forms.
+    // Command files historically wrote the space form; without this, the
+    // --project-root pass-through silently stayed null.
     if (a === "--init") out.mode = "init";
     else if (a === "--before") out.mode = "before";
     else if (a === "--after") out.mode = "after";
     else if (a === "--finalize") out.mode = "finalize";
     else if (a.startsWith("--run-id=")) out.runId = a.slice("--run-id=".length);
+    else if (a === "--run-id") out.runId = argv[++i] ?? null;
     else if (a.startsWith("--path=")) out.path = a.slice("--path=".length);
+    else if (a === "--path") out.path = argv[++i] ?? null;
     else if (a.startsWith("--packet-id=")) out.packetId = a.slice("--packet-id=".length);
+    else if (a === "--packet-id") out.packetId = argv[++i] ?? null;
     else if (a.startsWith("--intent=")) out.intent = a.slice("--intent=".length);
+    else if (a === "--intent") out.intent = argv[++i] ?? null;
     else if (a.startsWith("--project-root=")) out.projectRoot = a.slice("--project-root=".length);
+    else if (a === "--project-root") out.projectRoot = argv[++i] ?? null;
   }
   return out;
 }

@@ -219,26 +219,28 @@ See `plugin/scripts/write-contract-check.mjs` for the hook implementation and th
 
 Do this per Write/Edit; the helper handles sha computation, git-tracked detection, and backup placement:
 
+**Every call passes `--project-root "$(pwd)"`** so the helper writes into the project the user is standing in, not into whichever git worktree the shell has drifted to (an earlier `cd`, a helper that shells out). Without this, per-run bookkeeping can land in the plugin's own worktree — see docs/brownfield-write-contract.md.
+
 1. **Once at run start** — before any packet dispatch:
    ```
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --init --run-id=<run-id> --intent=<intent>
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --init --run-id=<run-id> --intent=<intent> --project-root "$(pwd)"
    ```
 
 2. **Before every Write/Edit** — do this immediately before invoking the tool:
    ```
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --before --run-id=<run-id> --path=<file> --packet-id=<packet-id>
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --before --run-id=<run-id> --path=<file> --packet-id=<packet-id> --project-root "$(pwd)"
    ```
    The helper computes `sha_before`, records whether the file was tracked-in-git, and copies uncommitted files to `.sdlc/runs/<run-id>/backups/`. Any packet-driven write MUST be preceded by this call.
 
 3. **Immediately after every Write/Edit succeeds**:
    ```
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --after --run-id=<run-id> --path=<file>
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --after --run-id=<run-id> --path=<file> --project-root "$(pwd)"
    ```
    The helper computes `sha_after` and stamps `written_at`. If it can't find a matching `--before` record it logs a warning and returns — but reaching that warning is a bug in your flow.
 
 4. **Once at run end** — after the last packet writes but before the final report:
    ```
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --finalize --run-id=<run-id>
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/write-provenance.mjs" --finalize --run-id=<run-id> --project-root "$(pwd)"
    ```
    The helper captures `git_head_after` and the list of commits between it and `git_head_before`, so the dirty-case check in `/sdlc:revert` has what it needs to detect a subsequent run touching the same files.
 

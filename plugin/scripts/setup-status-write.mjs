@@ -25,11 +25,15 @@ const SECTIONS = ["install", "environment", "repo-detection", "credentials", "re
 
 function parseArgs(argv) {
   const out = { section: null, reset: false, allDone: false, projectRoot: null };
-  for (const a of argv) {
+  // Index-based to accept both `--flag=value` and `--flag value` forms.
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
     if (a === "--reset") out.reset = true;
     else if (a === "--all-done") out.allDone = true;
     else if (a.startsWith("--section=")) out.section = a.slice("--section=".length);
+    else if (a === "--section") out.section = argv[++i] ?? null;
     else if (a.startsWith("--project-root=")) out.projectRoot = a.slice("--project-root=".length);
+    else if (a === "--project-root") out.projectRoot = argv[++i] ?? null;
   }
   return out;
 }
