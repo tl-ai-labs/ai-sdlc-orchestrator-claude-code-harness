@@ -71,6 +71,9 @@
     .card h3 { margin: 0 0 4px; font-size: 15px; font-weight: 500; }
     .card .desc { color: var(--text-muted); font-size: 13px; }
     .card .meta { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    .card-add { border-style: dashed; background: transparent; }
+    .card-add h3 { color: var(--primary); }
+    .card-add:hover { border-color: var(--primary); }
     .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; background: var(--surface-2); color: var(--text-muted); }
     .badge.preset { background: #e8f0fe; color: var(--primary); }
     .badge.custom { background: #e6f4ea; color: var(--success-fg); }
@@ -252,7 +255,7 @@ function renderGallery() {
   for (const p of allPolicies) {
     const c = document.createElement("div");
     c.className = "card";
-    c.onclick = () => openEditor(p);
+    c.onclick = () => openEditor(p, false);
     const meta = p.models.map((m) => m.id).join(", ");
     c.innerHTML = `
       <h3>${escapeHtml(p.id)}</h3>
@@ -265,6 +268,21 @@ function renderGallery() {
     `;
     g.appendChild(c);
   }
+  // Default the "add new" base to opus-plus-flash if present, otherwise the
+  // first shipped preset, otherwise the first policy on disk.
+  const defaultBase = allPolicies.find((p) => p.id === "opus-plus-flash")
+    ?? allPolicies.find((p) => p.origin === "preset")
+    ?? allPolicies[0];
+  if (defaultBase) {
+    const addCard = document.createElement("div");
+    addCard.className = "card card-add";
+    addCard.onclick = () => openEditor(defaultBase, true);
+    addCard.innerHTML = `
+      <h3>+ Add a new policy</h3>
+      <div class="desc">Start from <span class="mono">${escapeHtml(defaultBase.id)}</span> and change what you need.</div>
+    `;
+    g.appendChild(addCard);
+  }
 }
 
 function showGallery() {
@@ -275,7 +293,7 @@ function showGallery() {
 
 // ── editor ─────────────────────────────────────────────────────
 
-function openEditor(policy) {
+function openEditor(policy, isNew) {
   base = policy;
   editorState = {
     models: JSON.parse(JSON.stringify(policy.models)),
@@ -283,9 +301,10 @@ function openEditor(policy) {
     thinking: { ...policy.thinking },
     name: "",
   };
-  document.getElementById("editor-title").textContent = `Customize "${policy.id}"`;
+  document.getElementById("editor-title").textContent = isNew ? "Add a new policy" : `Customize "${policy.id}"`;
   document.getElementById("base-id").value = policy.id;
   document.getElementById("policy-name").value = "";
+  document.getElementById("output-path").textContent = "plugin/config/policies/<name>.yaml";
   document.getElementById("view-gallery").classList.add("hidden");
   document.getElementById("view-editor").classList.remove("hidden");
   renderModels();

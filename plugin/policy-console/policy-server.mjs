@@ -132,6 +132,28 @@ function fallbackRule(policy) {
   return policy.rules.find((r) => "default" in r);
 }
 
+/**
+ * Rules for phases NOT in the visible PHASES list (e.g. brownfield's
+ * `discovery`, `change_plan` in `opus-plus-flash.yaml`). The console UI
+ * only renders 9 phases, but the base policy may name more. Without this,
+ * buildCustomPolicy iterates only PHASES and silently drops those rules
+ * on save — a data-loss regression from the old TypeScript app. Skip the
+ * debug-escalation rule (retry_count>=2) since it's already carried by
+ * `debugEscalationRule` separately.
+ */
+function extraPhaseRules(policy) {
+  const visible = new Set(PHASES.map((p) => p.id));
+  const isDebugEscalation = (r) =>
+    r.when?.retry_count &&
+    (Array.isArray(r.when.phase) ? r.when.phase.includes("debug") : r.when.phase === "debug");
+  return policy.rules.filter((r) => {
+    if (!("when" in r) || !r.when.phase) return false;
+    if (isDebugEscalation(r)) return false;
+    const phases = Array.isArray(r.when.phase) ? r.when.phase : [r.when.phase];
+    return phases.every((p) => !visible.has(p));
+  });
+}
+
 function summarizePolicy(id, policy, headerComment) {
   const routing = {};
   const thinking = {};
@@ -151,6 +173,7 @@ function summarizePolicy(id, policy, headerComment) {
       codegenTaskTypes: codegenTaskTypes(policy),
       debugEscalation: debugEscalationRule(policy),
       fallback: fallbackRule(policy),
+      extraPhaseRules: extraPhaseRules(policy),
     },
   };
 }
@@ -186,6 +209,14 @@ function buildCustomPolicy(base, input) {
       rule.reasoning = model && thinkingField(model) === "effort" ? { effort: tier } : { tier };
     }
     rules.push(rule);
+  }
+
+  // Carry through rules for phases the console UI doesn't edit — brownfield's
+  // discovery / change_plan in opus-plus-flash.yaml is the concrete case. Old
+  // code silently dropped these on save; a saved custom policy would then fall
+  // through to the default for those phases.
+  if (Array.isArray(structural.extraPhaseRules)) {
+    for (const r of structural.extraPhaseRules) rules.push(r);
   }
 
   rules.push(structural.fallback ?? { default: models[0]?.id ?? input.routing[PHASES[0].id] });
@@ -275,6 +306,7 @@ function savePolicy(input) {
         codegenTaskTypes: codegenTaskTypes(base),
         debugEscalation: debugEscalationRule(base),
         fallback: fallbackRule(base),
+        extraPhaseRules: extraPhaseRules(base),
       },
     },
     { ...input, name },
@@ -391,6 +423,7 @@ const server = createServer(async (req, res) => {
             codegenTaskTypes: codegenTaskTypes(base),
             debugEscalation: debugEscalationRule(base),
             fallback: fallbackRule(base),
+            extraPhaseRules: extraPhaseRules(base),
           },
         },
         { ...payload, name },
