@@ -301,10 +301,10 @@ non-terminal state and re-prompts on next `/sdlc-brownfield` invocation. No new 
 >
 > - **Stack:** `<top-detected stacks>` — correct? add/override?
 > - **Test command:** `<detected>` — enter to accept, or paste the command.
-> - **Policy:** `<resolved in step 5 of /sdlc-brownfield — either the project default or the
->   user's `skip` fallback of `opus-plus-flash`>` — accept, or name another on-disk policy
->   for this run only. To change the project's persistent default, abort and re-run the
->   command; the pre-Gate-0 mini-gate will offer to launch the browser console.
+> - **Policy:** `<the default_policy field setup wrote to .sdlc/project.json>` — accept, or
+>   name another on-disk policy for this run only (e.g. `opus-only`). To change the project's
+>   persistent default, re-run setup (`node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs"`
+>   — this is the one command that opens a browser; every other setup step is terminal-only).
 > - **Existing AI setup:** `<verbatim list from Tier 1 group 6>` — is any of this
 >   authoritative and off-limits? **(default: OFF-LIMITS, do not touch)**
 > - **Intent:** `<intent picked in step 4a of /sdlc-brownfield>`

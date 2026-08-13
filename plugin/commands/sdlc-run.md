@@ -126,46 +126,19 @@ Unless the user says otherwise:
 
 Tell the user both paths. If `./src` already contains files, say so and ask before writing into it.
 
-# 4. Resolve project policy (may open the browser once)
+# 4. Show what will run
 
-Read the current project default:
+State the routing plainly, as fact. Read the policy name written by setup:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only
 ```
 
-Two cases:
+This prints the `default_policy` field setup wrote to `.sdlc/project.json`. If the output is
+empty, setup wasn't run for this project — stop and tell the user to run setup first
+([SETUP.md](../../SETUP.md), §5b). Do not proceed to spend anything without a policy the user
+has explicitly picked or explicitly kept as the shipped default.
 
-**Case A — the command prints a policy name.** The user has already picked a default for this
-project. Use that name. Continue to step 5.
-
-**Case B — the command prints an empty line.** No project default is set. Do NOT silently fall
-back to `opus-plus-flash`. Run this mini-gate verbatim and wait for a reply:
-
-> **No routing policy is set for this project.** Configure it now?
->
-> - `yes` — I'll start the policy console (browser page at `http://localhost:3000`) so you can
->   pick per-phase models and thinking tiers. Save in the browser, then press Enter here to
->   continue. The choice is written to `.sdlc/project.json` and every future `/sdlc-run` in
->   this repo will use it.
-> - `skip` — proceed with the shipped default `opus-plus-flash` for this run only. You can
->   set a project default later by re-running setup.
-
-On `yes`, invoke the interactive shepherd flow:
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs"
-```
-
-This is the only moment the wizard opens a browser. Everything before and after runs in the
-terminal. Loopback-only (`127.0.0.1`), telemetry-disabled. When the script returns, re-read via
-`--print-only` and use that name.
-
-On `skip`, use `opus-plus-flash` and write nothing to `project.json` — a skip should not persist.
-
-# 5. Show what will run
-
-State the routing plainly, as fact. Read it from the policy rather than reciting it from memory.
 Load `${CLAUDE_PLUGIN_ROOT}/config/policies/<resolved-name>.yaml`.
 
 Report, in a short list:
@@ -208,7 +181,7 @@ Offer to continue on `opus-only` instead, which routes every phase to Claude and
 credentials — and say plainly that it costs more, because the cost saving comes precisely from the
 phases that would have gone to the cheaper model.
 
-# 6. Choose the telemetry mode, out loud
+# 5. Choose the telemetry mode, out loud
 
 The run records tokens and cost in one of two modes. Present the choice; do not decide silently.
 
@@ -224,7 +197,7 @@ approximations, so do not publish them as measurements.
 Then confirm the whole plan in one short summary — brief, output paths, policy, telemetry mode —
 and get a yes before starting. This is the last free moment; everything after it costs money.
 
-# 7. Run
+# 6. Run
 
 Invoke the `orchestrator` subagent with the resolved settings from the steps above:
 
@@ -238,7 +211,7 @@ The orchestrator pauses at four approval gates: after requirements, after design
 review, and before final acceptance. Relay each gate to the user as it arrives; do not answer them
 on the user's behalf.
 
-# 8. Report
+# 7. Report
 
 When the run finishes, show:
 - tokens per phase, split into cached input, fresh input, and output
