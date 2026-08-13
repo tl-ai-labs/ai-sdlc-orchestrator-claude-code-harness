@@ -1,23 +1,37 @@
 # Policy console
 
-A local web app for choosing and customizing an AI-SDLC routing policy — which model runs each
-phase, and (new) thinking capacity per phase. Reads and writes real files in
+A local web page for choosing and customizing an AI-SDLC routing policy — which model runs each
+phase, and thinking capacity per phase. Reads and writes real files in
 [plugin/config/policies/](../config/policies/). See
 [docs/specs/custom-policy-and-thinking-config.md](../../docs/specs/custom-policy-and-thinking-config.md)
 for the full spec.
 
+## What is this
+
+One HTML page + a ~350-line Node http server. No framework, no build step, one npm dep (`yaml`).
+
+| File | Role |
+|---|---|
+| `index.html` | The entire UI. Inline CSS + vanilla JS. Renders a gallery of existing policies and an editor that customizes any base policy into a new saved one. |
+| `policy-server.mjs` | Tiny http server. Serves the HTML, exposes `GET /api/policies`, `POST /api/preview`, `POST /api/save`. Bound to 127.0.0.1 on a caller-chosen port. |
+| `package.json` | One dep: `yaml`. First-time only `npm install` is ~1 second. |
+
 ## Run it
+
+You do not normally run this directly. `plugin/scripts/setup-policy.mjs` (called by the shepherd
+during setup, and by the `/sdlc:policy change` command later) starts the server on the first free
+port ≥3000, opens your browser, and writes the picked/authored policy name to
+`.sdlc/project.json.default_policy` in the current project.
+
+Direct invocation for local development:
 
 ```bash
 cd plugin/policy-console
 npm install
-npm run dev
+node policy-server.mjs --port 3000
 ```
 
-Open `http://localhost:3000`. Pick an existing policy to customize, or add a new one. The
-thinking-tier picker sits next to each phase's model dropdown and only offers the tiers that
-model's real vendor API supports — see below. Saving always writes a new named file — the two
-shipped presets (`opus-only`, `opus-plus-flash`) are never modified.
+Open `http://127.0.0.1:3000`.
 
 ## Thinking tiers are per model — two different real vendor parameters
 
@@ -42,16 +56,7 @@ the recommended starting point for coding/agentic work. This console writes it a
 `reasoning.effort` (not `reasoning.tier`) so a saved rule always names the field its target model's
 adapter will eventually need to read.
 
-This took three passes to get right, worth recording so it isn't re-litigated: an early draft
-invented `effort: off/low/high/max` with no real backing; the fix at the time was showing "Not
-available" for Opus because `@anthropic-ai/sdk`'s `ThinkingConfigParam` (the `thinking` object)
-genuinely has no graded range; checking Anthropic's docs directly (rather than only the SDK's
-`thinking` types) surfaced `output_config.effort` as a separate, real, five-level parameter that
-was there all along. `minimal` is also a real, valid Gemini tier (confirmed by reading the
-installed `types.py`/`node.d.ts`) — an even earlier draft wrongly claimed it crashed the
-Antigravity worker.
-
-## Known gap: thinking capacity isn't wired to any adapter yet
+## Known gap: thinking capacity isn't wired to every adapter yet
 
 The console writes the chosen tier into the saved policy as `rules[].reasoning.tier` or
 `rules[].reasoning.effort`, per the table above. Today that value has **no effect on a real run**

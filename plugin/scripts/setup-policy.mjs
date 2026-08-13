@@ -2,11 +2,12 @@
 /**
  * Setup-time policy chooser. Invoked by the setup shepherd once per project.
  *
- * The console (plugin/policy-console) is a shared install-level Next.js app —
- * it doesn't know which project launched it. So this script does the coupling:
- * snapshot policies before → launch console + browser → wait for user to save →
- * diff to find the new/modified policy → write its name to the current project's
- * .sdlc/project.json as `default_policy`. Both /sdlc-run and /sdlc-brownfield
+ * The console (plugin/policy-console) is a shared install-level static HTML
+ * page served by a tiny Node http server — it doesn't know which project
+ * launched it. So this script does the coupling: snapshot policies before →
+ * launch server + browser → wait for user to save → diff to find the
+ * new/modified policy → write its name to the current project's
+ * .sdlc/project.json as `default_policy`. Both /sdlc:run and /sdlc:brownfield
  * read that field via session-hydrate.
  *
  * Flow is hybrid on purpose:
@@ -232,21 +233,20 @@ async function interactiveFlow(resolved, args) {
   const before = snapshotPolicies();
 
   if (!args.skipInstall && !existsSync(join(CONSOLE_DIR, "node_modules"))) {
-    log("running npm install in the policy console (first-time only)…");
-    const install = spawnSync("npm", ["install", "--silent"], { cwd: CONSOLE_DIR, stdio: "inherit" });
+    log("installing the policy console's one dep (yaml) — first-time only…");
+    const install = spawnSync("npm", ["install", "--omit=dev", "--no-audit", "--no-fund", "--silent"], {
+      cwd: CONSOLE_DIR,
+      stdio: "inherit",
+    });
     if (install.status !== 0) fail("npm install failed in the policy console.");
   }
 
   const port = await findFreePort(DEFAULT_PORT);
-  log(`starting policy console on http://localhost:${port} …`);
+  log(`starting policy console on http://127.0.0.1:${port} …`);
 
-  const server = spawn("npm", ["run", "dev", "--", "-H", "127.0.0.1", "-p", String(port)], {
+  const server = spawn("node", ["policy-server.mjs", "--host", "127.0.0.1", "--port", String(port)], {
     cwd: CONSOLE_DIR,
-    env: {
-      ...process.env,
-      BROWSER: "none",
-      NEXT_TELEMETRY_DISABLED: "1",
-    },
+    env: process.env,
     stdio: ["ignore", "ignore", "inherit"],
     detached: false,
   });
