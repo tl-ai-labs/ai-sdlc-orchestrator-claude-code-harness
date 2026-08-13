@@ -226,17 +226,24 @@ node ".../scripts/setup-policy.mjs" --print-only
 
 ## 6. Hand over
 
-State plainly what is installed, which policies are available given the credentials present, and
-tell the user which of the two task commands to run next:
+`verify-setup.mjs` from step 3 already prints a next-steps banner on success. State plainly what
+is installed, which policies are available given the credentials present, then deliver the banner
+verbatim so the user sees every command they can now use:
 
-- **`/sdlc:run`** — when the user is in an **empty folder** and wants the plugin to generate a
-  whole new application from a brief. Original greenfield flow.
-- **`/sdlc:brownfield`** — when the user is in an **existing repo** (any stack, any conventions)
-  and wants the plugin to do one of seven kinds of work: docs, bugfix, feature-extend,
-  feature-new, refactor, test, or deps.
+```
+✓ Setup complete for this project.
 
-Both take no arguments. Both ask for whatever they need. Pick the one that matches the folder the
-user is standing in.
+  Try one of these in a NEW session in the same folder:
+
+    /sdlc:run          — generate a new app from a brief (empty folder)
+    /sdlc:brownfield   — work on this existing repo (docs, bugfix, feature, refactor, …)
+    /sdlc:policy       — show / change this project's model policy
+    /sdlc:pass         — headless/scripted run (for CI or replays)
+    /sdlc:setup        — re-verify or re-configure this install any time
+```
+
+Pick the one that matches the folder the user is standing in — the two task commands
+(`/sdlc:run`, `/sdlc:brownfield`) take no arguments and ask for whatever they need.
 
 **Say this in the same breath: the command is not available in this session.** Claude Code builds
 its list of slash commands when a session starts, and nothing written to disk afterwards can add
