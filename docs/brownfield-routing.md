@@ -64,7 +64,7 @@ Flash can't solve a particular puzzle.
 
 ## How to configure
 
-Three ways to change routing:
+Four ways to change routing:
 
 1. **Do nothing** — `opus-plus-flash` loads out of the box on install. Requires an Anthropic
    API key + a Gemini API key (or GCP auth for the Vertex path).
@@ -72,13 +72,20 @@ Three ways to change routing:
    include `opus-only` (no Gemini needed, ~10× more per run). V1.5 will ship `ci-strict`
    (blocks writes unless `--allow-write`), `bedrock-claude-only`, `vertex-mixed`, and
    `self-hosted-only`.
-3. **Ship your own** — drop a `routing-policy.yaml` at repo root OR `.sdlc/policy.yaml`
-   (team-shared, committed). Point the tier names at whatever model IDs and endpoints you
-   want. Bedrock, Vertex, self-hosted — any provider the plugin's adapters know how to call.
+3. **Author a custom policy via the browser console** — the recommended path for new
+   customizations, and the one setup uses per project. `node .../scripts/setup-policy.mjs`
+   opens [plugin/policy-console/](../plugin/policy-console/) — a local Next.js UI for
+   per-phase model routing and thinking-tier picking — and on save writes the new named
+   YAML to `plugin/config/policies/` and records the choice in `.sdlc/project.json`. Full
+   spec: [docs/specs/custom-policy-and-thinking-config.md](specs/custom-policy-and-thinking-config.md).
+4. **Ship your own by hand** — drop a `routing-policy.yaml` at repo root OR
+   `.sdlc/policy.yaml` (team-shared, committed). Point the tier names at whatever model IDs
+   and endpoints you want. Bedrock, Vertex, self-hosted — any provider the plugin's adapters
+   know how to call.
 
 The policy loader precedence: `--policy <name>` flag wins, then `.sdlc/policy.yaml`, then
-`routing-policy.yaml` at repo root, then the shipped default. Gate 0 always shows which
-policy is active before the run starts.
+`routing-policy.yaml` at repo root, then `project.default_policy` from `.sdlc/project.json`,
+then the shipped default. Gate 0 always shows which policy is active before the run starts.
 
 ## Preflight refuses to start if the cheap tier isn't reachable
 

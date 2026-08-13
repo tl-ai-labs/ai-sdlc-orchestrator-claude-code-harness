@@ -142,6 +142,11 @@ filling in:
 
 - **Stack** — top-detected from `baseline.stacks`. Ask if it's right; accept overrides.
 - **Test command** — `baseline.test_command_proposed`. Accept an override.
+- **Policy** — resolve `project.default_policy` from session-hydrate; fall back to
+  `opus-plus-flash` if unset. Show as the default; accept, or accept an on-disk policy name
+  (e.g. `opus-only` or a saved custom one). To pick a different project default, direct the
+  user to re-run setup: `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs"` (opens the
+  browser console). Do not launch the console from Gate 0.
 - **Existing AI setup** — verbatim list from `baseline.ai_configs_detected`. Default is
   **OFF-LIMITS** for all of them. User can move any into the allowlist by naming it explicitly.
 - **Intent** — from step 4a. Re-confirm.

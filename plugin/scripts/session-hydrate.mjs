@@ -276,6 +276,7 @@ function main() {
       stacks: project.stacks ?? null,
       test_command: project.test_command ?? null,
       plugin_version_bounds: project.plugin_version_bounds ?? null,
+      default_policy: project.default_policy ?? null,
     } : null,
     baseline,
     recent_runs: recentRuns,

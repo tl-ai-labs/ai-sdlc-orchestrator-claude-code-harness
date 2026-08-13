@@ -105,6 +105,7 @@ Nine phases run under a Claude Code subagent (`orchestrator`) that reads a polic
 | Two Gemini doors | [plugin/mcp/gemini-flash-server/src/adapters/geminiTransports.ts](plugin/mcp/gemini-flash-server/src/adapters/geminiTransports.ts) |
 | Agent worker | [plugin/mcp/gemini-flash-server/worker/gemini_worker.py](plugin/mcp/gemini-flash-server/worker/gemini_worker.py) |
 | Policies | [plugin/config/policies/](plugin/config/policies/) |
+| Policy console (browser UI, per-project setup) | [plugin/policy-console/](plugin/policy-console/), [plugin/scripts/setup-policy.mjs](plugin/scripts/setup-policy.mjs) |
 | Pre-flight | [plugin/mcp/gemini-flash-server/src/preflight.ts](plugin/mcp/gemini-flash-server/src/preflight.ts) |
 | Telemetry | [plugin/mcp/gemini-flash-server/src/telemetry.ts](plugin/mcp/gemini-flash-server/src/telemetry.ts) |
 | Verify / repair | [plugin/scripts/verify-setup.mjs](plugin/scripts/verify-setup.mjs) |

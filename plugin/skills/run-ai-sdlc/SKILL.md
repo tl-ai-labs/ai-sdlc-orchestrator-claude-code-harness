@@ -301,6 +301,10 @@ non-terminal state and re-prompts on next `/sdlc-brownfield` invocation. No new 
 >
 > - **Stack:** `<top-detected stacks>` — correct? add/override?
 > - **Test command:** `<detected>` — enter to accept, or paste the command.
+> - **Policy:** `<project.default_policy from session-hydrate; falls back to opus-plus-flash>`
+>   — accept, or name another on-disk policy (e.g. `opus-only` or one you saved earlier).
+>   To pick a different default for this project, re-run setup:
+>   `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs"`.
 > - **Existing AI setup:** `<verbatim list from Tier 1 group 6>` — is any of this
 >   authoritative and off-limits? **(default: OFF-LIMITS, do not touch)**
 > - **Intent:** `<intent picked in step 4a of /sdlc-brownfield>`

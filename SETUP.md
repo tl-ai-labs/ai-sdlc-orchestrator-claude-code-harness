@@ -169,6 +169,49 @@ entitlement or a region that does not serve the model. Both first appear at the 
 delegated packet, once the premium phases are already billed. The probe is one trivial delegation,
 about two cents, and it is the only thing here that settles them.
 
+## 5b. Choose this project's default policy
+
+Per-project, not install-wide — a compliance-sensitive repo may want Opus everywhere while a
+side project runs on Flash. The choice is stored in `.sdlc/project.json.default_policy` in the
+current repo and picked up by every subsequent `/sdlc-run` or `/sdlc-brownfield` in that
+folder. Applies equally to greenfield and brownfield projects.
+
+**Cd into the project first**, then run:
+
+```bash
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/setup-policy.mjs | tail -1)"
+```
+
+The script:
+
+1. Starts the policy console (`plugin/policy-console/`, a local Next.js app) on the first free
+   port from 3000 upward. First run only, `npm install` inside that folder — subsequent runs
+   skip it.
+2. Opens the URL in the default browser (`open` on macOS, `xdg-open` on Linux). Pass
+   `--no-browser` on a headless machine and the URL prints instead.
+3. Waits at a `Press Enter when ready:` prompt while the user picks or authors a policy in the
+   console. Save always writes a new named YAML into `plugin/config/policies/` — the shipped
+   `opus-only` and `opus-plus-flash` presets are never overwritten.
+4. On Enter, diffs the policies directory against the pre-launch snapshot:
+   - one new or modified file → uses it silently
+   - zero or multiple → lists every on-disk policy and asks the user to type one
+5. Writes the chosen name to `.sdlc/project.json` and kills the dev server.
+
+Scripted / CI equivalent when the name is already known — no browser:
+
+```bash
+node ".../scripts/setup-policy.mjs" --policy=opus-plus-flash
+```
+
+To inspect the current project's saved default:
+
+```bash
+node ".../scripts/setup-policy.mjs" --print-only
+```
+
+If the step is skipped, both pipelines fall back to `opus-plus-flash`. Users who prefer that
+default in every project can skip this step entirely.
+
 ## 6. Hand over
 
 State plainly what is installed, which policies are available given the credentials present, and

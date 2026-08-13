@@ -128,9 +128,10 @@ Tell the user both paths. If `./src` already contains files, say so and ask befo
 
 # 4. Show what will run
 
-State the routing plainly, as fact. Read it from the policy rather than reciting it from memory:
-the default policy is `opus-plus-flash`, loaded from
-`${CLAUDE_PLUGIN_ROOT}/config/policies/opus-plus-flash.yaml`.
+State the routing plainly, as fact. Read it from the policy rather than reciting it from memory.
+Resolve which policy to load in this order: `project.default_policy` from session-hydrate
+(the per-project choice saved by setup), otherwise `opus-plus-flash`. Load the file at
+`${CLAUDE_PLUGIN_ROOT}/config/policies/<name>.yaml`.
 
 Report, in a short list:
 - which model handles the judgment phases — requirements, design, task planning, senior review,
@@ -161,8 +162,10 @@ design and task planning are billed to the premium tier. Say that in one sentenc
 cents, and it exits 0 or names the cause in words. If they decline, continue; the run is not
 blocked on it.
 
-This first version runs the default policy. It is not configurable from this command; a user who
-needs different routing edits the policy file directly.
+This command runs whatever `project.default_policy` resolves to. To change it for this project,
+the user re-runs setup — `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs"` opens the
+browser-based policy console and writes the new choice to `.sdlc/project.json`. Do not launch
+the console from this flow; setup owns it.
 
 If step 1 reported missing Gemini credentials, say so here and explain the consequence in one
 sentence: the mechanical phases cannot dispatch, so the run would fail at the first codegen packet.
@@ -192,7 +195,7 @@ Invoke the `orchestrator` subagent with the resolved settings from the steps abo
 
 - `brief_path` — the confirmed brief
 - `auth_mode` — `vendor` or `estimated`, as confirmed in step 5
-- `policy` — `opus-plus-flash`, or `opus-only` if chosen in step 4
+- `policy` — the resolved policy name from step 4 (`project.default_policy` or `opus-plus-flash`)
 - `code_dir` — `./src`
 - `output_dir` — `./.sdlc`
 
