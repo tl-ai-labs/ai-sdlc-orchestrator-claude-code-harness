@@ -50,12 +50,18 @@ function parseArgs(argv) {
   return out;
 }
 
-function findRepoRoot() {
+/**
+ * Where does `.sdlc/` belong? Preferably the git top-level so teammates who
+ * clone the repo inherit the policy choice via the committed `project.json`.
+ * But two real cases have no git: a fresh empty greenfield folder before
+ * `git init`, and a brownfield project someone cloned then `rm -rf .git`-ed.
+ * Both should still work — fall back to cwd. Returns { root, hasGit } so
+ * write flows can surface a transparency note when they fell back.
+ */
+function resolveProjectRoot() {
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
-  if (r.status !== 0) {
-    fail("not inside a git repository — setup requires one so .sdlc/ can be committed.");
-  }
-  return r.stdout.trim();
+  if (r.status === 0) return { root: r.stdout.trim(), hasGit: true };
+  return { root: process.cwd(), hasGit: false };
 }
 
 function fail(msg) {
@@ -193,25 +199,35 @@ async function pickPolicyName(existing) {
 
 // ── main flows ───────────────────────────────────────────────────────
 
-async function scriptedFlow(policyName, repoRoot) {
+async function scriptedFlow(policyName, resolved) {
   const existing = listPolicies();
   if (!existing.includes(policyName)) {
     fail(`policy "${policyName}" not found in ${POLICIES_DIR}. Available: ${existing.join(", ")}`);
   }
-  const path = saveDefaultPolicy(repoRoot, policyName);
+  if (!resolved.hasGit) noteGitFallback(resolved.root);
+  const path = saveDefaultPolicy(resolved.root, policyName);
   log(`wrote default_policy="${policyName}" to ${path}`);
 }
 
-async function printOnlyFlow(repoRoot) {
-  const existing = readProjectJson(join(repoRoot, ".sdlc"));
+async function printOnlyFlow(resolved) {
+  const existing = readProjectJson(join(resolved.root, ".sdlc"));
   const name = existing.default_policy ?? null;
   process.stdout.write((name ?? "") + "\n");
 }
 
-async function interactiveFlow(repoRoot, args) {
+function noteGitFallback(root) {
+  process.stderr.write(
+    `setup-policy: not inside a git repository — writing to ${join(root, ".sdlc", "project.json")}. ` +
+    `Once you 'git init' and commit .sdlc/project.json, teammates who clone the repo will inherit ` +
+    `the policy choice.\n`,
+  );
+}
+
+async function interactiveFlow(resolved, args) {
   if (!existsSync(CONSOLE_DIR)) {
     fail(`policy console not found at ${CONSOLE_DIR}.`);
   }
+  if (!resolved.hasGit) noteGitFallback(resolved.root);
 
   const before = snapshotPolicies();
 
@@ -224,9 +240,13 @@ async function interactiveFlow(repoRoot, args) {
   const port = await findFreePort(DEFAULT_PORT);
   log(`starting policy console on http://localhost:${port} …`);
 
-  const server = spawn("npm", ["run", "dev"], {
+  const server = spawn("npm", ["run", "dev", "--", "-H", "127.0.0.1", "-p", String(port)], {
     cwd: CONSOLE_DIR,
-    env: { ...process.env, PORT: String(port), BROWSER: "none" },
+    env: {
+      ...process.env,
+      BROWSER: "none",
+      NEXT_TELEMETRY_DISABLED: "1",
+    },
     stdio: ["ignore", "ignore", "inherit"],
     detached: false,
   });
@@ -279,18 +299,18 @@ async function interactiveFlow(repoRoot, args) {
     chosen = await pickPolicyName(candidates);
   }
 
-  const path = saveDefaultPolicy(repoRoot, chosen);
+  const path = saveDefaultPolicy(resolved.root, chosen);
   log(`wrote default_policy="${chosen}" to ${path}`);
   cleanup();
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const repoRoot = findRepoRoot();
+  const resolved = resolveProjectRoot();
 
-  if (args.printOnly) return printOnlyFlow(repoRoot);
-  if (args.policy) return scriptedFlow(args.policy, repoRoot);
-  return interactiveFlow(repoRoot, args);
+  if (args.printOnly) return printOnlyFlow(resolved);
+  if (args.policy) return scriptedFlow(args.policy, resolved);
+  return interactiveFlow(resolved, args);
 }
 
 main().catch((e) => fail(e?.message ?? String(e)));
