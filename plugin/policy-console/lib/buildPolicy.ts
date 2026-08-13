@@ -1,6 +1,7 @@
 import { stringify as stringifyYaml } from "yaml";
 import {
   PHASES,
+  thinkingField,
   type ModelConfig,
   type Policy,
   type Rule,
@@ -47,7 +48,13 @@ export function buildCustomPolicy(
       use: input.routing[phase.id],
     };
     const tier = input.thinking[phase.id];
-    if (tier && tier !== "off") rule.reasoning = { tier };
+    if (tier && tier !== "off") {
+      const model = models.find((m) => m.id === input.routing[phase.id]);
+      // Which field the value is real for depends on the model it's routed
+      // to — Gemini's tier and Anthropic's effort are different request
+      // parameters, not two spellings of one thing (see thinkingField).
+      rule.reasoning = model && thinkingField(model) === "effort" ? { effort: tier as any } : { tier: tier as any };
+    }
     rules.push(rule);
   }
 

@@ -3,22 +3,25 @@
 // imported because that package builds to its own dist/ and this app has no
 // workspace link to it — keep the two in sync by hand if the schema changes.
 
-// The real vendor tier vocabulary, per adapter family:
+// The real vendor tier vocabulary, per adapter family — each sent via a
+// different real request field, checked against Anthropic's and Google's
+// live API docs (platform.claude.com/docs/en/build-with-claude/effort and
+// .../extended-thinking), not just SDK type files:
 //  - Gemini (@google/genai Node + google-genai Python, same ThinkingLevel
-//    enum): MINIMAL/LOW/MEDIUM/HIGH — a genuine graded range.
-//  - Anthropic (@anthropic-ai/sdk's ThinkingConfigParam, checked against the
-//    current 0.116.0 release — the repo's pinned 0.32.1 predates thinking
-//    entirely): no graded range. Just `enabled` with a numeric `budget_tokens`
-//    (a dial, not a level) or `adaptive` (Claude picks its own depth per
-//    call, not a fixed point on a scale). Opus genuinely supports thinking —
-//    but neither real mode is a discrete tier, so this console offers no
-//    picker for it (product decision) rather than one non-rangeable "auto"
-//    button. `adaptive` stays in the type so a hand-written policy using it
-//    still parses and displays correctly, even with no button to pick it.
-// "off" is this console's own label for "no reasoning block at all", not a
-// vendor value. There is no "max" — that was an invented label from an
-// earlier draft that didn't match any real API.
-export type Tier = "off" | "minimal" | "low" | "medium" | "high" | "adaptive";
+//    enum): MINIMAL/LOW/MEDIUM/HIGH, sent as `reasoning.tier` →
+//    `thinking.thinkingLevel`.
+//  - Anthropic: `claude-opus-4-7` (this repo's pinned model) rejects
+//    `thinking: {type: "enabled", budget_tokens}` outright (400 error —
+//    4.7+ models dropped manual-budget thinking). The real graded control
+//    for it is a separate top-level parameter, `output_config.effort`:
+//    low/medium/high(default)/xhigh/max — five real, documented levels,
+//    with Anthropic's own per-model guidance for Opus 4.7 specifically.
+//    Sent as `reasoning.effort`, not `reasoning.tier` — a different field
+//    because it's a genuinely different request parameter, not a synonym.
+// "off" is this console's own label for "no reasoning override sent", not a
+// vendor value — for Anthropic that means the API's own default (`high`)
+// applies untouched.
+export type Tier = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ModelPricing {
   input: number;
@@ -28,11 +31,9 @@ export interface ModelPricing {
 }
 
 export interface ReasoningConfig {
-  // "adaptive" is this console's addition, not yet reflected in
-  // plugin/mcp/gemini-flash-server/src/types.ts's ReasoningConfig — flag
-  // that file for the same update when Anthropic thinking gets wired there.
-  tier?: "minimal" | "low" | "medium" | "high" | "adaptive";
-  effort?: "off" | "low" | "high" | "max";
+  tier?: "minimal" | "low" | "medium" | "high";
+  // Anthropic's real output_config.effort values (platform.claude.com/docs/en/build-with-claude/effort).
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
   enabled?: boolean;
 }
 
@@ -94,29 +95,39 @@ export const PHASES: { id: string; label: string; note: string }[] = [
 ];
 
 export const GEMINI_TIERS: Tier[] = ["off", "minimal", "low", "medium", "high"];
-// Empty, not omitted: Anthropic has no graded range to offer (see the Tier
-// comment above) — this is a deliberate "nothing to pick" rather than an
-// unmapped adapter falling through the function's final `return []`.
-export const ANTHROPIC_TIERS: Tier[] = [];
+// Anthropic's real output_config.effort levels (low/medium/high/xhigh/max),
+// plus this console's own "off" meaning "don't send output_config at all".
+export const ANTHROPIC_EFFORT_TIERS: Tier[] = ["off", "low", "medium", "high", "xhigh", "max"];
 
 /**
  * Which tiers a model's real vendor API offers as a *graded range* — not
  * which ones our own adapters currently wire up (see
- * plugin/policy-console/README.md's known gap), and not every thinking mode
- * the vendor has (Anthropic's `adaptive` and numeric `budget_tokens` are
- * real but aren't a range, so Opus offers none here). Gemini's
- * `ThinkingLevel` enum (google-genai, both Node and Python packages) is
+ * plugin/policy-console/README.md's known gap). Gemini's `ThinkingLevel`
+ * enum (google-genai, both Node and Python packages) is
  * MINIMAL/LOW/MEDIUM/HIGH regardless of which door (flash-completion vs
- * flash-agsdk-worker) reaches it.
+ * flash-agsdk-worker) reaches it. Anthropic's `output_config.effort` is
+ * LOW/MEDIUM/HIGH/XHIGH/MAX and, per the docs, is available on
+ * `claude-opus-4-7` specifically (this repo's pinned Opus model).
  */
 export function thinkingSupport(model: ModelConfig): Tier[] {
   if (model.adapter === "mcp:gemini-flash-server" || model.adapter === "antigravity-worker") {
     return GEMINI_TIERS;
   }
   if (model.adapter === "builtin-anthropic") {
-    return ANTHROPIC_TIERS;
+    return ANTHROPIC_EFFORT_TIERS;
   }
   return [];
+}
+
+/**
+ * Which `reasoning` field a model's tier gets written under — Gemini's
+ * `thinkingLevel` lives inside the `thinking` config (`reasoning.tier`);
+ * Anthropic's `effort` is a separate top-level request parameter
+ * (`reasoning.effort`). Different fields because they're different real
+ * request parameters, not two names for the same thing.
+ */
+export function thinkingField(model: ModelConfig): "tier" | "effort" {
+  return model.adapter === "builtin-anthropic" ? "effort" : "tier";
 }
 
 /**
@@ -192,7 +203,7 @@ export function resolvePhaseThinking(policy: Policy, phaseId: string): Tier {
         : rule.when.phase
           ? [rule.when.phase]
           : [];
-      if (phases.includes(phaseId)) return rule.reasoning?.tier ?? "off";
+      if (phases.includes(phaseId)) return rule.reasoning?.tier ?? rule.reasoning?.effort ?? "off";
     }
   }
   return "off";
