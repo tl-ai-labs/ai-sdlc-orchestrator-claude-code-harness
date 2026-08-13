@@ -24,11 +24,12 @@ import { join } from "node:path";
 const SECTIONS = ["install", "environment", "repo-detection", "credentials", "repo-setup", "policy", "summary"];
 
 function parseArgs(argv) {
-  const out = { section: null, reset: false, allDone: false };
+  const out = { section: null, reset: false, allDone: false, projectRoot: null };
   for (const a of argv) {
     if (a === "--reset") out.reset = true;
     else if (a === "--all-done") out.allDone = true;
     else if (a.startsWith("--section=")) out.section = a.slice("--section=".length);
+    else if (a.startsWith("--project-root=")) out.projectRoot = a.slice("--project-root=".length);
   }
   return out;
 }
@@ -38,7 +39,14 @@ function fail(msg) {
   process.exit(1);
 }
 
-function resolveProjectRoot() {
+/**
+ * Same trust-the-caller pattern as write-provenance.mjs::resolveProjectRoot.
+ * The command layer knows which project the setup runs against; passing
+ * --project-root avoids the cwd-drift bug that landed .sdlc/local/setup-status.json
+ * in the plugin worktree instead of the target project.
+ */
+function resolveProjectRoot(explicit) {
+  if (explicit) return explicit;
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
   if (r.status === 0) return r.stdout.trim();
   return process.cwd();
@@ -66,7 +74,7 @@ function main() {
     fail("pass one of --section=<name>, --reset, or --all-done.");
   }
 
-  const path = statusPath(resolveProjectRoot());
+  const path = statusPath(resolveProjectRoot(args.projectRoot));
 
   if (args.reset) {
     writeStatus(path, {

@@ -41,12 +41,13 @@ const PORT_PROBE_MAX = 10;
 const SERVER_READY_TIMEOUT_MS = 30_000;
 
 function parseArgs(argv) {
-  const out = { policy: null, noBrowser: false, skipInstall: false, printOnly: false };
+  const out = { policy: null, noBrowser: false, skipInstall: false, printOnly: false, projectRoot: null };
   for (const a of argv) {
     if (a === "--no-browser") out.noBrowser = true;
     else if (a === "--skip-install") out.skipInstall = true;
     else if (a === "--print-only") out.printOnly = true;
     else if (a.startsWith("--policy=")) out.policy = a.slice("--policy=".length);
+    else if (a.startsWith("--project-root=")) out.projectRoot = a.slice("--project-root=".length);
   }
   return out;
 }
@@ -59,7 +60,8 @@ function parseArgs(argv) {
  * Both should still work — fall back to cwd. Returns { root, hasGit } so
  * write flows can surface a transparency note when they fell back.
  */
-function resolveProjectRoot() {
+function resolveProjectRoot(explicit) {
+  if (explicit) return { root: explicit, hasGit: existsSync(join(explicit, ".git")) };
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
   if (r.status === 0) return { root: r.stdout.trim(), hasGit: true };
   return { root: process.cwd(), hasGit: false };
@@ -332,7 +334,7 @@ async function interactiveFlow(resolved, args) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const resolved = resolveProjectRoot();
+  const resolved = resolveProjectRoot(args.projectRoot);
 
   if (args.printOnly) return printOnlyFlow(resolved);
   if (args.policy) return scriptedFlow(args.policy, resolved);

@@ -35,6 +35,7 @@ function parseArgs(argv) {
     else if (a.startsWith("--path=")) out.path = a.slice("--path=".length);
     else if (a.startsWith("--packet-id=")) out.packetId = a.slice("--packet-id=".length);
     else if (a.startsWith("--intent=")) out.intent = a.slice("--intent=".length);
+    else if (a.startsWith("--project-root=")) out.projectRoot = a.slice("--project-root=".length);
   }
   return out;
 }
@@ -43,7 +44,18 @@ function warn(msg) { process.stderr.write(`write-provenance: ${msg}\n`); }
 function log(msg) { process.stderr.write(`write-provenance: ${msg}\n`); }
 function failOpen(msg) { warn(msg); process.exit(0); }
 
-function resolveProjectRoot() {
+/**
+ * Where does per-run bookkeeping (`.sdlc/runs/<run-id>/provenance.json`) go?
+ * The command layer knows — it's the project the user is running against.
+ * That answer arrives here as `--project-root=<abs-path>`. When absent, fall
+ * back to `git rev-parse` from cwd, then cwd itself. The command-layer path
+ * is preferred because Bash cwd drifts across a session (an earlier `cd`,
+ * a helper that shells out) and git-toplevel-from-cwd will follow, quietly
+ * writing provenance into whichever git worktree the shell currently sits in.
+ * That's the SiteNotes bug — closed by always passing --project-root.
+ */
+function resolveProjectRoot(explicit) {
+  if (explicit) return explicit;
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
   if (r.status === 0) return r.stdout.trim();
   return process.cwd();
@@ -107,7 +119,7 @@ function main() {
   if (!args.mode) failOpen("no mode given (--init / --before / --after / --finalize)");
   if (!args.runId) failOpen("--run-id=<id> is required");
 
-  const root = resolveProjectRoot();
+  const root = resolveProjectRoot(args.projectRoot);
   const provPath = provenancePath(root, args.runId);
 
   if (args.mode === "init") {

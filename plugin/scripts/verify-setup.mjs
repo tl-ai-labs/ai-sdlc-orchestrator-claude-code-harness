@@ -930,6 +930,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const scope = process.argv.includes("--user") ? "user" : "project";
   const brownfieldCheck = process.argv.includes("--brownfield-check");
   const headless = process.argv.includes("--headless");
+  // --project-root=<abs-path> overrides process.cwd() when the caller (a
+  // /sdlc:* command file) has already resolved which project this run is
+  // against — see setup.md, policy.md. Passing it forward closes the cwd-drift
+  // hole between the command layer and any subsequent settings write.
+  const projectRootFlag = process.argv.find((a) => a.startsWith("--project-root="));
+  const projectRoot = projectRootFlag ? projectRootFlag.slice("--project-root=".length) : process.cwd();
 
   log("\nAI-SDLC orchestrator — setup check");
 
@@ -1008,7 +1014,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     // Only shown to model-path installs with the agent door open.
     agentPathAvailableHint(pluginRoot, observed.vertex, env),
     // Next-steps banner — only when everything upstream passed.
-    nextStepsBanner(process.cwd(), passed),
+    nextStepsBanner(projectRoot, passed),
   ]) {
     if (hint) log(hint);
   }
