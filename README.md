@@ -101,13 +101,13 @@ A Claude Code subagent (`orchestrator`) reads a policy YAML, decomposes the brie
 
 ```mermaid
 flowchart TD
-    User["You in a Claude Code session<br/><small>/sdlc:run · /sdlc:brownfield · /sdlc:pass</small>"]
-    Orch["orchestrator subagent<br/><small>reads policy YAML · decomposes into TaskPackets</small>"]
-    Anthropic["Anthropic (direct)<br/><small>Claude Opus — requirements, design,<br/>senior review, security review</small>"]
-    MCP["bundled MCP server<br/><small>routing · adapters · telemetry · cost<br/>mechanical: codegen · tests · docs</small>"]
-    GemModel["Gemini as a model<br/><small>AI Studio · Enterprise ADC<br/>one call per packet</small>"]
-    GemAgent["Gemini as an agent<br/><small>Antigravity SDK worker<br/>ADC only · tools + directory</small>"]
-    Out[".sdlc/ artifacts<br/><small>telemetry.jsonl · manifest.json ·<br/>provenance.json · generated code</small>"]
+    User["You in a Claude Code session<br/>/sdlc:run<br/>/sdlc:brownfield<br/>/sdlc:pass"]
+    Orch["orchestrator subagent<br/>reads policy YAML<br/>decomposes into TaskPackets"]
+    Anthropic["Anthropic (direct)<br/>Claude Opus<br/>requirements · design<br/>senior review · security"]
+    MCP["bundled MCP server<br/>routing · adapters<br/>telemetry · cost<br/>mechanical phases"]
+    GemModel["Gemini as a model<br/>one call per packet<br/>AI Studio or ADC"]
+    GemAgent["Gemini as an agent<br/>Antigravity SDK<br/>ADC only<br/>tools + directory"]
+    Out[".sdlc/ artifacts<br/>telemetry.jsonl<br/>manifest.json<br/>provenance.json<br/>generated code"]
 
     User --> Orch
     Orch -->|judgment| Anthropic
