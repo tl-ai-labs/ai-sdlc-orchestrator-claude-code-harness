@@ -1,5 +1,7 @@
 # Brief template
 
+> **For:** writing your own project brief in the section layout the pipeline expects. **Also see:** [tutorial-first-run.md](tutorial-first-run.md) · [running.md](running.md).
+
 `/sdlc:pass` reads the brief file at the path it is given. The
 requirements phase and the `architect` subagent expect the section headings
 listed below; the wording under each is up to the author.

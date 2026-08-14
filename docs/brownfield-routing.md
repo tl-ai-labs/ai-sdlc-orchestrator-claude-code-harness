@@ -1,5 +1,7 @@
 # Model-per-task routing
 
+> **For:** understanding which model runs each phase and why the mechanical tier can drop cost ~10×. **Also see:** [architecture.md](architecture.md) · [brownfield.md](brownfield.md).
+
 Where each kind of work runs. Explicit — because "which model handled this" is the top
 question when reviewing a run's cost, quality, or failure.
 

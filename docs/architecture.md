@@ -1,5 +1,7 @@
 # Architecture
 
+> **For:** engineers who want to understand how a request flows through the plugin end to end. **Also see:** [methodology.md](methodology.md) · [two-gemini-paths.md](two-gemini-paths.md) · [running.md](running.md).
+
 Reference for the pieces that make up the plugin, in the order a request flows through them: install surface, MCP server, routing, adapters, the two Gemini doors, the agent path, telemetry, auth modes, install routes.
 
 ## 1. Plugin surface

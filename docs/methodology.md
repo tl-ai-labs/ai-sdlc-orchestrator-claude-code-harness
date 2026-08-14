@@ -1,5 +1,7 @@
 # Methodology
 
+> **For:** understanding how tokens and costs are counted; choosing between vendor-authoritative and estimated modes. **Also see:** [understanding-output.md](understanding-output.md) · [two-gemini-paths.md](two-gemini-paths.md) · [architecture.md](architecture.md).
+
 How the tokens and costs on the report are derived, in plain terms.
 
 ## The mode determines everything

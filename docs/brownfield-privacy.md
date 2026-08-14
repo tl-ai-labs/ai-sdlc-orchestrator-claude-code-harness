@@ -1,5 +1,7 @@
 # Brownfield mode — data, privacy, compliance
 
+> **For:** compliance officers and regulated environments (SOC2, HIPAA, PCI). What leaves the machine per phase; on-prem routing; audit trail. **Also see:** [brownfield.md](brownfield.md) · [brownfield-write-contract.md](brownfield-write-contract.md) · [methodology.md](methodology.md).
+
 ## What data leaves the machine
 
 The plugin's per-phase data-exit profile:

@@ -1,5 +1,7 @@
 # Coexistence with other AI tools and existing tooling
 
+> **For:** teams already using Cursor, Aider, Copilot, custom MCP servers. **Also see:** [brownfield.md](brownfield.md) · [brownfield-write-contract.md](brownfield-write-contract.md).
+
 The plugin is a guest in a house that may already have residents. Cursor, Aider, GitHub
 Copilot, a custom internal MCP server, existing pre-commit hooks, existing CI, existing
 linters and formatters — all of these are things this plugin **coexists with, never replaces

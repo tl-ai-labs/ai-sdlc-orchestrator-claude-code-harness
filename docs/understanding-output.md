@@ -1,5 +1,7 @@
 # Understanding the output
 
+> **For:** reading `telemetry.jsonl`, `manifest.json`, `provenance.json`, and the cost report. **Also see:** [methodology.md](methodology.md) · [running.md](running.md).
+
 After a pass finishes, three things live under the run's output directory — `examples/<study-id>/passes/<run-id>/` for greenfield (`/sdlc:pass`, `/sdlc:run`), `.sdlc/runs/<YYYYMMDD-HHMMSS>-<intent>-<slug>/` for brownfield (`/sdlc:brownfield`, `/sdlc:pass --mode=brownfield`):
 
 - `telemetry.jsonl` — one JSON object per line, one line per LLM call. The raw data.

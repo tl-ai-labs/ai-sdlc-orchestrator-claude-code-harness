@@ -1,5 +1,7 @@
 # Brownfield mode — overview
 
+> **For:** running the plugin on an existing repo — Gate 0, the seven job types, the write contract. **Also see:** [brownfield-write-contract.md](brownfield-write-contract.md) · [brownfield-routing.md](brownfield-routing.md) · [brownfield-setup-issues.md](brownfield-setup-issues.md).
+
 The AI-SDLC Orchestrator plugin ships in two modes:
 
 - **Greenfield** (`/sdlc:run`) — generates a whole new application from a project brief into an

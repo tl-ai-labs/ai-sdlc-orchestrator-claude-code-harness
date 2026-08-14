@@ -1,5 +1,7 @@
 # Running
 
+> **For:** every `/sdlc:pass` flag; scripting a run for CI or replay. **Also see:** [tutorial-first-run.md](tutorial-first-run.md) · [brownfield.md](brownfield.md) · [troubleshooting.md](troubleshooting.md).
+
 This page is the reference for `/sdlc:pass` — the same run as `/sdlc:run` or `/sdlc:brownfield`, but with every setting exposed as a flag. Useful for repeat runs, for scripting, and for understanding what the interactive commands chose for you. If you installed the plugin, start with `/sdlc:run` (greenfield) or `/sdlc:brownfield` (existing repo) in a new session — Claude Code registers slash commands and starts plugin MCP servers only at session start, so the session that installed the plugin does not yet see them.
 
 Two policies ship with this repository. Pick one to start.

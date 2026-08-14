@@ -30,3 +30,8 @@ Rules for Claude Code sessions editing this repo. The full contributor guide is 
 - **No `Co-Authored-By:` trailers for AI assistants** in commit messages. See CONTRIBUTING.md.
 - **One topic per PR**, focused diff.
 - **Run `npm test` before you submit.** It is offline and free.
+
+## Deeper design context (not active work)
+
+- [docs/planning/docs-restructure-v2.md](docs/planning/docs-restructure-v2.md) — the Level 2 docs reorganization plan (renames into `tutorial/how-to/reference/concepts/` + hosted docs site). Not shipped. Consult when working on docs at scale, when someone asks about the info-architecture, or when the project's adoption warrants a hosted site.
+- [docs/brownfield-v1-planning/](docs/brownfield-v1-planning/) — the brownfield-v1 design ticket and full plan. Historical design scratch for a shipped milestone.

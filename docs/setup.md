@@ -1,5 +1,7 @@
 # Setup
 
+> **For:** setting up a fresh install, or adding a new provider. **Also see:** [tutorial-first-run.md](tutorial-first-run.md) · [running.md](running.md) · [troubleshooting.md](troubleshooting.md).
+
 Everything you need to prepare your machine for a run. Failure modes and repair commands are in [troubleshooting.md](troubleshooting.md).
 
 ## Prerequisites

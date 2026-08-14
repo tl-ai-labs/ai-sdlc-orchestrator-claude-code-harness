@@ -1,5 +1,7 @@
 # Troubleshooting
 
+> **For:** hitting an error and needing symptom → cause → fix. **Also see:** [setup.md](setup.md) · [brownfield-setup-issues.md](brownfield-setup-issues.md).
+
 Symptom → cause → fix. If the fix is a command, it is copy-paste-runnable.
 
 ## How to inspect what is happening

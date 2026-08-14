@@ -1,5 +1,7 @@
 # Brownfield setup-time issue inventory
 
+> **For:** hitting an install-time problem on brownfield mode; every known risk and its handling. **Also see:** [troubleshooting.md](troubleshooting.md) · [brownfield.md](brownfield.md).
+
 Every known risk that hits real users installing the plugin on real repos. Each gets
 **detection + clear message + inline choice** — the "handle ≠ solve" principle from the design
 plan (§22). Detect the problem, name it, offer the best available option; no elaborate solving

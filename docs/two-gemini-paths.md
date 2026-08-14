@@ -1,5 +1,7 @@
 # The two Gemini paths — measured comparison
 
+> **For:** choosing between Gemini as a model vs Gemini as an agent; the actual token / cost / wall-clock numbers on the same brief. **Also see:** [setup.md](setup.md) · [methodology.md](methodology.md) · [architecture.md](architecture.md).
+
 The `opus-plus-flash` policy can reach the mechanical tier as a model or as an agent. Same vendor, same model, same rates. This page records the numbers a single small brief produced down each door on the same machine, so the trade is a number rather than a claim.
 
 ## The two doors

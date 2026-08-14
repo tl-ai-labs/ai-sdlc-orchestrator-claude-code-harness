@@ -1,5 +1,7 @@
 # Brownfield write contract
 
+> **For:** understanding how the "never touch off-limits" guarantee is enforced at the tool boundary. **Also see:** [brownfield.md](brownfield.md) · [brownfield-privacy.md](brownfield-privacy.md).
+
 The plugin's promise for brownfield mode is: **nothing outside a confirmed file-scope gets
 touched.** This document explains how that promise is enforced and answers common "will this
 touch X?" questions.
