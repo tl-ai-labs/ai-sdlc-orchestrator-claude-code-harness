@@ -97,7 +97,34 @@ premium model.
 
 ## Architecture at a glance
 
-A Claude Code subagent (`orchestrator`) reads a policy YAML, decomposes the brief into TaskPackets, and dispatches each packet to the model the policy names. Greenfield runs nine phases; brownfield adds `discovery` and `change_plan` around the same core. Every dispatch goes through the bundled MCP server (`gemini-flash-server`), which owns adapters, credential discovery, telemetry, and cost accounting.
+A Claude Code subagent (`orchestrator`) reads a policy YAML, decomposes the brief into TaskPackets, and dispatches each packet to the model the policy names. Judgment phases (requirements, design, reviews) go direct to Anthropic; mechanical phases (codegen, tests, docs) go through the bundled MCP server, which owns adapters, credential discovery, telemetry, and cost accounting. Greenfield runs nine phases; brownfield adds `discovery` and `change_plan` around the same core.
+
+```mermaid
+flowchart TD
+    User["You in a Claude Code session<br/><small>/sdlc:run · /sdlc:brownfield · /sdlc:pass</small>"]
+    Orch["orchestrator subagent<br/><small>reads policy YAML · decomposes into TaskPackets</small>"]
+    Anthropic["Anthropic (direct)<br/><small>Claude Opus — requirements, design,<br/>senior review, security review</small>"]
+    MCP["bundled MCP server<br/><small>routing · adapters · telemetry · cost<br/>mechanical: codegen · tests · docs</small>"]
+    GemModel["Gemini as a model<br/><small>AI Studio · Enterprise ADC<br/>one call per packet</small>"]
+    GemAgent["Gemini as an agent<br/><small>Antigravity SDK worker<br/>ADC only · tools + directory</small>"]
+    Out[".sdlc/ artifacts<br/><small>telemetry.jsonl · manifest.json ·<br/>provenance.json · generated code</small>"]
+
+    User --> Orch
+    Orch -->|judgment| Anthropic
+    Orch -->|mechanical| MCP
+    MCP --> GemModel
+    MCP --> GemAgent
+    Anthropic --> Out
+    GemModel --> Out
+    GemAgent --> Out
+
+    classDef hero fill:#EFF2FA,stroke:#375A9D,stroke-width:2px,color:#111
+    class MCP,GemModel,GemAgent hero
+```
+
+The highlighted path is where cost drops — mechanical work routed off Opus into the cheaper tier. Which door the mechanical tier uses (model vs agent) is picked once at setup; both reach the same model at the same published rates. See [two Gemini paths](docs/two-gemini-paths.md) for the measured comparison.
+
+Full inventory:
 
 | Piece | File |
 |---|---|
