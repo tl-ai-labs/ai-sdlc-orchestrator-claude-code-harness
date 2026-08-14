@@ -64,24 +64,26 @@ Flash can't solve a particular puzzle.
 
 ## How to configure
 
-Four ways to change routing:
+Five ways to change routing:
 
 1. **Do nothing** — `opus-plus-flash` loads out of the box on install. Requires an Anthropic
-   API key + a Gemini API key (or GCP auth for the Vertex path).
-2. **Pick a different shipped policy** — pass `--policy <name>` at run start. Alternatives
-   include `opus-only` (no Gemini needed, ~10× more per run). V1.5 will ship `ci-strict`
-   (blocks writes unless `--allow-write`), `bedrock-claude-only`, `vertex-mixed`, and
-   `self-hosted-only`.
-3. **Author a custom policy via the browser console** — the recommended path for new
-   customizations, and the one setup uses per project. `node .../scripts/setup-policy.mjs`
-   opens [plugin/policy-console/](../plugin/policy-console/) — a local Next.js UI for
-   per-phase model routing and thinking-tier picking — and on save writes the new named
-   YAML to `plugin/config/policies/` and records the choice in `.sdlc/project.json`. Full
-   spec: [docs/specs/custom-policy-and-thinking-config.md](specs/custom-policy-and-thinking-config.md).
-4. **Ship your own by hand** — drop a `routing-policy.yaml` at repo root OR
+   API key + a Gemini API key (or GCP auth for the Gemini Enterprise Agent Platform path).
+2. **`/sdlc:policy change`** — the everyday way. Opens the browser console, pick or author a
+   policy, saved to `.sdlc/project.json.default_policy`. Every subsequent run in this folder
+   uses it until changed again.
+3. **Pick a different shipped policy for one run** — pass `--policy <name>` to `/sdlc:pass`,
+   or type it at Gate 0 in `/sdlc:brownfield`. Alternatives include `opus-only` (no Gemini
+   needed, ~10× more per run). v1.5 will ship `ci-strict` (blocks writes unless
+   `--allow-write`), `bedrock-claude-only`, `vertex-mixed`, and `self-hosted-only`.
+4. **Author a custom policy in the browser console** — the recommended path for new
+   customizations, and the same console setup uses. `plugin/policy-console/` is a single HTML
+   page served by a tiny Node http server (~350 lines). On save it writes the new named YAML
+   to `plugin/config/policies/` and records the choice in `.sdlc/project.json`. Full spec:
+   [docs/specs/custom-policy-and-thinking-config.md](specs/custom-policy-and-thinking-config.md).
+5. **Ship your own by hand** — drop a `routing-policy.yaml` at repo root OR
    `.sdlc/policy.yaml` (team-shared, committed). Point the tier names at whatever model IDs
-   and endpoints you want. Bedrock, Vertex, self-hosted — any provider the plugin's adapters
-   know how to call.
+   and endpoints you want. Bedrock, Gemini Enterprise Agent Platform, self-hosted — any
+   provider the plugin's adapters know how to call.
 
 The policy loader precedence: `--policy <name>` flag wins, then `.sdlc/policy.yaml`, then
 `routing-policy.yaml` at repo root, then `project.default_policy` from `.sdlc/project.json`,

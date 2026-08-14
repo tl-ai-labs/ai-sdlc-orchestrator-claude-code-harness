@@ -6,9 +6,11 @@ Symptom → cause → fix. If the fix is a command, it is copy-paste-runnable.
 
 | Command | What it tells you |
 |---|---|
-| `/plugin` (inside Claude Code) | Which plugins are installed and enabled. |
+| `/sdlc:setup` (inside Claude Code) | Re-verify and re-configure this project. Rebuilds the MCP server, re-checks credentials, prints one line per completed step, pauses only on missing credentials or when a decision is needed. The first command to reach for. |
+| `/sdlc:policy` | Which policy this project uses and when it was set. `/sdlc:policy change` opens the browser to change it. |
+| `/plugin` | Which plugins are installed and enabled. |
 | `claude --debug` | Prints the plugin's env pass-through, MCP handshake, and tool invocations. |
-| `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs \| tail -1)"` | Full offline check. Reports blocking (`✗`) and warning (`!`) findings, plus fix commands. |
+| `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs \| tail -1)"` | Full offline check. Reports blocking (`✗`) and warning (`!`) findings, plus fix commands. `/sdlc:setup` wraps this. |
 | `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/probe-agent-worker.mjs \| tail -1)"` | One real Antigravity delegation, ~2¢. Only cheap way to confirm entitlement, region, and credential liveness. |
 
 From a clone:
@@ -59,8 +61,8 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 | `gemini-credentials` warning, nothing else set | No Gemini door open. Claude-only policies still run. | Either `gcloud auth application-default login`, or export `GEMINI_API_KEY`. |
 | `gemini-credentials` warning, only `GOOGLE_CLOUD_PROJECT` set | A project ID is where to bill, not who is asking. Works inside Google Cloud (the metadata server supplies the credential); fails on a laptop. | Add a real credential: `gcloud auth application-default login`, or set `GOOGLE_APPLICATION_CREDENTIALS` to a complete service-account key. On a Cloud-hosted machine, settle for ~2¢ with `probe-agent-worker.mjs`. |
 | `gemini-credentials-broken` (blocking) | `GOOGLE_APPLICATION_CREDENTIALS` points at a file that is missing, truncated, or has no recognizable `type` field. An explicit `GOOGLE_APPLICATION_CREDENTIALS` outranks the gcloud ADC file, so a broken one hides a working login. | Point it at a complete service-account key, or unset it and rely on `gcloud auth application-default login`. |
-| Gemini call throws about `${GOOGLE_CLOUD_PROJECT}` as a project id | The variable arrived unexpanded and reached a code path that didn't strip it. Should not happen since 2026-08-04. | Update to the current plugin version. If it persists, file an issue with the `verify-setup.mjs` output. |
-| Reported Gemini cost feels ~10% low | `GOOGLE_CLOUD_LOCATION` is a region name (anything other than `global`). Vertex bills regional endpoints +10% on Gemini 3+, effective 2026-07-01. | Expected: the plugin applies the surcharge to the reported cost automatically. Unset the variable to hit the flat global endpoint. |
+| Gemini call throws about `${GOOGLE_CLOUD_PROJECT}` as a project id | The variable arrived unexpanded and reached a code path that didn't strip it. Fixed in the current plugin version. | Update to the current plugin version. If it persists, file an issue with the `verify-setup.mjs` output. |
+| Reported Gemini cost feels ~10% low | `GOOGLE_CLOUD_LOCATION` is a region name (anything other than `global`). Gemini Enterprise Agent Platform (formerly Vertex AI) bills regional endpoints +10% on Gemini 3+, effective 2026-07-01. | Expected: the plugin applies the surcharge to the reported cost automatically. Unset the variable to hit the flat global endpoint. |
 | `GEMINI_BACKEND=<something>` throws | Only `vertex` and `api-key` are accepted. | Set one of those two, or unset it to let credentials decide. |
 
 ## Antigravity SDK (agent path)
@@ -97,9 +99,33 @@ Recorded on the same brief: model path 43k / 34k tokens for $0.84 wall-clock 28 
 | Generated app fails to boot in tests with `Config validation error: "X" is required` | `.env.test` is missing keys the codegen's own `ConfigModule` demands. | Do not patch `.env` by hand — build a debug packet routed to `codegen` to add the keys with schema-valid values. See [plugin/skills/run-ai-sdlc/SKILL.md](../plugin/skills/run-ai-sdlc/SKILL.md). |
 | Tests fail at load time on env vars, but `.env.test` looks complete | `.env.test` exists and `.env` does not — the orchestrator copies one to the other before `npm test`. If `.env` already existed it is not overwritten. | Delete a stale `.env`, or update it to match `.env.test`. |
 
+## Policy
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `/sdlc:run` or `/sdlc:brownfield` refuses to start with "no default policy set" | `.sdlc/project.json` has no `default_policy` — either Skip was chosen at setup time, or the file has not been written yet. | `/sdlc:policy change` (opens the browser console) or `/sdlc:policy --policy=opus-plus-flash` (silent set). |
+| `/sdlc:policy` prints nothing / an empty line | Same as above — no policy set. | Same fix. |
+| A one-off run needs a different policy | The setup-time default applies until changed. | Pass `--policy <name>` to `/sdlc:pass`, or type a different policy at Gate 0 in `/sdlc:brownfield`. Neither writes to `.sdlc/project.json`. |
+| The browser opens but nothing happens after Save | The console watches `plugin/config/policies/` via `fs.watch`. If the save didn't land in that directory (older console versions), the script eventually times out at 10 minutes idle. | Update the plugin (`/plugin update` then `/sdlc:setup`) and re-run `/sdlc:policy change`. |
+
+## Brownfield-specific
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `/sdlc:brownfield` refuses on a non-git folder | Brownfield requires a git repo — the write-contract and revert both need commit-level state. | `git init` first, or use `/sdlc:run` on an empty folder for greenfield. |
+| Gate 0 shows constant off-limits paths you did not add | Setup wrote `off_limits_default` (`.env*`, `.mcp.json`, `node_modules/**`, etc.) to `.sdlc/project.json`. Gate 0 merges them with per-run additions before showing you the full list. | Expected. Edit `.sdlc/project.json.off_limits_default` if the project-wide default itself is wrong. |
+| A write-contract PreToolUse hook blocked an expected write | A path outside the allowlist, or a path in off-limits. Hook is HARD-BLOCK by default. | Add the path at Gate 0's File-scope question, or re-run with `--strict-write=off` to downgrade to WARN (defeats the safety guarantee). |
+| Want to undo the last brownfield run | Every brownfield run writes `provenance.json` under `.sdlc/runs/<run-id>/`. | `/sdlc:revert` (interactive picker) or `/sdlc:revert <run-id>`. |
+
 ## Repair after `/plugin update`
 
 An update re-copies the plugin from source, which removes the `dist/` and `node_modules/` produced by `--fix`. Re-run:
+
+```
+/sdlc:setup
+```
+
+Or, from a script:
 
 ```bash
 node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --fix

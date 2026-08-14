@@ -55,10 +55,17 @@ const SLOP_TERMS = [
 ];
 
 const THIRD_PERSON = [
-  /\bthe user should\b/i,
-  /\bthe user must\b/i,
-  /\bthe user can\b/i,
-  /\bthe user needs\b/i,
+  // Bare 'the user' in shipped docs, excluding possessive ("the user's ...")
+  // and compound-adjective use ("the user-facing docs"). Backtick-wrap the
+  // phrase (`the user`) when quoting the rule as an anti-example.
+  /\bthe user\b(?!['-])/i,
+  // "if user runs ..." — missing article, third-person.
+  /\bif user\b/i,
+  // First-person plural narrative voice: "we detect ...", "our runs check ...".
+  // Restricted to the small verb list that flagged the brownfield docs, so
+  // legitimate uses ("the two shipped are what the two shipped policies need")
+  // are not caught.
+  /\b(we|our)\s+(detect|tell|append|write|check|plan|see|found|do|read|run|wrote)\b/i,
 ];
 
 // User-facing docs to scan. Written explicitly rather than walked, so adding

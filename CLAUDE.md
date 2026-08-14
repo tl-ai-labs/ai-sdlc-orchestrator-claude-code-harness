@@ -23,7 +23,7 @@ Rules for Claude Code sessions editing this repo. The full contributor guide is 
 
 `npm test` runs `tools/test/style.test.mjs` which greps for the slop terms and third-person patterns above. Regressions fail the test.
 
-**Do-not-touch surfaces.** `SETUP.md` and everything under `plugin/{commands,agents,skills}/` are Claude-instruction files where "the user" is the correct third-person reference — the style test excludes them. Historical records (`docs/walkthroughs/`, `examples/*/passes/`) are also excluded.
+**Do-not-touch surfaces.** `SETUP.md` and everything under `plugin/{commands,agents,skills}/` are Claude-instruction files where `the user` is the correct third-person reference — the style test excludes them. Historical records (`docs/walkthroughs/`, `examples/*/passes/`) are also excluded.
 
 ## Other conventions
 

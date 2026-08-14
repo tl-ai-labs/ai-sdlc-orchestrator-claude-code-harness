@@ -17,12 +17,18 @@ Additional plugin content:
 
 | Path | Contents |
 |---|---|
-| [plugin/agents/](../plugin/agents/) | Subagents: `orchestrator`, `architect`, `senior-reviewer`, `security-reviewer`. |
-| [plugin/commands/run.md](../plugin/commands/run.md) | The two-prompt-flow entry point. Takes no arguments; asks for what it needs. |
-| [plugin/commands/pass.md](../plugin/commands/pass.md) | Every setting as a flag; the form used for scripting and repeat runs. |
+| [plugin/agents/](../plugin/agents/) | Subagents: `orchestrator`, `architect`, `senior-reviewer`, `security-reviewer`, `discovery` (brownfield only). |
+| [plugin/commands/run.md](../plugin/commands/run.md) | Greenfield two-prompt-flow entry point. Takes no arguments; asks for what it needs. |
+| [plugin/commands/pass.md](../plugin/commands/pass.md) | Every setting as a flag; the form used for scripting and repeat runs. Covers both greenfield and brownfield via `--mode=`. |
+| [plugin/commands/brownfield.md](../plugin/commands/brownfield.md) | Brownfield two-prompt-flow entry point. Picks an intent, adds Gate 0. |
+| [plugin/commands/revert.md](../plugin/commands/revert.md) | Reverts a brownfield run using `.sdlc/runs/<run-id>/provenance.json`. |
+| [plugin/commands/setup.md](../plugin/commands/setup.md) | Re-verify or re-configure the plugin for this project. Wraps `verify-setup.mjs` and `setup-policy.mjs`. |
+| [plugin/commands/policy.md](../plugin/commands/policy.md) | Show the active policy; `change` opens the browser console. |
 | [plugin/skills/run-ai-sdlc/](../plugin/skills/run-ai-sdlc/) | Skill body loaded by the orchestrator. |
 | [plugin/hooks/hooks.json](../plugin/hooks/hooks.json) | `PostToolUse` hook matching the MCP tool name under both install routes. |
-| [plugin/config/policies/](../plugin/config/policies/) | Two policy YAMLs. |
+| [plugin/config/policies/](../plugin/config/policies/) | Shipped policy YAMLs (`opus-only`, `opus-plus-flash`). |
+| [plugin/policy-console/](../plugin/policy-console/) | Single-page HTML console + tiny http server, used at setup to pick or author the per-project policy. |
+| `.sdlc/project.json` | Per-project state file. Fields: `default_policy` (name of the policy every run in this folder uses when `--policy` is not passed), `off_limits_default` (constant paths never touched by brownfield writes — merged with Gate 0 additions), `last_updated_at`, `schema_version: 2`. Written by `setup-policy.mjs` and consumed by every task command. |
 
 The hook matcher is a regex because the plugin route namespaces MCP tools with the plugin name (`mcp__plugin_sdlc_gemini-flash-server__execute_with_model`) while the clone route registers them bare (`mcp__gemini-flash-server__execute_with_model`). Both forms match.
 
@@ -90,7 +96,7 @@ Both live in [geminiTransports.ts](../plugin/mcp/gemini-flash-server/src/adapter
 | Door | Backend name | Auth | Env-var trigger |
 |---|---|---|---|
 | AI Studio | `api-key` | API key in an env var | `GEMINI_API_KEY` |
-| Vertex ADC | `vertex-adc` | Application Default Credentials | ADC file, `GOOGLE_APPLICATION_CREDENTIALS`, or `GOOGLE_CLOUD_PROJECT` |
+| Gemini Enterprise Agent Platform, formerly Vertex AI (ADC) | `vertex-adc` | Application Default Credentials | ADC file, `GOOGLE_APPLICATION_CREDENTIALS`, or `GOOGLE_CLOUD_PROJECT` |
 
 `selectGeminiBackend` precedence (pure function; unit-tested):
 
@@ -99,7 +105,7 @@ Both live in [geminiTransports.ts](../plugin/mcp/gemini-flash-server/src/adapter
 3. Any Vertex signal (`GOOGLE_APPLICATION_CREDENTIALS`, ADC file, or `GOOGLE_CLOUD_PROJECT`) → `vertex-adc`.
 4. Nothing → throw, naming both doors.
 
-**Regional surcharge.** `GOOGLE_CLOUD_LOCATION` defaults to `global`. Vertex bills non-global endpoints **+10%** on every token class for Gemini 3 and later, effective 2026-07-01. `applyVertexSurcharge` multiplies the policy's pinned rates at dispatch when the backend is `vertex-adc`, the location is not `global`, and the model family is `gemini-3+`. The `flash-agsdk-worker` leaf in `opus-plus-flash.yaml` deliberately does not pin `region:`, so both leaves follow the same env var and both hit the flat global endpoint by default.
+**Regional surcharge.** `GOOGLE_CLOUD_LOCATION` defaults to `global`. The platform bills non-global endpoints **+10%** on every token class for Gemini 3 and later, effective 2026-07-01. `applyVertexSurcharge` multiplies the policy's pinned rates at dispatch when the backend is `vertex-adc`, the location is not `global`, and the model family is `gemini-3+`. The `flash-agsdk-worker` leaf in `opus-plus-flash.yaml` deliberately does not pin `region:`, so both leaves follow the same env var and both hit the flat global endpoint by default.
 
 **Billed output tokens.** `billedOutputTokens(usage) = candidatesTokenCount + thoughtsTokenCount`. Gemini 3.x reports reasoning tokens in `thoughtsTokenCount` — a sibling of the candidate count, billed at the output rate. `cachedContentTokenCount`, by contrast, is a subset of `promptTokenCount` and is subtracted before pricing. Getting either wrong moves the headline number.
 

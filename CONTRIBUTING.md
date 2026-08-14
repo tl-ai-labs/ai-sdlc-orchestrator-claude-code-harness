@@ -1,21 +1,19 @@
 # Contributing
 
-Thanks for your interest in improving this study.
-
-## What contributions we welcome
+## In scope
 
 - **Bug fixes** in the setup wizard, report tool, or plugin code.
 - **Documentation improvements** — typos, unclear phrasing, additional troubleshooting entries.
-- **Additional policies** under `plugin/config/policies/`. If you add one, include a short comment header describing what it demonstrates and what keys it needs.
+- **Additional policies** under `plugin/config/policies/`. Include a short comment header describing what the policy demonstrates and what keys it needs.
 - **Portability fixes** for Windows/WSL, non-mac Linux distributions, or other environments.
 
-## What we would rather not merge without discussion first
+## Discuss first
 
 - Wholesale rewrites of the orchestrator agent or the state machine.
-- New model adapters — happy to review, but the two shipped are what the two shipped policies need. Additional adapters mean additional deps and additional maintenance surface.
-- Changes that add reporting or telemetry surface without adding a corresponding entry in `docs/methodology.md`.
+- New model adapters — review welcome, but the two shipped adapters cover the two shipped policies. Additional adapters add dependency weight and maintenance surface.
+- Changes that add reporting or telemetry surface without a corresponding entry in `docs/methodology.md`.
 
-Open an issue to discuss before writing a large PR — saves everyone time.
+Open an issue before writing a large PR.
 
 ## How to submit
 
@@ -62,6 +60,6 @@ The user-facing docs (`README.md`, `docs/*.md`, this file) and the source commen
 - Do not embed incident narratives ("this broke on 2026-08-04…") in the code. They belong in the commit message and the PR description.
 - The slop-word ban applies to comments and docstrings too.
 
-**Do-not-touch surfaces.** `SETUP.md` and everything under `plugin/{commands,agents,skills}/` are Claude-instruction files where "the user" is the correct third-person reference — describing what the user's experience should be to another agent that will drive it. The style test excludes these paths on purpose. Historical records (`docs/walkthroughs/`, `examples/*/passes/`) are also excluded.
+**Do-not-touch surfaces.** `SETUP.md` and everything under `plugin/{commands,agents,skills}/` are Claude-instruction files where `the user` is the correct third-person reference — those files describe what the user's experience should be to another agent that will drive it. The style test excludes these paths on purpose. Historical records (`docs/walkthroughs/`, `examples/*/passes/`) are also excluded.
 
 Claude Code sessions see the same rules in [CLAUDE.md](CLAUDE.md), which lives at the repo root so it loads automatically at session start.

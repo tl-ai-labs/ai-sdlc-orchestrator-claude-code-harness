@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue)](.claude-plugin/marketplace.json)
 
 ## What this is
 
@@ -10,7 +10,8 @@ A Claude Code plugin that runs an AI-SDLC pipeline against either a project brie
 generate a whole new app) or an existing repository (brownfield — extend the code you already
 have). Requirements → design → task planning → codegen → tests → docs → senior review → security
 review → debug. Four of the phases stop at human approval gates. Two Gemini doors — as a model
-(Vertex or AI Studio) or as an agent (Antigravity SDK) — reach the same mechanical tier. Two
+(Gemini Enterprise Agent Platform, formerly Vertex AI, or AI Studio) or as an agent (Antigravity
+SDK) — reach the same mechanical tier. Two
 auth modes — `vendor` (bills your Anthropic API key, reconciles to the dashboard) or
 `estimated` (subscription auth, char-count heuristic). Every telemetry event, every generated
 file, and the cost report land under the project directory. Nothing is uploaded off the machine.
@@ -52,10 +53,11 @@ Setup this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchest
 ```
 
 Claude Code follows [SETUP.md](SETUP.md): registers the marketplace, installs the plugin,
-builds the bundled MCP server, checks credentials, and asks whether to enable the Antigravity
-SDK agent path (only when Google Cloud credentials are present). For brownfield mode, add
-`--brownfield-check` to `verify-setup.mjs` and it also runs the additional Node/git/permission
-checks and the credential discovery scan.
+builds the bundled MCP server, checks credentials, asks whether to enable the Antigravity
+SDK agent path (only when Google Cloud credentials are present), and opens the browser once
+to pick this project's default model policy (or hit Save on `opus-plus-flash`). For brownfield
+mode, add `--brownfield-check` to `verify-setup.mjs` and it also runs the additional
+Node/git/permission checks and the credential discovery scan.
 
 **Prompt 2 — run.** Start a new session in the same folder, then whichever fits:
 
@@ -68,6 +70,14 @@ Both check the install, show which model each phase will run on, confirm the pla
 Gate 0 in brownfield), and only then start spending. Generated code lands where it should —
 `./src` for greenfield, the paths you confirmed at Gate 0 for brownfield. Telemetry, manifest,
 and cost report always land under `.sdlc/`.
+
+Three task-agnostic commands cover setup and per-project routing:
+
+```
+/sdlc:setup           # re-verify or re-configure (safe to re-run anytime)
+/sdlc:policy          # show the active policy; `/sdlc:policy change` opens the console
+/sdlc:pass            # headless / scripted run — every setting as a flag
+```
 
 The new session matters. Claude Code registers a plugin's slash commands and starts its MCP
 servers only when a session begins, so `/sdlc:run`, `/sdlc:brownfield`, and the bundled server
@@ -82,12 +92,12 @@ premium model.
 | Claude Code CLI | any | The plugin runs inside it. Install with `npm install -g @anthropic-ai/claude-code`. |
 | Shell | macOS, Linux, or WSL2 | The scripts are POSIX bash. |
 | Anthropic access | API key **or** Claude Code subscription | Every policy uses Opus for judgment phases. See [Providers](#providers). |
-| Google (Gemini) access | Vertex ADC, AI Studio key, or none | Needed only by the multi-model policy. Skip for `opus-only`. |
+| Google (Gemini) access | Gemini Enterprise Agent Platform ADC, AI Studio key, or none | Needed only by the multi-model policy. Skip for `opus-only`. |
 | Python | 3.10+ | Only if you enable the Antigravity SDK agent path. macOS ships 3.9, which is too old. |
 
 ## Architecture at a glance
 
-Nine phases run under a Claude Code subagent (`orchestrator`) that reads a policy YAML, decomposes the brief into TaskPackets, and dispatches each packet to the model the policy names. Every dispatch goes through the bundled MCP server (`gemini-flash-server`), which owns adapters, credential discovery, telemetry, and cost accounting.
+A Claude Code subagent (`orchestrator`) reads a policy YAML, decomposes the brief into TaskPackets, and dispatches each packet to the model the policy names. Greenfield runs nine phases; brownfield adds `discovery` and `change_plan` around the same core. Every dispatch goes through the bundled MCP server (`gemini-flash-server`), which owns adapters, credential discovery, telemetry, and cost accounting.
 
 | Piece | File |
 |---|---|
@@ -96,6 +106,7 @@ Nine phases run under a Claude Code subagent (`orchestrator`) that reads a polic
 | Orchestrator subagent | [plugin/agents/orchestrator.md](plugin/agents/orchestrator.md) |
 | Slash commands (greenfield) | [plugin/commands/run.md](plugin/commands/run.md), [plugin/commands/pass.md](plugin/commands/pass.md) |
 | Slash commands (brownfield) | [plugin/commands/brownfield.md](plugin/commands/brownfield.md), [plugin/commands/revert.md](plugin/commands/revert.md) |
+| Slash commands (setup / policy) | [plugin/commands/setup.md](plugin/commands/setup.md), [plugin/commands/policy.md](plugin/commands/policy.md) |
 | Discovery subagent (brownfield) | [plugin/agents/discovery.md](plugin/agents/discovery.md) |
 | Stack adapters | [plugin/skills/run-ai-sdlc/stacks/](plugin/skills/run-ai-sdlc/stacks/) |
 | Write-contract hook (brownfield) | [plugin/scripts/write-contract-check.mjs](plugin/scripts/write-contract-check.mjs) |
@@ -105,10 +116,11 @@ Nine phases run under a Claude Code subagent (`orchestrator`) that reads a polic
 | Two Gemini doors | [plugin/mcp/gemini-flash-server/src/adapters/geminiTransports.ts](plugin/mcp/gemini-flash-server/src/adapters/geminiTransports.ts) |
 | Agent worker | [plugin/mcp/gemini-flash-server/worker/gemini_worker.py](plugin/mcp/gemini-flash-server/worker/gemini_worker.py) |
 | Policies | [plugin/config/policies/](plugin/config/policies/) |
-| Policy console (browser UI, per-project setup) | [plugin/policy-console/](plugin/policy-console/), [plugin/scripts/setup-policy.mjs](plugin/scripts/setup-policy.mjs) |
+| Policy console (single-page browser UI + tiny http server, per-project setup) | [plugin/policy-console/](plugin/policy-console/), [plugin/scripts/setup-policy.mjs](plugin/scripts/setup-policy.mjs) |
+| Project state | `.sdlc/project.json` (per-project defaults: `default_policy`, `off_limits_default`) |
 | Pre-flight | [plugin/mcp/gemini-flash-server/src/preflight.ts](plugin/mcp/gemini-flash-server/src/preflight.ts) |
 | Telemetry | [plugin/mcp/gemini-flash-server/src/telemetry.ts](plugin/mcp/gemini-flash-server/src/telemetry.ts) |
-| Verify / repair | [plugin/scripts/verify-setup.mjs](plugin/scripts/verify-setup.mjs) |
+| Verify / repair | [plugin/scripts/verify-setup.mjs](plugin/scripts/verify-setup.mjs) (or use `/sdlc:setup`) |
 
 Details in [docs/architecture.md](docs/architecture.md).
 
@@ -129,7 +141,7 @@ The pipeline needs at least one Anthropic surface and, for the multi-model polic
 |---|---|---|
 | `GEMINI_API_KEY` | — | Get one at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey). |
 
-### Gemini as a model — Vertex (Application Default Credentials)
+### Gemini as a model — Gemini Enterprise Agent Platform, formerly Vertex AI (Application Default Credentials)
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -175,13 +187,17 @@ Full reference in [docs/understanding-output.md](docs/understanding-output.md).
 
 ## Verify or repair the install
 
-Re-run the setup check at any time. It reports what is ready, what is missing, and prints the exact command to fix each finding. Nothing is spent.
+Re-run the setup check at any time. `/sdlc:setup` is the everyday form — it rebuilds the MCP server, re-checks credentials, and pauses only when a human decision is needed:
+
+```
+/sdlc:setup
+```
+
+Also the repair after `/plugin update`, which re-copies the plugin from source and removes the build. The raw script still works if you need a scripted invocation:
 
 ```bash
 node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --fix
 ```
-
-`--fix` rebuilds the bundled MCP server. Also the repair after `/plugin update`, which re-copies the plugin from source and removes the build.
 
 ## Clone route
 

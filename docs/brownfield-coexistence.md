@@ -43,11 +43,11 @@ allowlist by editing Gate 0's proposal.
 
 ## v1.5 deep-parsing preview
 
-In v1.5 we plan to add:
+Planned for v1.5:
 
-- **Cursor** — parse `.cursor/rules/*.mdc` for `globs:` frontmatter. If any rule's glob
-  intersects the plugin's file scope for this run, print a warning at Gate 0 so you know your
-  Cursor autocomplete will fight the plugin's edits.
+- **Cursor** — parse `.cursor/rules/*.mdc` for `globs:` frontmatter. When any rule's glob
+  intersects the plugin's file scope for this run, print a warning at Gate 0 so Cursor
+  autocomplete does not silently fight the plugin's edits.
 - **Aider** — check `.aider.conf.yml` for `auto_commits: true`. If enabled, warn that running
   Aider alongside the plugin may tangle git history.
 - **Copilot** — read `.github/copilot-instructions.md` for length + basic content. Note at
@@ -56,7 +56,7 @@ In v1.5 we plan to add:
 - **Custom MCP servers** — parse `.mcp.json` server names and flag any that look generation-
   related (`codegen`, `gemini`, `openai`, `codellama`, etc.).
 - **`routing-policy.yaml` diff** — print the specific rules that differ between yours and the
-  plugin's default, so you know exactly what routing changes.
+  plugin's default, so the routing change is visible before the run starts.
 
 None of these are v1. In v1, presence detection + default off-limits is enough to guarantee
 safety.
@@ -82,26 +82,11 @@ The plugin coexists with your normal development tools too:
   does add CI, it deep-merges into existing files per the write-contract merge rules — never
   replaces.
 
-## What to do if you have concerns
+## Concerns and what to do
 
-- **"I use Cursor for autocomplete and the plugin edits src/ — will they fight?"**
-  In v1 they don't detect each other. Running both simultaneously (Cursor open while plugin
-  writes) may produce merge conflicts in Cursor. Recommend closing Cursor's edit session
-  during a plugin run, or using different branches.
-
-- **"I have a custom MCP server that also uses Gemini — will they compete?"**
-  No. Claude Code namespaces plugin MCP tools (`mcp__plugin_sdlc_...`).
-  Your MCP server keeps its own tool names. The plugin's dispatcher never calls your MCP —
-  it uses its own bundled server.
-
-- **"I have a `routing-policy.yaml` at repo root for other AI tooling."**
-  The plugin's policy loader will pick it up and honor it. Discovery surfaces this at Gate 0
-  so you know. If you want the plugin to use its shipped default instead, pass
-  `--policy opus-plus-flash` at run start.
-
-- **"My pre-commit hooks are strict (typecheck, format-check, security-scan) — will the
-  plugin's writes pass?"**
-  The plugin runs your project's own format command on written files before closing a packet
-  — so what lands is already formatted. Typecheck and security scan run at commit time if
-  `commit_strategy != none`; failures halt the plugin cleanly and print the error for you
-  to fix.
+| Concern | What actually happens | What to do |
+|---|---|---|
+| I use Cursor for autocomplete and the plugin edits `src/` — will they fight? | In v1 the two tools do not detect each other. Running both simultaneously (Cursor's edit session open while the plugin writes) can produce merge conflicts in Cursor. | Close Cursor's edit session during a plugin run, or run the plugin on a different branch. |
+| I have a custom MCP server that also uses Gemini — will they compete? | No. Claude Code namespaces plugin MCP tools (`mcp__plugin_sdlc_...`). Your MCP server keeps its own tool names. The plugin's dispatcher never calls your MCP — it uses the bundled server. | Nothing. |
+| I have a `routing-policy.yaml` at repo root for other AI tooling. | The plugin's policy loader picks it up and honors it. Discovery surfaces this at Gate 0 so the override is visible before the run starts. | To use the shipped default instead, pass `--policy opus-plus-flash` at run start, or write `.sdlc/project.json.default_policy` via `/sdlc:policy change`. |
+| My pre-commit hooks are strict (typecheck, format-check, security-scan) — will the plugin's writes pass? | The plugin runs the project's own format command on written files before closing a packet, so what lands is already formatted. Typecheck and security scan run at commit time when `commit_strategy != none`. | Failures halt the plugin cleanly and print the error. Fix, then re-run. |

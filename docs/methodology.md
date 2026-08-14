@@ -45,8 +45,6 @@ The numbers on this repo's public README were produced under **vendor-authoritat
 | Numbers on report | Match the Anthropic and Google dashboards for the API key used | Order-of-magnitude approximation of a vendor-billed run |
 | Recommended for | Publishing, cross-checking against the bill, Google-style audit | Casual runs, exploring the tool without an API key |
 
-The choice depends on the intended use.
-
 ## Cross-checking against the Anthropic dashboard
 
 To verify the report against reality:
@@ -88,7 +86,7 @@ Google's `usageMetadata` has two fields that look alike and behave in opposite w
 
 **`cachedContentTokenCount` is a *subset* of `promptTokenCount`.** The prompt count is the whole prompt, cached portion included. Cost is computed on disjoint counts — fresh input at the full rate, cached input at the read rate — so the cached count is subtracted from the prompt count before pricing. Skipping that subtraction bills the cached tokens twice and makes an effective cache look more expensive than no cache at all.
 
-**`thoughtsTokenCount` is a *sibling* of `candidatesTokenCount`.** Gemini 3.x reasons before it answers, and Google bills that reasoning at the output rate — but reports it outside the candidate count. Billed output is therefore `candidatesTokenCount + thoughtsTokenCount`. This is not a rounding correction: on a verification call against `gemini-3.5-flash` on 2026-08-04, one answer token came with 97 thinking tokens. Reading the candidate count alone would have reported 1 output token where Google billed 98, at the output tier's $9/M — understating precisely the model whose lower cost the multi-model pass exists to demonstrate.
+**`thoughtsTokenCount` is a *sibling* of `candidatesTokenCount`.** Gemini 3.x reasons before it answers, and Google bills that reasoning at the output rate — but reports it outside the candidate count. Billed output is therefore `candidatesTokenCount + thoughtsTokenCount`. This is not a rounding correction: a single-token answer from `gemini-3.5-flash` can come with ~100 thinking tokens. Reading the candidate count alone would report 1 output token where Google bills ~100, at the output tier's $9/M — understating precisely the model whose lower cost the multi-model pass exists to demonstrate.
 
 Two consequences worth knowing when reading a report:
 
@@ -97,7 +95,7 @@ Two consequences worth knowing when reading a report:
 
 ## Two doors to the mechanical tier, and how the report tells them apart
 
-`opus-plus-flash` declares two ways of reaching Gemini 3.5 Flash. The default calls it as a **model**: one request per packet, with the orchestrator reading the files and writing the answer back. The alternative runs it as an **agent** through the Antigravity SDK, working in the directory itself. Which one an install uses is chosen once, outside the policy file, by the setup wizard or by `--enable-agent` on the verify script — see [setup.md](setup.md#gemini-as-a-model-or-gemini-as-an-agent).
+`opus-plus-flash` declares two ways of reaching Gemini 3.5 Flash. The default calls it as a **model**: one request per packet, with the orchestrator reading the files and writing the answer back. The alternative runs it as an **agent** through the Antigravity SDK, working in the directory itself. Which one an install uses is chosen once, outside the policy file, by the setup wizard or by `--enable-agent` on the verify script — see [setup.md](setup.md#gemini-as-an-agent--antigravity-sdk).
 
 Both leaves declare the same `pricing:` block, because they reach the same model at the same published rates. That is deliberate, and it is the reason the vendor model name alone cannot tell you which one ran — `gemini-3.5-flash` appears on both. Two fields on every event carry the distinction:
 

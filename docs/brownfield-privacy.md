@@ -22,8 +22,8 @@ The plugin's per-phase data-exit profile:
   the allowlist at Gate 0)
 
 Enforcement: `plugin/scripts/dispatch-sanitize.mjs` runs a regex sweep on **every** dispatch
-input before it leaves the machine. Detected patterns → dispatch is refused, orchestrator
-surfaces the finding to the user. See the script for the 13 patterns it checks (all with
+input before it leaves the machine. Detected patterns → dispatch is refused, the orchestrator
+surfaces the finding in the run report. See the script for the 13 patterns it checks (all with
 very-low false-positive rates: known vendor prefixes, PEM key blocks, JWTs, etc.). It
 deliberately does NOT do broad "high-entropy string" matching — that would flag legitimate
 hashes and IDs, produce false alarms, and train users to bypass.
@@ -46,8 +46,8 @@ public model providers:
 
 - **AWS Bedrock** — configure a Bedrock-specific policy YAML (`bedrock-claude-only.yaml`
   ships in v1.5) mapping the plugin's tier names to Bedrock model IDs.
-- **Vertex AI (Google Cloud)** — same, via a `vertex-*.yaml` policy pointing at your GCP
-  project's Vertex endpoint.
+- **Gemini Enterprise Agent Platform, formerly Vertex AI (Google Cloud)** — same, via a
+  `vertex-*.yaml` policy pointing at your GCP project's endpoint.
 - **Self-hosted models** — any provider the plugin's adapters know about. Adding a new
   adapter is a plugin-level extension.
 
@@ -94,7 +94,7 @@ Every run produces:
 - **Gate answers** logged with each run.
 
 These are what a compliance officer asks for: "what data went where, when, at whose
-direction." `/sdlc-audit` (v1.5) exports these into a single `.sdlc/audit-export.md` +
+direction." `/sdlc:audit` (v1.5) exports these into a single `.sdlc/audit-export.md` +
 `.json` suitable for ingestion into your compliance tooling.
 
 ## Data locality guarantees
@@ -104,7 +104,7 @@ direction." `/sdlc-audit` (v1.5) exports these into a single `.sdlc/audit-export
 - Model calls go to whatever endpoint the active policy names.
 - **No call-home. No usage tracking. No analytics. Ever.**
 
-The plugin has no license-server ping, no anonymous telemetry, no crash reporting to us. If
+The plugin has no license-server ping, no anonymous telemetry, no crash reporting. If
 you disconnect from the network, it fails at the first model dispatch and does nothing else.
 
 ## Model input isolation across intents

@@ -14,7 +14,7 @@ Everything you need to prepare your machine for a run. Failure modes and repair 
 
 Claude Code launched from the desktop app does not inherit a login shell, so a variable exported in `~/.zshrc` or typed into a terminal is invisible to the plugin's MCP server. Two places do work:
 
-- **Nowhere — the Vertex ADC path.** `gcloud auth application-default login` writes a credentials file that the SDK reads directly. No environment variable is involved. This is the option to reach for first.
+- **Nowhere — the Application Default Credentials (ADC) path.** `gcloud auth application-default login` writes a credentials file that the SDK reads directly. No environment variable is involved. This is the option to reach for first with Gemini Enterprise Agent Platform (formerly Vertex AI).
 - **The `env` block of `~/.claude/settings.json`**, for anything that must be a variable — `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`. Claude Code reads that file at startup and passes the values through to the bundled server.
 
 The clone route also accepts a shell export because `claude` is launched from the same shell that wrote the export.
@@ -39,19 +39,21 @@ The pipeline reaches four surfaces. You need at least one Anthropic surface for 
 
 **Verify:** `verify-setup.mjs`. A key present is a deliberate local choice, so it outranks ambient Vertex credentials — use `GEMINI_BACKEND=vertex` to override.
 
-### Gemini as a model — Vertex (Application Default Credentials)
+### Gemini as a model — Enterprise Agent Platform (ADC) {#gemini-as-a-model--enterprise-agent-platform-adc}
+
+Gemini Enterprise Agent Platform (formerly Vertex AI) via Application Default Credentials.
 
 | Variable | Type | Default | Required when | Description |
 |---|---|---|---|---|
-| — | file | `~/.config/gcloud/application_default_credentials.json` | Vertex path | Written by `gcloud auth application-default login`. |
+| — | file | `~/.config/gcloud/application_default_credentials.json` | ADC path | Written by `gcloud auth application-default login`. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | path | — | service-account file | Full path to a service-account JSON. Outranks the gcloud ADC file. |
 | `GOOGLE_CLOUD_PROJECT` | string | project recorded inside the credentials file | account with more than one project | Billing project for Gemini calls. A project ID alone is not a credential. |
-| `GOOGLE_CLOUD_LOCATION` | string | `global` | pinning a region | Vertex bills non-global endpoints **+10%** on every token class for Gemini 3+, effective 2026-07-01. The plugin applies the surcharge to the reported cost automatically; the policy YAML pins the flat global rates and does not need to be edited. |
-| `GEMINI_BACKEND` | `vertex` \| `api-key` | auto-detected | forcing a door | Explicit override of the credential-precedence logic. |
+| `GOOGLE_CLOUD_LOCATION` | string | `global` | pinning a region | The platform bills non-global endpoints **+10%** on every token class for Gemini 3+, effective 2026-07-01. The plugin applies the surcharge to the reported cost automatically; the policy YAML pins the flat global rates and does not need to be edited. |
+| `GEMINI_BACKEND` | `vertex` \| `api-key` | auto-detected | forcing a door | Explicit override of the credential-precedence logic. `vertex` names the ADC door (kept for backward compatibility with the older product name). |
 
 **Verify:** `verify-setup.mjs`. On the default (unset region) the cost the plugin reports is the cost Google bills. Pin a region only when you need quota or latency the global endpoint cannot give you.
 
-**AI Studio vs Vertex precedence.** If both are present, the API key wins. Set `GEMINI_BACKEND=vertex` to force ADC.
+**AI Studio vs ADC precedence.** If both are present, the API key wins. Set `GEMINI_BACKEND=vertex` to force ADC.
 
 ### Gemini as an agent — Antigravity SDK
 
@@ -133,6 +135,31 @@ node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setu
 Two combinations are absent because they are not credential states. A variable that arrived as the literal `${NAME}` is reported separately as `env-placeholders` and treated as unset. Row 8 with a named project but no credential downgrades to `agent-worker-credentials-unproven` (warning), for the same reason row 5 does.
 
 What none of these rows tells you is whether a well-formed credential is still live, whether the project carries the Antigravity entitlement, or whether the region serves the model. Those need one real call — the probe above.
+
+## Per-project policy pick
+
+The one and only step in the whole flow that opens a browser. Every run in this folder — `/sdlc:run`, `/sdlc:brownfield`, `/sdlc:pass` without `--policy` — uses the policy picked here, unless the flag overrides it for one run.
+
+Written to `.sdlc/project.json.default_policy` in the current repo. Per-project, so a compliance-sensitive repo can pin Opus everywhere while a side project runs on Flash.
+
+On the plugin route, [SETUP.md](../SETUP.md) §5b puts the choice to you. Four options in this order:
+
+| Option | What happens | When to pick it |
+|---|---|---|
+| **Open the browser to author or customize a policy** | Starts `plugin/policy-console/` (a single HTML page served by a tiny Node http server) on the first free port from 3000, opens the browser, watches `plugin/config/policies/` via `fs.watch`. Clicking Save writes a new YAML and the script auto-detects the write. | Any non-preset policy — different thinking budgets per phase, custom model per task-type, a policy that pins a region. |
+| **`opus-plus-flash`** (recommended) | Silent set. Claude Opus for judgment phases, Gemini 3.5 Flash for mechanical (codegen, tests, docs). | The cost-efficient default. |
+| **`opus-only`** | Silent set. Claude Opus for every phase. | Single-model baseline, or when Gemini access is unavailable. |
+| **Skip** | Leaves `default_policy` unset. `/sdlc:run` and `/sdlc:brownfield` refuse to start until a policy is picked. | Almost never. Prefer picking `opus-plus-flash` and changing later. |
+
+Change the choice at any time from a running session:
+
+```
+/sdlc:policy           # show the current policy and when it was set
+/sdlc:policy change    # opens the browser console again
+/sdlc:policy --policy=opus-only    # silent set to a shipped preset
+```
+
+Prior runs' `provenance.json` records the policy that was in effect at run time; those are not rewritten when the default changes. Overriding a single run without touching the default: type a different policy name at Gate 0 in `/sdlc:brownfield`, or pass `--policy <name>` to `/sdlc:pass`.
 
 ## Install dependencies (clone route)
 
