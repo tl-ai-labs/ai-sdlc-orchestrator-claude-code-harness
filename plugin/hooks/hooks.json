@@ -1,9 +1,21 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "_comment": "Brownfield write contract: refuses Write/Edit outside the confirmed allowlist when brownfield mode is active. Silent no-op (allow) when .sdlc/local/write-contract.json is absent or its active flag is false, so greenfield /sdlc:run behavior is unchanged.",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/write-contract-check.mjs"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
-        "_comment": "Regex, not literal: Claude Code namespaces plugin MCP tools as mcp__plugin_multi-model-orchestrator_gemini-flash-server__..., while a clone's .mcp.json registers them bare as mcp__gemini-flash-server__.... Optional group matches both.",
-        "matcher": "mcp__(plugin_multi-model-orchestrator_)?gemini-flash-server__execute_with_model",
+        "_comment": "Regex, not literal: Claude Code namespaces plugin MCP tools as mcp__plugin_sdlc_gemini-flash-server__..., while a clone's .mcp.json registers them bare as mcp__gemini-flash-server__.... Optional group matches both.",
+        "matcher": "mcp__(plugin_sdlc_)?gemini-flash-server__execute_with_model",
         "hooks": [
           {
             "type": "command",

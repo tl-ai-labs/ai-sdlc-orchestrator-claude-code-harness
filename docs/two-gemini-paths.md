@@ -1,5 +1,7 @@
 # The two Gemini paths — measured comparison
 
+> **For:** choosing between Gemini as a model vs Gemini as an agent; the actual token / cost / wall-clock numbers on the same brief. **Also see:** [setup.md](setup.md) · [methodology.md](methodology.md) · [architecture.md](architecture.md).
+
 The `opus-plus-flash` policy can reach the mechanical tier as a model or as an agent. Same vendor, same model, same rates. This page records the numbers a single small brief produced down each door on the same machine, so the trade is a number rather than a claim.
 
 ## The two doors
@@ -61,13 +63,13 @@ Setup this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchest
 Then, in a new session:
 
 ```
-/sdlc-run
+/sdlc:run
 ```
 
 Pick Ping Service. It exercises every phase in minutes and costs roughly $0.84 on the model path. To reproduce the agent-path row, enable the agent before running:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
 ```
 
 Verify it took effect with `probe-agent-worker.mjs` (~2¢).

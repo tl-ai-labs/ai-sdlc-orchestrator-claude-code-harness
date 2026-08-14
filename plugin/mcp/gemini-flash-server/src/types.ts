@@ -13,7 +13,13 @@ export type Phase =
   | "senior_code_review"
   | "security_review"
   | "refactor"
-  | "final_report";
+  | "final_report"
+  // Brownfield additions (v1). Discovery is scoped to Tier 1 repo read;
+  // change_plan is the brownfield analog of architecture_design (delta doc
+  // rather than full subsystem design). Both routed to premium tier by
+  // default — see plugin/config/policies/*.yaml.
+  | "discovery"
+  | "change_plan";
 
 export interface FileSlice {
   path: string;
@@ -33,6 +39,13 @@ export interface TaskPacket {
   budget: { maxInputTokens: number; maxOutputTokens: number };
   retry_count?: number;
   pass_id: string;
+  /**
+   * Brownfield only. The repo-relative path this packet will write to.
+   * The MCP dispatcher validates this against `.sdlc/baseline/current.json`
+   * allowlist before dispatching. Undefined = packet writes nothing
+   * (analysis / review packet) or greenfield mode.
+   */
+  artifact_path?: string;
 }
 
 export interface TelemetryEvent {

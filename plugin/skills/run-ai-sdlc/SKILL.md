@@ -5,7 +5,7 @@ description: The end-to-end AI-SDLC workflow definition consumed by the orchestr
 
 # AI-SDLC Workflow — Orchestrator Playbook
 
-This skill is the source of truth for the orchestrator. When invoked under `/run-sdlc-pass`, the orchestrator follows the state machine below.
+This skill is the source of truth for the orchestrator. When invoked under `/sdlc:pass`, the orchestrator follows the state machine below.
 
 ---
 
@@ -127,6 +127,33 @@ Suggested packet types and one packet per:
 
 When the app uses a validating `ConfigModule` (or Joi / Zod / envalid equivalent), packets for `env_docs` and `env_test_fixture` are **required** — omitting either is a senior-reviewer blocker. The two files must be internally consistent: every key listed in `.env.example` must appear in `.env.test` with a schema-valid value.
 
+### Brownfield-mode task types (v1)
+
+The table above is greenfield-Nest-centric. In brownfield mode (`mode: brownfield`), packets use a **stack-agnostic** base set of primitives plus an optional `subtype` hint that the loaded stack adapter (`plugin/skills/run-ai-sdlc/stacks/*.md`) resolves to concrete codegen guidance.
+
+| task_type | Purpose | Common `subtype` values |
+|---|---|---|
+| `new_file_add` | Create a file that didn't exist at discovery time | `nest_controller` · `nest_service` · `django_view` · `fastapi_router` · `test` (see adapter) |
+| `existing_file_edit` | Modify a file that already existed | `module_wiring` · `url_registration` · `router_wiring` · `django_settings` |
+| `patch_apply` | Apply a specific unified diff | (rare — usually `existing_file_edit` is enough) |
+| `doc_addition` | New doc under docs/ or module README | `readme` · `adr` · `runbook` · `api` |
+| `doc_update` | Update an existing doc | — |
+| `test_add` | New test file for new source | `unit` · `integration` · `e2e` |
+| `test_backfill` | Add tests for existing untested code | Same as `test_add` |
+| `bug_reproduce` | Failing test that captures the bug | — |
+| `bug_diagnose` | Root-cause analysis — emit a note, not code | — |
+| `bug_fix_apply` | Apply the fix identified by `bug_diagnose` | — |
+| `refactor_extract` | Extract shared logic into a new utility | — |
+| `dependency_add` | Add a dep + adjacent-code adjustments | `patch` · `minor` · `major` |
+
+**Framework-owned wiring** — new controllers/routes/views usually need a corresponding
+registration edit in a wiring file (Nest module, Django urls.py, FastAPI main.py's
+include_router). Emit these as **paired packets** with the same `pass_id` — atomic per-pair:
+if the wiring edit fails, roll back the new-file packet within the same pair.
+
+**Every brownfield packet MUST set `artifact_path`** (§7.1) so the write-contract validator can
+reject off-limits paths at dispatch time. Missing `artifact_path` is a planner bug.
+
 ### TaskPacket initial output-ceiling budgets
 
 Set `budget.maxOutputTokens` per phase type. The adapter automatically doubles this ceiling on any attempt that terminates with the vendor's max-tokens stop reason (Anthropic `stop_reason: "max_tokens"`, Gemini `finishReason: "MAX_TOKENS"`), up to 3 doublings or the model's absolute output limit declared in the policy YAML (`max_output_tokens_absolute`), whichever comes first. Cached input keeps retry cost low.
@@ -154,17 +181,37 @@ Invoke `senior-reviewer` subagent for each module. Collect refinement packets. R
 
 ### Phase 7 — test_run
 
-Bootstrap the env fixture first — this is required for any app whose codegen produced a validating `ConfigModule` (or equivalent) at boot. The codegen phase is contractually required (see Phase 5 acceptance criteria and the senior-reviewer's env-fixture check) to emit `.env.example` (docs) and `.env.test` (fixture values that satisfy the declared schema).
+**Greenfield mode.** Bootstrap the env fixture first — this is required for any app whose codegen produced a validating `ConfigModule` (or equivalent) at boot. The codegen phase is contractually required (see Phase 5 acceptance criteria and the senior-reviewer's env-fixture check) to emit `.env.example` (docs) and `.env.test` (fixture values that satisfy the declared schema).
 
 ```bash
 cd <output_dir>
+# Only copy .env.test → .env when neither exists. Never overwrite an existing .env —
+# a real .env holds real secrets and belongs to the user.
 if [ -f .env.test ] && [ ! -f .env ]; then cp .env.test .env; fi
 npm install --silent && npm test
 ```
 
+**Brownfield mode.** The greenfield env-copy above is refused entirely — the repo already has an `.env` (or an equivalent secrets manager) that the user manages, and copying a codegen-produced fixture would either overwrite real secrets or drop the run into a schema-invalid state. Instead:
+
+```bash
+cd <repo-root>   # NOT <output_dir> — the app-under-test is the user's actual repo
+# Do NOT touch .env under any circumstances. Do NOT copy .env.test → .env.
+```
+
+If codegen introduced new required env vars (via `existing_file_edit` on `.env.example`):
+1. Append the new keys to `.env.example` (this IS a permitted write — .env.example is in the allowlist by default and holds no values, only key names).
+2. Print the list of new keys to the operator with a mini-gate: *"Codegen introduced N new required env vars: X, Y, Z. Populate them in your .env before Phase 7 continues, or say `skip` to run Phase 7 anyway (tests requiring these keys will fail)."*
+3. Wait for the user's response before invoking the test command.
+
+The test command in brownfield is `baseline.test_command` (confirmed at Gate 0), not hardcoded `npm test`. Working directory is the repo root (not `<output_dir>`); in monorepos, use the per-package scope from `baseline.monorepo.packages[].test_command` for whichever package the changed files belong to.
+
+**Both modes:**
+
 On failure:
-- If the error is `Config validation error: "X" is required` or equivalent → the codegen phase missed keys in `.env.test`. Build a debug TaskPacket routed to codegen to add the missing keys with schema-valid values. Do NOT patch `.env` by hand.
+- If the error is `Config validation error: "X" is required` or equivalent → the codegen phase missed keys. In greenfield build a debug TaskPacket routed to codegen to add the missing keys with schema-valid values. In brownfield, ask the user via the mini-gate above; do NOT patch `.env` from the plugin.
 - Any other failure → parse the output, build a `debug` TaskPacket with the failing test name + error + relevant source slice. Route via policy. Retry up to 2 cost-efficient tier attempts; escalate to Opus.
+
+**Test-command probe (optional Phase 0.5 in brownfield).** The pipeline pre-check (§7.4) already ran the discovered test command with `--collect-only` / `--dry-run` at prompt 1 to prove deps are installed. If pre-check step 2 failed for this run, Phase 7 halts with the recorded error rather than attempting the real run.
 
 ### Phase 8 — security_review
 
@@ -196,7 +243,98 @@ Read all events in `<telemetry_path>`. Build rollup manifest using the `buildMan
 
 ---
 
+## Intent matrix — brownfield only
+
+**Applies only when `mode: brownfield`.** Greenfield (`/sdlc:run`) runs the full pipeline
+described above with no matrix-based branching.
+
+In brownfield, one state machine handles seven intents. Which phases fire — and what shape their
+outputs take — depends on the intent picked at Gate 0. Tier assignment (which model runs each
+phase) does NOT change per intent; that's fixed by the loaded policy (§11).
+
+| Intent | Phase 1 · requirements | Phase 2 · architecture | Phase 4 · packet plan | Phase 7 · tests | Phase 8 · security review |
+|---|---|---|---|---|---|
+| **docs** | scoped ("what docs?") | **SKIP** | `doc_addition` / `doc_update` packets | doc-lint only | changed files only |
+| **bugfix** | reproduce + diagnose | **SKIP** unless design-affecting | `bug_reproduce` → `bug_diagnose` → `bug_fix_apply` → `test_add` | regression + focused suite | changed files only |
+| **feature-extend** | delta requirements | delta `change_plan.md` | mixed `existing_file_edit` + `new_file_add` | affected suites | changed files only |
+| **feature-new** | new-feature requirements | full subsystem design (`change_plan.md`) | full mix (`new_file_add`, `test_add`, `doc_addition`, wiring) | affected + new | changed files only |
+| **refactor** | delta (what to preserve) | delta refactor plan | `refactor_extract` + `patch_apply` | **full suite** (invariants) | changed files only |
+| **test** | coverage target | **SKIP** | `test_backfill` / `test_add` | new tests + full suite | test files only |
+| **deps** | upgrade target list | dep-swap plan | `dependency_add` + adjacent-code patches | full suite + smoke | dep-diff + advisory |
+
+**v1 specialization scope (per C6 cut).** Matrix cells are fully specified for the four "known"
+intents (docs, bugfix, feature-extend, feature-new) because they map cleanly to the greenfield
+behavior we already have. The three "new" intents (refactor, test, deps) route to the closest-
+fitting known behavior in v1, with intent-specific prompt overrides landing in v1.5. This means
+v1 ships all seven intents (surface-complete) with the last three at ~70% of full-specialized
+quality; v1.5 tightens them.
+
+**How the orchestrator branches.** After Gate 0 approval (which sets `intent` on the run
+context), the orchestrator consults this table before each phase to decide: SKIP the phase, run
+its default form, or run its intent-specific form. Skipped phases still emit a TelemetryEvent
+with `phase: <name>, task_type: "skipped"` so downstream summaries stay complete.
+
+**Skip semantics.**
+- SKIP means the phase does not run at all — no packet dispatched, no artifact written, no gate
+  fires for that phase. The gate immediately after a skipped phase is also skipped.
+- Docs intent example: Phase 2 (architecture) skips → Gate 2 also skips → orchestrator goes
+  straight from Gate 1 (requirements) to Phase 4 (packet planning).
+
+---
+
 ## HITL gate prompt templates
+
+**Subagent → main-loop bubble-up (all gates).** The orchestrator is a Claude Code subagent —
+subagents don't run interactive dialogs. Every gate is delivered by the subagent returning a
+message shaped as a fenced `> ⏸ **HITL Gate <N> — <Title>**` block (see templates below) that the
+main-loop Claude Code session displays verbatim and waits for user input on. The user's reply
+comes back to the subagent as a `{ gate_response: "approved" | "revise: <text>" | "abort" }`
+argument on the next invocation. **Persist the gate-pending state to `.sdlc/local/state.json`
+before emitting the message** — if the session dies mid-gate, session-hydrate detects a
+non-terminal state and re-prompts on next `/sdlc:brownfield` invocation. No new command needed.
+
+### Gate 0 — Brownfield only, before Gate 1
+
+> ⏸ **HITL Gate 0 — Discovery Confirmation**
+>
+> I read your repo and produced `<sdlc_root>/runs/<run-id>/discovery.md`. Confirm:
+>
+> - **Stack:** `<top-detected stacks>` — correct? add/override?
+> - **Test command:** `<detected>` — enter to accept, or paste the command.
+> - **Policy:** `<the default_policy field setup wrote to .sdlc/project.json>` — accept, or
+>   name another on-disk policy for this run only (e.g. `opus-only`). To change the project's
+>   persistent default, re-run setup (`node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs"`
+>   — this is the one command that opens a browser; every other setup step is terminal-only).
+> - **Existing AI setup:** `<verbatim list from Tier 1 group 6>` — is any of this
+>   authoritative and off-limits? **(default: OFF-LIMITS, do not touch)**
+> - **Intent:** `<intent picked in step 4a of /sdlc:brownfield>`
+> - **File scope:**
+>   - allowlist: `<paths proposed by the intent brief>` — accept / edit
+>   - off-limits: **project defaults from `.sdlc/project.json.off_limits_default`** apply
+>     (`.env*`, `.mcp.json`, `node_modules/**`, `.cursor/rules/**`, `.claude/settings.local.json`,
+>     `dist/**`, `.sdlc/**`, `.git/**`) — add anything else this ticket must not touch
+>   - AI configs detected in the repo are added on top (see previous bullet)
+> - **Repo-state risks (if any):** `<LFS / submodules / failing tests / encrypted secrets>`
+> - **Regulated-repo warning (when `baseline.regulated_repo_warning_required`):** *"This repo appears regulated (signals: `<kinds>`). Confirm the active policy uses only compliant endpoints, and that off-limits protects your regulated data folders."*
+> - **`.gitignore` needs `.sdlc/` entry (when `baseline.gitignore_covers_sdlc: false`):** *"Your .gitignore doesn't cover .sdlc/. Add `.sdlc/` to .gitignore as part of this run? [Y/n]"*  On yes, add `.gitignore` to the allowlist so the codegen phase can create-or-append it (a codegen packet or a small helper write, per intent). On no, note in the final report so the user gets the same follow-up prompt that surfaced in the docs-gen v1 run.
+>
+> Typical cost for a `<intent>` run on a repo this size: `$X.XX–$Y.YY`.
+>
+> Reply: `approved`, `revise: <comments>`, or `abort`.
+
+On `approved`, freeze the write contract to `.sdlc/local/write-contract.json`
+(schema: `{schema_version:1, active:true, mode:"brownfield", run_id, strict:true, allowlist,
+off_limits}`). Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
+(the project-level constants — `.env*`, `.mcp.json`, `node_modules/**`, etc., written by setup)
+with the AI-configs from `baseline.ai_configs_detected` and any ticket-specific paths the user
+added at Gate 0. The PreToolUse hook and the packet validator both read the merged list — the
+UX shrinks (Gate 0 doesn't re-ask about constants each ticket), the enforcement is unchanged.
+See `plugin/scripts/write-contract-check.mjs` for the hook.
+
+**Default the AI-coexistence answer to OFF-LIMITS.** A user who hits `approved` without reading
+must not accidentally authorize the plugin to rewrite their `.cursor/rules` or their custom
+`routing-policy.yaml`. If the user wants a competing AI config in scope, they must move it
+explicitly.
 
 ### Gate 1
 > ⏸ **HITL Gate 1 — Requirements Approval**

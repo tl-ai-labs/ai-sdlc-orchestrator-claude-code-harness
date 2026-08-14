@@ -41,7 +41,7 @@ harmless when the cache is already current.
 ## 2. Install the plugin
 
 ```
-/plugin install multi-model-orchestrator@tilicho-ai-labs
+/plugin install sdlc@tilicho-ai-labs
 ```
 
 Check the version it reports against `.claude-plugin/marketplace.json` on the repo's default
@@ -70,7 +70,7 @@ configured server path does not exist.
 Locate the installed plugin and run its setup script:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --fix
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --fix
 ```
 
 `--fix` installs the server's dependencies and builds it. The script re-checks afterwards and
@@ -149,7 +149,7 @@ here.
 On **Antigravity SDK**, run the same script from step 3 with `--enable-agent` instead of `--fix`:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
 ```
 
 That flag writes the selection into `.claude/settings.local.json` in the current folder — this
@@ -169,21 +169,94 @@ entitlement or a region that does not serve the model. Both first appear at the 
 delegated packet, once the premium phases are already billed. The probe is one trivial delegation,
 about two cents, and it is the only thing here that settles them.
 
+## 5b. Choose this project's default policy — the browser moment
+
+The one and only step in the whole flow that opens a browser. Everything before this ran in the
+terminal; everything after it returns to the terminal.
+
+Per-project, not install-wide — a compliance-sensitive repo may want Opus everywhere while a
+side project runs on Flash. The choice is stored in `.sdlc/project.json.default_policy` in the
+current repo and picked up by every subsequent `/sdlc:run` or `/sdlc:brownfield` in that folder.
+Applies equally to greenfield and brownfield projects.
+
+**Confirm you are in the project directory**, then offer the user this choice — do not skip
+straight to a two-preset picker, and do not omit the browser option:
+
+1. **Open the browser to author or customize a policy (Recommended)** —
+
+   ```bash
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/setup-policy.mjs | tail -1)" --project-root "$(pwd)"
+   ```
+
+2. **Use `opus-plus-flash`** (shipped preset — Opus judgment + Flash mechanical, cost-efficient) —
+
+   ```bash
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/setup-policy.mjs | tail -1)" --policy=opus-plus-flash --project-root "$(pwd)"
+   ```
+
+3. **Use `opus-only`** (shipped preset — Opus for every phase, highest cost, single-model baseline) —
+
+   ```bash
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/setup-policy.mjs | tail -1)" --policy=opus-only --project-root "$(pwd)"
+   ```
+
+4. **Skip — set later via `/sdlc:policy change`**. `/sdlc:run` and `/sdlc:brownfield` will refuse
+   to start until a policy is picked.
+
+Whichever the user chooses, `.sdlc/project.json` must have a `default_policy` field when this
+step returns — the task commands read it via session-hydrate and refuse to run without it.
+
+What the browser option does, step by step:
+
+1. Starts the policy console (`plugin/policy-console/`, a single HTML page served by a tiny
+   Node http server, ~350 lines) on the first free port from 3000 upward, bound to `127.0.0.1`
+   (loopback only). First run only, `npm install` for one dep (`yaml`) — ~1 second.
+2. Opens the URL in the default browser (`open` on macOS, `xdg-open` on Linux). On a headless
+   machine, pass `--no-browser` and the URL prints instead.
+3. Watches `plugin/config/policies/` via `fs.watch`. When the user clicks Save in the browser,
+   the newly-written YAML fires a filesystem event and the script picks it up automatically —
+   no need to return to the terminal to press Enter.
+4. Writes the chosen policy name (bare stem, no `.yaml`) to `.sdlc/project.json.default_policy`
+   in the `--project-root` directory and kills the server. Terminal control returns to the
+   shepherd, which continues to section 6.
+
+Passing `--project-root "$(pwd)"` is required: the script writes bookkeeping into the caller's
+project, not into whichever git worktree an earlier `cd` may have drifted the shell into.
+
+Non-interactive fallback (browser closed without saving): after a 10-minute timeout the script
+exits cleanly with "no save detected"; nothing gets written and the shepherd surfaces the
+outcome so the user can re-run.
+
+To inspect the current project's saved default from any terminal:
+
+```bash
+node ".../scripts/setup-policy.mjs" --print-only --project-root "$(pwd)"
+```
+
 ## 6. Hand over
 
-State plainly what is installed, which policies are available given the credentials present, and
-that the next step is a single prompt:
+`verify-setup.mjs` from step 3 already prints a next-steps banner on success. State plainly what
+is installed, which policies are available given the credentials present, then deliver the banner
+verbatim so the user sees every command they can now use:
 
 ```
-/sdlc-run
+✓ Setup complete for this project.
+
+  Try one of these in a NEW session in the same folder:
+
+    /sdlc:run          — generate a new app from a brief (empty folder)
+    /sdlc:brownfield   — work on this existing repo (docs, bugfix, feature, refactor, …)
+    /sdlc:policy       — show / change this project's model policy
+    /sdlc:pass         — headless/scripted run (for CI or replays)
+    /sdlc:setup        — re-verify or re-configure this install any time
 ```
 
-It takes no arguments. It asks for whatever it needs — including the project brief, which it will
-write from a description if the user does not have one.
+Pick the one that matches the folder the user is standing in — the two task commands
+(`/sdlc:run`, `/sdlc:brownfield`) take no arguments and ask for whatever they need.
 
 **Say this in the same breath: the command is not available in this session.** Claude Code builds
 its list of slash commands when a session starts, and nothing written to disk afterwards can add
-one to a session already running. The install is complete and correct; `/sdlc-run` simply arrives
+one to a session already running. The install is complete and correct; `/sdlc:run` simply arrives
 one session late. Tell the user to open a new session in the same folder and type it there, where
 it will be in the menu.
 
@@ -207,7 +280,7 @@ the restart it was meant to save.
 The same script, without `--fix`, re-checks an existing install and changes nothing:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)"
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)"
 ```
 
 Run it after `/plugin update`. An update re-copies the plugin from source, which removes the
@@ -230,3 +303,53 @@ Working from a git clone instead of an install:
 ```bash
 npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 ```
+
+---
+
+## Brownfield addendum
+
+If the user's intent is to use `/sdlc:brownfield` (extend an existing repo — not generate a new
+project from scratch), the plugin runs **additional prerequisite checks** after step 3's
+`--fix`. Same script, extra flag:
+
+```bash
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --brownfield-check
+```
+
+`--brownfield-check` runs the greenfield checks in step 3–4 AND then appends:
+
+- **Node ≥ 20 · git ≥ 2.30 · plugin command-name conflicts · filesystem permissions** on
+  `~/.claude` and `.sdlc/local/` (via `plugin/scripts/env-checks.mjs`).
+- **Credential discovery** — scans shell env, home-dir configs, shell rc files, repo `.env*` and
+  code references for Anthropic, Gemini (Google AI Studio / Vertex AI), and Antigravity SDK.
+  Names only, never values. (via `plugin/scripts/credential-discovery.mjs`.)
+
+The shepherd behavior contract for prompt 1 in brownfield mode (documented in plan §25 and §23):
+
+- **Sequential.** One section at a time, always clear where you are. Seven sections:
+  `install`, `environment`, `repo-detection`, `credentials`, `repo-setup`, `policy`, `summary`.
+- **Auto-do what you can.** Marketplace add, plugin install, MCP dist build, credential
+  detection all happen without asking. Report success in one line.
+- **Pause + guide + verify.** When a step needs human action — upgrade Node, install a missing
+  binary, obtain an API key — print the exact command (with platform options), wait for the
+  user to reply `done` / `skip` / `abort`, then **re-run the actual check** to verify. Never
+  blindly trust the user's "done."
+- **3 verification failures → offer skip or abort.** Don't loop forever.
+- **Never restart from scratch.** After a fix, continue from where you were.
+- **Persist progress via `setup-status-write.mjs`.** At the start of prompt 1, run
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-status-write.mjs" --reset --project-root "$(pwd)"`
+  (initializes `.sdlc/local/setup-status.json` with all seven sections pending). At the end
+  of each section, run `--section=<name> --project-root "$(pwd)"` with the section slug above.
+  On completion of `summary`, run `--all-done --project-root "$(pwd)"` (clears the resume hint).
+  Every call passes `--project-root "$(pwd)"` so the state file lands in the project the user
+  is standing in, not in whichever git worktree an earlier `cd` may have drifted into.
+  `session-hydrate.mjs` reads this file on every subsequent command; if a session dies
+  mid-setup, the next `/sdlc:brownfield` picks up from the first pending section — no user
+  intervention needed, no new command required.
+- **Final summary always.** Line-by-line status of what was done, what the user did, what was
+  skipped (with consequences noted).
+
+The plugin ships a settings fragment for CI:
+`plugin/templates/settings-ci-fragment.json` pre-allows `Bash(git *)` so headless CI runs don't
+prompt for permission on every git command. Users copy it into their `.claude/settings.json` for
+CI-only project scope, or into `~/.claude/settings.json` for user scope.

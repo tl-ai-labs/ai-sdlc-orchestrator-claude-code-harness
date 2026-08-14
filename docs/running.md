@@ -1,14 +1,8 @@
 # Running
 
-**If you installed the plugin rather than cloning the repo, you do not need this
-page to start.** Type `/sdlc-run` in a new session — slash commands register and plugin MCP
-servers start when a session starts, so the session that installed the plugin has
-neither the command nor the bundled model server that mechanical phases dispatch
-through. It takes no arguments, asks for whatever it
-needs, and picks the settings described below on your behalf. This page is the
-reference for `/run-sdlc-pass`, the same run with every setting exposed as a
-flag — useful for repeat runs, for scripting, and for understanding what
-`/sdlc-run` chose for you.
+> **For:** every `/sdlc:pass` flag; scripting a run for CI or replay. **Also see:** [tutorial-first-run.md](tutorial-first-run.md) · [brownfield.md](brownfield.md) · [troubleshooting.md](troubleshooting.md).
+
+This page is the reference for `/sdlc:pass` — the same run as `/sdlc:run` or `/sdlc:brownfield`, but with every setting exposed as a flag. Useful for repeat runs, for scripting, and for understanding what the interactive commands chose for you. If you installed the plugin, start with `/sdlc:run` (greenfield) or `/sdlc:brownfield` (existing repo) in a new session — Claude Code registers slash commands and starts plugin MCP servers only at session start, so the session that installed the plugin does not yet see them.
 
 Two policies ship with this repository. Pick one to start.
 
@@ -32,7 +26,7 @@ Opus handles phases that require judgment (requirements, design, senior code rev
 
 Costs depend on model output length, prompt caching, and current vendor pricing.
 
-**The mechanical tier has two doors, and the policy file does not choose between them.** By default Gemini is called as a model: Opus reads the files, sends the text, and writes the answer back. It can instead run as an agent that opens the working directory itself, runs commands and edits files, with Opus reviewing what changed. Which one a run uses is a property of the *install*, chosen once at setup time — deliberately, so the policy file stays a faithful record of how a run was priced and routed rather than something edited between runs. Both doors reach the same model at the same published rates, so the vendor model name on a telemetry event is the same either way; the `model_id` field on every event is what says which one ran. A delegated run says so more plainly than that: `node tools/report.mjs` grows a **Delegated to an agent worker** section naming every delegated packet, its tool calls, and what changed on disk while it ran — and the run leaves a `delegation/` directory holding the brief each worker was given and a receipt for what it did. See [understanding-output.md](understanding-output.md#delegated-to-an-agent-worker). Setting it up, and why the agent costs several times more per task, is in [setup.md](setup.md#gemini-as-a-model-or-gemini-as-an-agent).
+**The mechanical tier has two doors, and the policy file does not choose between them.** By default Gemini is called as a model: Opus reads the files, sends the text, and writes the answer back. It can instead run as an agent that opens the working directory itself, runs commands and edits files, with Opus reviewing what changed. Which one a run uses is a property of the *install*, chosen once at setup time — deliberately, so the policy file stays a faithful record of how a run was priced and routed rather than something edited between runs. Both doors reach the same model at the same published rates, so the vendor model name on a telemetry event is the same either way; the `model_id` field on every event is what says which one ran. A delegated run says so more plainly than that: `node tools/report.mjs` grows a **Delegated to an agent worker** section naming every delegated packet, its tool calls, and what changed on disk while it ran — and the run leaves a `delegation/` directory holding the brief each worker was given and a receipt for what it did. See [understanding-output.md](understanding-output.md#delegated-to-an-agent-worker). Setting it up, and why the agent costs several times more per task, is in [setup.md](setup.md#gemini-as-an-agent--antigravity-sdk).
 
 ## Running a pass — two modes
 
@@ -49,13 +43,13 @@ claude --permission-mode acceptEdits
 Then, at the prompt:
 
 ```
-/run-sdlc-pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
+/sdlc:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
 ```
 
 Or with the multi-model policy:
 
 ```
-/run-sdlc-pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md
+/sdlc:pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md
 ```
 
 The session pauses at each HITL gate; approve or redirect at each one.
@@ -65,7 +59,7 @@ The session pauses at each HITL gate; approve or redirect at each one.
 Best when you want to script the run, redirect all output to a file, or run overnight without babysitting.
 
 ```bash
-claude --print "/run-sdlc-pass --auth=vendor --policy=opus-only --run-id=pass1 examples/workforce-ops/brief.md" \
+claude --print "/sdlc:pass --auth=vendor --policy=opus-only --run-id=pass1 examples/workforce-ops/brief.md" \
   --permission-mode acceptEdits \
   --output-format stream-json --verbose \
   > examples/workforce-ops/passes/pass1/live-run.log
@@ -84,15 +78,36 @@ Every HITL gate auto-approves. The full transcript lands in `live-run.log`.
 
 ### Arguments
 
-- `--auth=<vendor|estimated>` — **required**. `vendor` dispatches every LLM call via the MCP server so telemetry carries real vendor-reported tokens (needs `ANTHROPIC_API_KEY`); `estimated` uses a char-count heuristic for direct-tier calls (works on a Claude Code subscription without an API key). See [setup.md](setup.md#anthropic-claude-authentication) and [methodology.md](methodology.md).
-- `--policy=<name>` — routing policy. Defaults to `opus-only`. Available: `opus-only`, `opus-plus-flash`.
+- `--auth=<vendor|estimated>` — **required**. `vendor` dispatches every LLM call via the MCP server so telemetry carries real vendor-reported tokens (needs `ANTHROPIC_API_KEY`); `estimated` uses a char-count heuristic for direct-tier calls (works on a Claude Code subscription without an API key). See [setup.md](setup.md#anthropic) and [methodology.md](methodology.md).
+- `--policy=<name>` — routing policy. Resolves in this order: the flag, then `.sdlc/project.json.default_policy` written by `/sdlc:setup` or `/sdlc:policy change`, then `opus-plus-flash`. Shipped presets: `opus-only`, `opus-plus-flash`. Any file under `plugin/config/policies/*.yaml` is a valid name.
 - `--study=<id>` — case-study identifier. Defaults to `workforce-ops`. Change this whenever you run the pipeline on a brief other than the shipped one, so telemetry and packets stay grouped by project. Output lands in `examples/<study-id>/passes/<run-id>/`.
 - `--run-id=<id>` — becomes the pass's directory name under `examples/<study-id>/passes/`. Any string works. Defaults to `pass1`.
 - The remaining positional argument is the path to the brief. Use `examples/workforce-ops/brief.md` to reproduce the Workforce Ops case, or point at any other markdown file — see [Bring your own brief](#bring-your-own-brief) below.
 
+## Brownfield mode
+
+`/sdlc:brownfield` is the interactive entry point for running against an existing repository. The same pipeline exposed as `/sdlc:pass --mode=brownfield` for scripting and CI. Additional flags apply only in brownfield mode:
+
+| Flag | Purpose |
+|---|---|
+| `--mode=brownfield` | Switch to brownfield. Default is greenfield. |
+| `--intent=<docs\|bugfix\|feature-extend\|feature-new\|refactor\|test\|deps>` | Required in brownfield. The job type. Adds a Gate 0 before Gate 1. |
+| `--brief=<path>` | Optional pre-written intent brief (replaces the interactive interview). Format is in [docs/brownfield.md](brownfield.md). |
+| `--gates=<prompt\|auto-approve\|auto-abort>` | Gate behaviour. `prompt` (default) is interactive; `auto-approve` accepts every gate (headless); `auto-abort` (v1.5) approves only when the run's fingerprint matches `.sdlc/project.json`. |
+| `--from-config=<path>` | (v1.5) Read gate answers from a committed team config file. Pair with `--gates=auto-abort` for CI. |
+| `--strict-write=off` | Downgrade the write-contract PreToolUse hook from HARD-BLOCK to WARN. Every off-limits or not-in-allowlist write is logged but not refused. Defeats the plugin's main safety guarantee — use with care. |
+| `--allow-dirty` | Bypass the git-clean check when `commit_strategy != none`. |
+| `--recheck` | Force pre-check re-run even when the cached status is still valid. Useful after a plugin version bump. |
+| `--adaptive-profile` | Force Tier 2b adaptive stack profile even when a matching pre-authored adapter exists. |
+| `--refresh-profile` | Force stack-profile re-scan (implies `--recheck`). Use after a substantial repo restructure. |
+
+Brownfield writes to `.sdlc/runs/<YYYYMMDD-HHMMSS>-<intent>-<slug>/` — `telemetry.jsonl`, `manifest.json`, `provenance.json`, `senior-review.md`, `security-review.md`, `final_report.md`. `provenance.json` is what `/sdlc:revert` reads to undo a run.
+
+Full command surface for the interactive equivalent is in [plugin/commands/brownfield.md](../plugin/commands/brownfield.md).
+
 ## Bring your own brief
 
-The shipped `examples/workforce-ops/brief.md` is the Workforce Ops case. `/run-sdlc-pass` reads whatever markdown file it is given as a positional argument; substituting a different brief runs the orchestrator against that brief.
+The shipped `examples/workforce-ops/brief.md` is the Workforce Ops case. `/sdlc:pass` reads whatever markdown file it is given as a positional argument; substituting a different brief runs the orchestrator against that brief.
 
 Steps:
 
@@ -101,13 +116,13 @@ Steps:
 3. Pick a `--run-id` for this pass. Interactive form:
 
    ```
-   /run-sdlc-pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md
+   /sdlc:pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md
    ```
 
    Or headless:
 
    ```bash
-   claude --print "/run-sdlc-pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md" \
+   claude --print "/sdlc:pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md" \
      --permission-mode acceptEdits \
      --output-format stream-json --verbose \
      > examples/my-project/passes/pass1/live-run.log
@@ -160,10 +175,10 @@ Each pass writes to a separate directory under `examples/<study-id>/passes/`. To
 
 ```bash
 # headless form
-claude --print "/run-sdlc-pass --auth=vendor --policy=opus-only --run-id=baseline examples/workforce-ops/brief.md" \
+claude --print "/sdlc:pass --auth=vendor --policy=opus-only --run-id=baseline examples/workforce-ops/brief.md" \
   --output-format stream-json --verbose > examples/workforce-ops/passes/baseline/live-run.log
 
-claude --print "/run-sdlc-pass --auth=vendor --policy=opus-plus-flash --run-id=multi-model examples/workforce-ops/brief.md" \
+claude --print "/sdlc:pass --auth=vendor --policy=opus-plus-flash --run-id=multi-model examples/workforce-ops/brief.md" \
   --output-format stream-json --verbose > examples/workforce-ops/passes/multi-model/live-run.log
 
 node tools/report.mjs examples/workforce-ops/passes/baseline

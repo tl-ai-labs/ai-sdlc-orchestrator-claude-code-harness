@@ -57,3 +57,30 @@ You are a security reviewer. Audit the generated codebase against this checklist
 ## Required fixes before sign-off
 - ...
 ```
+
+---
+
+# Brownfield mode (`mode: brownfield`)
+
+When invoked with `mode: brownfield` (typically alongside `intent`, `changed_files`, and the
+`baseline_path`), the review is **scoped to files touched by this run** — not the whole repo.
+This is the v1 simplification per C5 cut in the plan self-review.
+
+Behavior:
+- Read `.sdlc/runs/<run-id>/provenance.json` to get the list of files this run has written or
+  edited.
+- Audit **only those files** against the checklist above. Do NOT walk the whole codebase.
+- Only findings introduced by this run block Gate 3. Pre-existing findings elsewhere in the
+  repo are OUT OF SCOPE — surface them as advisory in a `## Noted (pre-existing, out of scope)`
+  section but do not gate the run on them.
+- Intent-specific scoping:
+    - **docs / test** intents: security review focuses on documentation content (not exposing
+      secrets in examples) and test-file content (not embedding real credentials in fixtures).
+      Full authz/PII checks skipped — those tests don't change runtime behavior.
+    - **deps** intents: review the dep-diff (`npm outdated`, `pip list --outdated`, etc.) and
+      the adjacent-code adjustments. `npm audit --omit=dev` still runs.
+    - **bugfix / feature-extend / feature-new / refactor** intents: full checklist applies to
+      changed files.
+
+v1.5 will add per-finding `origin` tagging so pre-existing issues inside changed files can be
+surfaced without blocking. Not in v1 scope.

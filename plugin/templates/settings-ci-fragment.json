@@ -1,0 +1,39 @@
+{
+  "_comment": "CI-only settings fragment for the AI-SDLC Orchestrator plugin's brownfield mode. Merge these entries into .claude/settings.json (project scope) or ~/.claude/settings.json (user/machine scope) so a headless CI run doesn't hang waiting for permission approvals on every git command the discovery agent needs. This fragment is illustrative — the plugin never modifies your settings.json automatically; copy the entries yourself.",
+
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git remote:*)",
+      "Bash(git branch:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git rev-list:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git config:*)",
+
+      "Bash(find . -maxdepth *:*)",
+      "Bash(ls -la:*)",
+
+      "Bash(pytest --collect-only:*)",
+      "Bash(jest --listTests:*)",
+      "Bash(vitest --list:*)",
+      "Bash(cargo test --list:*)",
+      "Bash(go test -list *:*)",
+
+      "Bash(gcloud auth print-access-token:*)",
+      "Bash(gcloud config get-value project:*)",
+
+      "Read(**)",
+      "Glob(**)",
+      "Grep(**)"
+    ],
+    "deny": []
+  },
+
+  "env": {
+    "_note": "Add your own credentials here so CI can dispatch. Never commit real values — use CI-native secret injection (GitHub Actions secrets, GitLab CI variables, etc.) and let CI write these fields at job start."
+  }
+}

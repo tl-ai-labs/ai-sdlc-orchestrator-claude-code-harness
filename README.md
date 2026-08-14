@@ -2,137 +2,270 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue)](.claude-plugin/marketplace.json)
+
+![How the plugin works — you paste two prompts, an orchestrator routes premium work to Claude Opus and mechanical work to Gemini Flash, and your project gets both generated code and a full audit trail](docs/assets/hero.svg)
 
 ## What this is
 
-A Claude Code plugin that runs a nine-phase AI-SDLC pipeline against a project brief. Requirements → design → task planning → codegen → tests → docs → senior review → security review → debug. Four of the phases stop at human approval gates. Two Gemini doors — as a model (Vertex or AI Studio) or as an agent (Antigravity SDK) — reach the same mechanical tier. Two auth modes — `vendor` (bills your Anthropic API key, reconciles to the dashboard) or `estimated` (subscription auth, char-count heuristic). Every telemetry event, every generated file, and the cost report land under the project directory. Nothing is uploaded off the machine.
+A Claude Code plugin that runs a full SDLC pipeline — requirements → design → code → tests → docs → senior review → security review — against either an empty folder (**greenfield**) or an existing repository (**brownfield**). It routes each phase to the model that fits: judgment work stays on Claude Opus, mechanical work drops to Gemini Flash. A typical mid-size run costs cents where a one-model run would cost dollars.
 
-## The two-prompt flow
+Two Gemini paths reach the same model at the same price — one call per packet (`flash-completion`) or a full agent session with tools and a workspace (`flash-agsdk-worker`). You pick which door once at setup. See [docs/two-gemini-paths.md](docs/two-gemini-paths.md) for the measured comparison.
 
-The primary UX. Open Claude Code in an empty folder. Nothing to clone, nothing to type by hand.
+Every generated file, every telemetry event, and every cost report lands under your project directory. Nothing is uploaded off the machine.
 
-**Prompt 1 — setup.** Paste this verbatim:
+## Architecture
+
+### System dataflow
+
+```mermaid
+flowchart TD
+    User["You in a Claude Code session<br/>/sdlc:run<br/>/sdlc:brownfield<br/>/sdlc:pass"]
+    Orch["orchestrator subagent<br/>reads policy YAML<br/>decomposes into TaskPackets"]
+    Anthropic["Anthropic (direct)<br/>Claude Opus<br/>requirements · design<br/>senior review · security"]
+    MCP["bundled MCP server<br/>routing · adapters<br/>telemetry · cost<br/>mechanical phases"]
+    GemModel["Gemini as a model<br/>one call per packet<br/>AI Studio or ADC"]
+    GemAgent["Gemini as an agent<br/>Antigravity SDK<br/>ADC only<br/>tools + directory"]
+    Out[".sdlc/ artifacts<br/>telemetry.jsonl<br/>manifest.json<br/>provenance.json<br/>generated code"]
+
+    User --> Orch
+    Orch -->|judgment| Anthropic
+    Orch -->|mechanical| MCP
+    MCP --> GemModel
+    MCP --> GemAgent
+    Anthropic --> Out
+    GemModel --> Out
+    GemAgent --> Out
+
+    classDef hero fill:#EFF2FA,stroke:#375A9D,stroke-width:2px,color:#111
+    class MCP,GemModel,GemAgent hero
+```
+
+The highlighted path is where cost drops — mechanical work routed off Opus into the cheaper tier. Which door the mechanical tier uses (model vs agent) is picked once at setup; both reach the same model at the same published rates.
+
+### Phase timeline
+
+A greenfield run walks 11 states in order. Brownfield inserts two more (`discovery`, `change_plan`) around the same core. Each state is color-coded by which tier does the work.
+
+```mermaid
+flowchart LR
+    P0([preflight_dispatch]):::local
+    P1[read_brief]:::opus
+    P2[requirements_analysis]:::opus
+    P3[architecture_design]:::opus
+    P4[cache_project_header]:::gem
+    P5[plan_task_packets]:::opus
+    P6[execute_packets]:::gem
+    P7[senior_code_review]:::opus
+    P8[test_run]:::local
+    P9[security_review]:::opus
+    P10[generate_final_report]:::opus
+
+    P0 --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8 --> P9 --> P10
+
+    D[discovery<br/><i>brownfield only</i>]:::opus
+    C[change_plan<br/><i>brownfield only</i>]:::opus
+    D -.-> P2
+    C -.-> P4
+
+    classDef opus  fill:#FEF3C7,stroke:#B45309,color:#78350F
+    classDef gem   fill:#E0F2FE,stroke:#0369A1,color:#0C4A6E
+    classDef local fill:#F3F4F6,stroke:#6B7280,color:#1F2937
+```
+
+Legend — **amber:** Claude Opus (judgment). **blue:** Gemini Flash (mechanical). **grey:** local — no model call.
+
+Four HITL gates fire along the way: after requirements (Gate 1), after design (Gate 2), after security review (Gate 3), before final acceptance (Gate 4). Brownfield adds Gate 0 (discovery confirmation) before any of them.
+
+The full plugin file inventory lives in [docs/architecture.md](docs/architecture.md).
+
+## What it can do
+
+### Tasks — the seven brownfield job types
+
+Pick one at Gate 0 in `/sdlc:brownfield`.
+
+| Job type | When to use | Who does the heavy lifting |
+|---|---|---|
+| `docs` | Write API docs, README, ADRs, docstrings | Gemini Flash |
+| `bugfix` | Fix a specific defect (reproduce → diagnose → fix → regression test) | Gemini Flash · escalates to Opus after 2 failed retries |
+| `feature-extend` | Add a capability to an existing endpoint or module | Opus for change plan · Gemini for the edits |
+| `feature-new` | Add a new subsystem (endpoint + storage + tests) | Opus for design · Gemini for full codegen mix |
+| `refactor` | Extract shared logic; runs the **full** test suite for invariants | Opus for refactor plan · Gemini for `refactor_extract` + patches |
+| `test` | Backfill tests to a coverage target | Gemini Flash |
+| `deps` | Upgrade a dependency + patch breaking-change fallout | Opus for dep-swap plan · Gemini for adjacent-code patches |
+
+Full intent-by-phase matrix in [plugin/skills/run-ai-sdlc/SKILL.md:255](plugin/skills/run-ai-sdlc/SKILL.md).
+
+### Routing — model per phase
+
+Same rule applies to greenfield and brownfield. The default `opus-plus-flash` policy routes:
+
+| Phase | Tier | Model in the default policy |
+|---|---|---|
+| `requirements_analysis` · `architecture_design` · `plan_task_packets` | premium | Claude Opus |
+| `senior_code_review` · `security_review` | premium | Claude Opus |
+| `discovery` · `change_plan` (brownfield only) | premium | Claude Opus |
+| `execute_packets` (codegen) · `tests` · `docs` | mechanical | Gemini Flash |
+| `debug` (retry_count ≥ 2) | premium | Claude Opus (auto-escalation) |
+| `test_run` | local | Bash on your machine, no model call |
+
+Source: [plugin/config/policies/opus-plus-flash.yaml:64](plugin/config/policies/opus-plus-flash.yaml). Every rule is data — change routing by editing the YAML, or author a new policy in the browser console via `/sdlc:policy change`.
+
+Two guardrails ship on:
+
+- **Escalation** — a mechanical-tier packet that fails validation twice auto-routes to Opus on the third attempt. Prevents infinite retries when Flash can't solve a particular puzzle.
+- **Hard cost cap** — `$50` per run ([opus-plus-flash.yaml:135](plugin/config/policies/opus-plus-flash.yaml)). The orchestrator aborts cleanly if accumulated cost crosses it. Raise or remove in your own policy.
+
+Two policies ship:
+
+| Policy | Uses | Typical mid-size run cost |
+|---|---|---|
+| `opus-only` | Claude Opus for every phase | $10 – 30 |
+| `opus-plus-flash` (default) | Opus for judgment, Gemini Flash for mechanical | $0.30 – 3 |
+
+Deep dive: [docs/brownfield-routing.md](docs/brownfield-routing.md).
+
+## Greenfield vs. brownfield
+
+```mermaid
+flowchart LR
+    Q{What do you have?}
+    E[empty folder<br/>+ a project brief]
+    R[existing repo<br/>any stack, any conventions]
+    G["/sdlc:run<br/>generate a whole new app"]:::opus
+    B["/sdlc:brownfield<br/>pick 1 of 7 job types<br/>confirm scope at Gate 0"]:::gem
+
+    Q --> E --> G
+    Q --> R --> B
+
+    classDef opus fill:#FEF3C7,stroke:#B45309,color:#78350F
+    classDef gem  fill:#E0F2FE,stroke:#0369A1,color:#0C4A6E
+```
+
+| Mode | Command | What it does |
+|---|---|---|
+| **Greenfield** | `/sdlc:run` | Generates a whole new application from a project brief into `./src/`. Original flow the plugin was built for. |
+| **Brownfield** | `/sdlc:brownfield` | Extends an existing repository. Pick one of the seven job types above, confirm scope at Gate 0, run the pipeline with a non-destructive write contract that guarantees off-limits files stay untouched. |
+
+Both use the same install, same policies, same MCP dispatch layer. `/sdlc:run` in an existing repo warns you and offers `/sdlc:brownfield` instead.
+
+Brownfield reference:
+
+- [docs/brownfield.md](docs/brownfield.md) — overview + Gate 0 walkthrough
+- [docs/brownfield-write-contract.md](docs/brownfield-write-contract.md) — how the write contract enforces "never touch off-limits"
+- [docs/brownfield-coexistence.md](docs/brownfield-coexistence.md) — coexistence with Cursor, Aider, Copilot, custom MCP
+- [docs/brownfield-privacy.md](docs/brownfield-privacy.md) — data flow, private endpoints, regulated repos
+
+## Prerequisites — what you actually need
+
+Framed by what you want to do, not by every provider that exists. Full provider matrix (env vars, verify commands, failure modes) is in [docs/setup.md](docs/setup.md).
+
+| If you want to… | You need |
+|---|---|
+| **Try it at all** | Node.js 20+, Claude Code CLI, macOS/Linux/WSL2, and either an `ANTHROPIC_API_KEY` **or** a Claude Code subscription (sign in once with `claude`) |
+| **Get the ~10× cost drop** | The above, plus a Gemini surface — a `GEMINI_API_KEY` from [AI Studio](https://aistudio.google.com/app/apikey), or Application Default Credentials from `gcloud auth application-default login` |
+| **Use the Antigravity agent path** | The above, plus Python 3.10+ (macOS ships 3.9, too old) **and** Vertex ADC — there is no API-key door for the agent path |
+
+That's it. You don't need to pick a Gemini door yourself — setup asks. You don't need to write a policy — `opus-plus-flash` loads by default.
+
+## Setup — the two-prompt flow
+
+Nothing to clone, nothing to type by hand.
+
+**Prompt 1 — setup.** Paste this verbatim in a fresh Claude Code session:
 
 ```
 Setup this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness
 ```
 
-Claude Code follows [SETUP.md](SETUP.md): registers the marketplace, installs the plugin, builds the bundled MCP server, checks credentials, and asks whether to enable the Antigravity SDK agent path (only when Google Cloud credentials are present).
+Claude Code follows [SETUP.md](SETUP.md): registers the marketplace, installs the plugin, builds the bundled MCP server, checks credentials, asks whether to enable the Antigravity SDK agent path (only when Google Cloud credentials are present), and opens the browser once to pick this project's default model policy (or hit Save on `opus-plus-flash`).
 
-**Prompt 2 — run.** Start a new session in the same folder, then:
+**Prompt 2 — run.** Start a **new session in the same folder**, then whichever fits:
 
 ```
-/sdlc-run
+/sdlc:run             # greenfield: empty folder + project brief
+/sdlc:brownfield      # brownfield: existing repo, pick a job type
 ```
 
-The command checks the install, finds a brief in the folder or offers the shipped examples (or writes one from your description), shows which model each phase will run on, confirms the plan, and only then starts spending. Generated code lands in `./src`; telemetry, manifest, and cost report land in `./.sdlc/`.
+Both check the install, show which model each phase will run on, confirm the plan (Gate 0 in brownfield), and only then start spending.
 
-The new session matters. Claude Code registers a plugin's slash commands and starts its MCP servers only when a session begins, so `/sdlc-run` and the bundled server are not live in the install session — a run started there would route every phase to the premium model.
+> **Why a new session matters.** Claude Code registers a plugin's slash commands and starts its MCP servers only when a session begins. In the install session, `/sdlc:run`, `/sdlc:brownfield`, and the bundled server are not yet live — a run started there would route every phase to the premium model.
 
-## Before you start
+## Commands
 
-| Requirement | Detail | Why |
+Six commands, split by purpose. All are declared in [plugin/commands/](plugin/commands/) with the same descriptions shown here.
+
+### Run the pipeline
+
+| Command | What it does | When to use it |
 |---|---|---|
-| Node.js | 20 or newer | The MCP server and setup scripts. Verify with `node --version`. |
-| Claude Code CLI | any | The plugin runs inside it. Install with `npm install -g @anthropic-ai/claude-code`. |
-| Shell | macOS, Linux, or WSL2 | The scripts are POSIX bash. |
-| Anthropic access | API key **or** Claude Code subscription | Every policy uses Opus for judgment phases. See [Providers](#providers). |
-| Google (Gemini) access | Vertex ADC, AI Studio key, or none | Needed only by the multi-model policy. Skip for `opus-only`. |
-| Python | 3.10+ | Only if you enable the Antigravity SDK agent path. macOS ships 3.9, which is too old. |
+| [`/sdlc:run`](plugin/commands/run.md) | Runs the greenfield pipeline. Interviews you for the brief (or reads one you point at), confirms the output path, shows the routing plan, then starts spending. Takes no arguments. | Empty folder + a project brief. Generates a whole new app into `./src/`. |
+| [`/sdlc:brownfield`](plugin/commands/brownfield.md) | Runs the brownfield pipeline. Hydrates prior state, runs discovery (or resumes), asks for the intent and brief, freezes scope at Gate 0, then executes. Takes no arguments. | Existing repo. Extends the code you already have. |
+| [`/sdlc:pass`](plugin/commands/pass.md) | Headless twin of the two above. Every setting a flag: `--auth=vendor\|estimated`, `--policy`, `--mode=greenfield\|brownfield`, `--intent`, `--brief`, `--gates`, `--strict-write`, and more. | CI, scripted replays, batch runs. |
 
-## Architecture at a glance
+### Setup and configuration
 
-Nine phases run under a Claude Code subagent (`orchestrator`) that reads a policy YAML, decomposes the brief into TaskPackets, and dispatches each packet to the model the policy names. Every dispatch goes through the bundled MCP server (`gemini-flash-server`), which owns adapters, credential discovery, telemetry, and cost accounting.
-
-| Piece | File |
-|---|---|
-| Plugin manifest | [plugin/.claude-plugin/plugin.json](plugin/.claude-plugin/plugin.json) |
-| Marketplace entry | [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json) |
-| Orchestrator subagent | [plugin/agents/orchestrator.md](plugin/agents/orchestrator.md) |
-| Slash commands | [plugin/commands/sdlc-run.md](plugin/commands/sdlc-run.md), [plugin/commands/run-sdlc-pass.md](plugin/commands/run-sdlc-pass.md) |
-| MCP server entry | [plugin/mcp/gemini-flash-server/src/server.ts](plugin/mcp/gemini-flash-server/src/server.ts) |
-| Routing | [plugin/mcp/gemini-flash-server/src/routing.ts](plugin/mcp/gemini-flash-server/src/routing.ts) |
-| Adapters | [plugin/mcp/gemini-flash-server/src/adapters/](plugin/mcp/gemini-flash-server/src/adapters/) |
-| Two Gemini doors | [plugin/mcp/gemini-flash-server/src/adapters/geminiTransports.ts](plugin/mcp/gemini-flash-server/src/adapters/geminiTransports.ts) |
-| Agent worker | [plugin/mcp/gemini-flash-server/worker/gemini_worker.py](plugin/mcp/gemini-flash-server/worker/gemini_worker.py) |
-| Policies | [plugin/config/policies/](plugin/config/policies/) |
-| Pre-flight | [plugin/mcp/gemini-flash-server/src/preflight.ts](plugin/mcp/gemini-flash-server/src/preflight.ts) |
-| Telemetry | [plugin/mcp/gemini-flash-server/src/telemetry.ts](plugin/mcp/gemini-flash-server/src/telemetry.ts) |
-| Verify / repair | [plugin/scripts/verify-setup.mjs](plugin/scripts/verify-setup.mjs) |
-
-Details in [docs/architecture.md](docs/architecture.md).
-
-## Providers
-
-The pipeline needs at least one Anthropic surface and, for the multi-model policy, one Gemini surface. Details, verify commands, and failure modes are in [docs/setup.md](docs/setup.md).
-
-### Anthropic
-
-| Variable | When required | Notes |
+| Command | What it does | When to use it |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | `--auth=vendor` runs | Get one at [console.anthropic.com](https://console.anthropic.com/settings/keys). |
-| — | `--auth=estimated` runs | Sign in with `claude` once; no key required. |
+| [`/sdlc:setup`](plugin/commands/setup.md) | Rebuilds the MCP server, re-checks credentials, opens the browser only when a human decision is genuinely needed (missing key, Gemini door choice, policy pick). Idempotent. | After `/plugin update`, a credential change, or an unexpected refusal. Also the everyday "did I set this up right?" check. |
+| [`/sdlc:policy`](plugin/commands/policy.md) | Bare: prints the active policy for this project. `change`: opens the browser console to pick or author a new one. `--policy=<name>`: silent set, no browser. Per-project — writes `.sdlc/project.json.default_policy`. | Check or change which policy this project uses. |
 
-### Gemini as a model — AI Studio (API key)
+### Undo
 
-| Variable | Default | Notes |
+| Command | What it does | When to use it |
 |---|---|---|
-| `GEMINI_API_KEY` | — | Get one at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey). |
+| [`/sdlc:revert <run-id>`](plugin/commands/revert.md) | Reads `.sdlc/runs/<run-id>/provenance.json` and restores each touched file to its pre-run state — git checkout for tracked-committed files, per-run backup for uncommitted ones. Refuses in dirty cases and prints a three-way diff instead. No `--force`. Flags: `--skip-dirty`, `--dry-run`, `--keep-backups`. | Undoing a specific brownfield run. |
 
-### Gemini as a model — Vertex (Application Default Credentials)
+Full flag surface for `/sdlc:pass` is in [docs/running.md](docs/running.md).
 
-| Variable | Default | Notes |
-|---|---|---|
-| — | — | Run `gcloud auth application-default login`. Writes a credentials file; no env var required. |
-| `GOOGLE_CLOUD_PROJECT` | from the credentials file | Set when the account has more than one project. |
-| `GOOGLE_CLOUD_LOCATION` | `global` | Pinning a region bills a **+10% surcharge** on Gemini 3 and later. The plugin applies it to the reported cost. |
-| `GEMINI_BACKEND` | auto-detected | `vertex` or `api-key` — forces the door when both credentials are present. |
+## What a run produces
 
-If both an API key and Vertex credentials are present, the API key wins.
-
-### Gemini as an agent — Antigravity SDK
-
-| Variable | Default | Notes |
-|---|---|---|
-| — | — | Vertex ADC only. There is no API-key door. Needs Python 3.10+. |
-| `SDLC_SELECT` | unset | Written by `verify-setup.mjs --enable-agent`. Do not set by hand: it is a `slot=option` pair, and writing the option alone (`flash-agsdk-worker`) passes offline checks and throws at policy load. |
-| `GEMINI_WORKER_PYTHON` | plugin-built venv | Point at an interpreter you already maintain to skip the built-in venv. |
-
-## Policies
-
-Two policies ship. Pick one per run.
-
-| Policy | Uses | Env needed |
-|---|---|---|
-| `opus-only` | Claude Opus for every phase | Anthropic only |
-| `opus-plus-flash` | Opus for judgment; Gemini 3.5 Flash for mechanical (codegen, tests, docs) | Anthropic + Gemini |
-
-`opus-plus-flash` reaches the mechanical tier through one of two policy leaves, `flash-completion` (model) or `flash-agsdk-worker` (agent). Which leaf a run uses is chosen once at setup and recorded in `SDLC_SELECT` as a `slot=option` pair. The setup wizard and `verify-setup.mjs --enable-agent` are the only supported ways to write it. The routing layer refuses malformed specs at policy load, before any dispatch is paid for. See [docs/architecture.md#routing](docs/architecture.md#routing).
-
-## What the run produces
-
-Every artifact lands under `./.sdlc/` (for `/sdlc-run`) or `examples/<study-id>/passes/<run-id>/` (for `/run-sdlc-pass`). Generated source lands under `./src/`.
+Every artifact lands under `./.sdlc/` (for `/sdlc:run`) or `examples/<study-id>/passes/<run-id>/` (for `/sdlc:pass`). Generated source lands under `./src/`.
 
 | File | Contents |
 |---|---|
 | `telemetry.jsonl` | One JSON line per LLM call: phase, model, tokens (input / cached / output), cost, latency, task_id. |
 | `manifest.json` | Rollup of the telemetry: totals, per-phase, per-module, per-task-type. |
-| `delegation/` | Only on runs that used the agent path. Three files per delegated packet: the task brief, the worker's own usage sidecar, and the receipt joining them to the on-disk diff. |
+| `provenance.json` | Every file the run touched, with pre-run hash — the input `/sdlc:revert` reads. |
+| `delegation/` | Only on runs that used the agent path. Three files per delegated packet: task brief, worker usage sidecar, receipt. |
 | `.hook-logs/hook.jsonl` | One line per `execute_with_model` call. Backup heartbeat; safe to delete. |
-| Cost report (from `node tools/report.mjs <pass-dir>`) | Per-phase table, delegation table if any, total cost, methodology footer. |
+| Cost report | `node tools/report.mjs <pass-dir>` — per-phase table, delegation table if any, total cost, methodology footer. |
 
 Full reference in [docs/understanding-output.md](docs/understanding-output.md).
 
-## Verify or repair the install
+## Try it — one worked example
 
-Re-run the setup check at any time. It reports what is ready, what is missing, and prints the exact command to fix each finding. Nothing is spent.
+The [Ping Service](examples/quick-demo/) brief run on `opus-plus-flash`, mechanical phases going to Gemini as a model:
 
-```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/multi-model-orchestrator/*/scripts/verify-setup.mjs | tail -1)" --fix
+```
+Wall-clock:   28 minutes
+Model calls:  11, of which 5 dispatched packets (one retried)
+Tokens:       43,027 in / 33,647 out
+Recorded cost: $0.84
 ```
 
-`--fix` rebuilds the bundled MCP server. Also the repair after `/plugin update`, which re-copies the plugin from source and removes the build.
+Full recorded output — `.sdlc/`, `src/`, both readmes — is in [examples/quick-demo/passes/model-path/](examples/quick-demo/passes/model-path/). The same brief down the other door is in [examples/quick-demo/passes/agent-path/](examples/quick-demo/passes/agent-path/). Render the cost report yourself:
+
+```bash
+node tools/report.mjs examples/quick-demo/passes/model-path
+```
+
+Step-by-step walkthrough of a real first run: [docs/tutorial-first-run.md](docs/tutorial-first-run.md).
+
+## Verify or repair the install
+
+Re-run the setup check any time. `/sdlc:setup` rebuilds the MCP server, re-checks credentials, and pauses only when a human decision is needed:
+
+```
+/sdlc:setup
+```
+
+Also the repair after `/plugin update`, which re-copies the plugin from source and removes the build. The raw script still works for scripted invocation:
+
+```bash
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --fix
+```
 
 ## Clone route
 
@@ -144,20 +277,21 @@ cd ai-sdlc-orchestrator-claude-code-harness
 node tools/setup.mjs
 ```
 
-`tools/setup.mjs` runs the same checks the plugin route runs, installs the MCP server's dependencies, builds it, and writes `.mcp.json`. Full flag surface for `/run-sdlc-pass` is documented in [docs/running.md](docs/running.md).
+`tools/setup.mjs` runs the same checks the plugin route runs, installs the MCP server's dependencies, builds it, and writes `.mcp.json`.
 
 ## Documentation
 
 - [docs/setup.md](docs/setup.md) — providers, credentials, both Gemini doors
 - [docs/running.md](docs/running.md) — the pipeline, policies, bringing your own brief
 - [docs/brief-template.md](docs/brief-template.md) — the section layout a brief needs
-- [docs/architecture.md](docs/architecture.md) — plugin surface, MCP server, adapters, telemetry
+- [docs/architecture.md](docs/architecture.md) — plugin surface, MCP server, adapters, telemetry, full file inventory
 - [docs/troubleshooting.md](docs/troubleshooting.md) — symptom → cause → fix
 - [docs/understanding-output.md](docs/understanding-output.md) — reading the report and the raw files
 - [docs/methodology.md](docs/methodology.md) — how tokens and costs are recorded
 - [docs/two-gemini-paths.md](docs/two-gemini-paths.md) — measured comparison of the two doors on the same brief
+- [docs/brownfield-routing.md](docs/brownfield-routing.md) — which model does which work
 - [docs/walkthroughs/](docs/walkthroughs/) — the two Gemini paths, frame by frame ([model](docs/walkthroughs/model-path.html), [agent](docs/walkthroughs/agent-path.html))
-- [examples/quick-demo/](examples/quick-demo/) — smallest brief, one endpoint, minutes to run; both paths recorded under `passes/`
+- [examples/quick-demo/](examples/quick-demo/) — smallest brief, one endpoint, minutes to run
 - [examples/workforce-ops/](examples/workforce-ops/) — the reference brief
 - [examples/travel-ops/](examples/travel-ops/) — a second brief (booking, cancellation, refund handling)
 

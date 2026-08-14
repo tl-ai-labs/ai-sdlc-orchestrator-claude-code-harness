@@ -8,6 +8,35 @@ Run one full AI-SDLC pass. This command takes no arguments. Everything it needs 
 Work through the steps in order. Do not skip a step because the answer seems obvious, and do not
 start the run until step 5 is confirmed.
 
+# 0. Mode-detection guard — greenfield only
+
+**Before anything else,** check the current directory. This command is the **greenfield** entry
+point — it generates a whole new application from a brief into `./src`. If the user is standing in
+an **existing repo** (any of the signals below), they almost certainly want `/sdlc:brownfield`
+instead, and running greenfield here would treat their real code as an empty canvas.
+
+Signals of an existing repo:
+- `./src/` exists and is non-empty
+- `.git/` exists with any tracked files (`git ls-files | head -1` returns a file)
+- `package.json`, `pyproject.toml`, `go.mod`, or another stack manifest exists at repo root
+- `README.md` exists and is longer than a stub (>200 bytes)
+
+If any of these hold, **stop and offer the choice** before continuing:
+
+> This looks like an existing repo, not an empty folder.
+>
+> - **`/sdlc:brownfield`** is for extending an existing project — pick one of seven job types
+>   (docs / bugfix / feature-extend / feature-new / refactor / test / deps), confirm scope at
+>   Gate 0, and run with a write contract that guarantees your existing files stay untouched.
+> - **`/sdlc:run`** (this command) will treat this folder as the target for a fresh generated
+>   application. That may not be what you want.
+>
+> Which do you want to run? (`brownfield` / `run --force-greenfield` / `abort`)
+
+Only proceed with the rest of this command if the user replies `run --force-greenfield` or
+explicitly confirms they want greenfield in this folder. If they reply `brownfield`, exit and
+tell them to run `/sdlc:brownfield` in their next turn.
+
 # 1. Check the setup before anything else
 
 Run the setup check that ships with the plugin:
@@ -99,9 +128,18 @@ Tell the user both paths. If `./src` already contains files, say so and ask befo
 
 # 4. Show what will run
 
-State the routing plainly, as fact. Read it from the policy rather than reciting it from memory:
-the default policy is `opus-plus-flash`, loaded from
-`${CLAUDE_PLUGIN_ROOT}/config/policies/opus-plus-flash.yaml`.
+State the routing plainly, as fact. Read the policy name written by setup:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only
+```
+
+This prints the `default_policy` field setup wrote to `.sdlc/project.json`. If the output is
+empty, setup wasn't run for this project — stop and tell the user to run setup first
+([SETUP.md](../../SETUP.md), §5b). Do not proceed to spend anything without a policy the user
+has explicitly picked or explicitly kept as the shipped default.
+
+Load `${CLAUDE_PLUGIN_ROOT}/config/policies/<resolved-name>.yaml`.
 
 Report, in a short list:
 - which model handles the judgment phases — requirements, design, task planning, senior review,
@@ -132,8 +170,10 @@ design and task planning are billed to the premium tier. Say that in one sentenc
 cents, and it exits 0 or names the cause in words. If they decline, continue; the run is not
 blocked on it.
 
-This first version runs the default policy. It is not configurable from this command; a user who
-needs different routing edits the policy file directly.
+This command runs whatever `project.default_policy` resolves to. To change it for this project,
+the user re-runs setup — `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs"` opens the
+browser-based policy console and writes the new choice to `.sdlc/project.json`. Do not launch
+the console from this flow; setup owns it.
 
 If step 1 reported missing Gemini credentials, say so here and explain the consequence in one
 sentence: the mechanical phases cannot dispatch, so the run would fail at the first codegen packet.
@@ -163,7 +203,7 @@ Invoke the `orchestrator` subagent with the resolved settings from the steps abo
 
 - `brief_path` — the confirmed brief
 - `auth_mode` — `vendor` or `estimated`, as confirmed in step 5
-- `policy` — `opus-plus-flash`, or `opus-only` if chosen in step 4
+- `policy` — the resolved policy name from step 4 (`project.default_policy` or `opus-plus-flash`)
 - `code_dir` — `./src`
 - `output_dir` — `./.sdlc`
 

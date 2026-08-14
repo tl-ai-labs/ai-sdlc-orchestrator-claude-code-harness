@@ -1,16 +1,24 @@
 # Understanding the output
 
-After a pass finishes, three things live under `examples/<study-id>/passes/<run-id>/`:
+> **For:** reading `telemetry.jsonl`, `manifest.json`, `provenance.json`, and the cost report. **Also see:** [methodology.md](methodology.md) · [running.md](running.md).
+
+After a pass finishes, three things live under the run's output directory — `examples/<study-id>/passes/<run-id>/` for greenfield (`/sdlc:pass`, `/sdlc:run`), `.sdlc/runs/<YYYYMMDD-HHMMSS>-<intent>-<slug>/` for brownfield (`/sdlc:brownfield`, `/sdlc:pass --mode=brownfield`):
 
 - `telemetry.jsonl` — one JSON object per line, one line per LLM call. The raw data.
 - `manifest.json` — a rollup of the telemetry into totals, per-phase breakdown, and metadata.
-- Generated source under `app/` (or similar, per the phase-writer) — the actual code the run produced.
+- Generated source under `app/` (greenfield) or the files named at Gate 0 (brownfield) — the actual code the run produced.
 
-A fourth appears only on runs that delegated to the agent worker — installs that chose the agent path, via `--enable-agent` on the verify script or the wizard's question ([setup.md](setup.md#gemini-as-a-model-or-gemini-as-an-agent)):
+A fourth appears only on runs that delegated to the agent worker — installs that chose the agent path, via `--enable-agent` on the verify script or the wizard's question ([setup.md](setup.md#gemini-as-an-agent--antigravity-sdk)):
 
 - `delegation/` — three files per delegated packet: the brief the worker was given, the usage sidecar it wrote, and a receipt describing what it did. See [the delegation directory](#the-delegation-directory).
 
-And the report emitted by `node tools/report.mjs examples/<study-id>/passes/<run-id>` is a rendered view of the manifest.
+Brownfield runs add three more under `.sdlc/runs/<run-id>/`:
+
+- `provenance.json` — every file this run created or modified, keyed by path. `/sdlc:revert` reads this to undo the run.
+- `intent_brief.md`, `discovery.md`, `change_plan.md`, `senior-review.md`, `security-review.md`, `final_report.md` — the per-phase artifacts.
+- `packets.jsonl` — the TaskPacket stream the orchestrator dispatched, one per line.
+
+And the report emitted by `node tools/report.mjs <output-dir>` is a rendered view of the manifest.
 
 ## The report, section by section
 

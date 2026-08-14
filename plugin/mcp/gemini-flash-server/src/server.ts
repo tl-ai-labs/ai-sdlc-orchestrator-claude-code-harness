@@ -37,6 +37,43 @@ import {
 } from "./adapters/geminiTransports.js";
 import type { TaskPacket, TelemetryEvent, Policy, SelectOverrides } from "./types.js";
 
+/**
+ * Cheap up-front schema validation for TaskPacket inputs to execute_with_model.
+ * Purpose: give the orchestrator a clean "missing field X" error instead of the
+ * downstream "Cannot read properties of undefined (reading 'map')" that fires
+ * when adapters try to iterate `packet.inputs` or read `packet.budget.maxOutputTokens`.
+ * Failure mode observed in real run — see PR #21 self-review notes.
+ */
+function validateTaskPacket(raw: unknown): TaskPacket {
+  if (raw == null || typeof raw !== "object") {
+    throw new Error("execute_with_model: `packet` argument is missing or not an object.");
+  }
+  const packet = raw as Record<string, unknown>;
+  const required = [
+    "id", "phase", "task_type", "module", "instruction",
+    "inputs", "outputSchema", "acceptance", "budget", "pass_id",
+  ];
+  const missing = required.filter((k) => packet[k] === undefined);
+  if (missing.length > 0) {
+    throw new Error(
+      `execute_with_model: TaskPacket is missing required field${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}. ` +
+      `See plugin/mcp/gemini-flash-server/src/types.ts for the schema (or plugin/agents/orchestrator.md for the required-fields table).`,
+    );
+  }
+  if (!Array.isArray(packet.inputs)) {
+    throw new Error(
+      `execute_with_model: TaskPacket.inputs must be a FileSlice[] array — pass [] for packets that read no files. Got: ${typeof packet.inputs}`,
+    );
+  }
+  const budget = packet.budget as { maxOutputTokens?: unknown; maxInputTokens?: unknown } | undefined;
+  if (!budget || typeof budget.maxOutputTokens !== "number" || typeof budget.maxInputTokens !== "number") {
+    throw new Error(
+      `execute_with_model: TaskPacket.budget must be { maxInputTokens: number, maxOutputTokens: number }.`,
+    );
+  }
+  return packet as unknown as TaskPacket;
+}
+
 const SERVER_NAME = "gemini-flash-server";
 const SERVER_VERSION = "0.1.0";
 
@@ -243,7 +280,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     switch (name) {
       case "execute_with_model": {
         const a = args as any;
-        const packet = a.packet as TaskPacket;
+        const packet = validateTaskPacket(a.packet);
         const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
         const decision = pickModel(
           {

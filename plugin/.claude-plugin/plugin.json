@@ -1,6 +1,6 @@
 {
-  "name": "multi-model-orchestrator",
-  "version": "0.4.0",
+  "name": "sdlc",
+  "version": "0.5.0",
   "description": "Multi-model SDLC orchestration plugin for Claude Code. Reads a project brief and routes SDLC phases to configured models per policy.",
   "author": { "name": "Tilicho Labs" },
   "license": "MIT",
