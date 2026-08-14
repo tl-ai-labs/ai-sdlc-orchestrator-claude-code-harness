@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 380" role="img" aria-labelledby="hero-title hero-desc">
+  <title id="hero-title">How the AI-SDLC Orchestrator plugin works</title>
+  <desc id="hero-desc">You paste two prompts in Claude Code. An orchestrator subagent decomposes the work into packets, routes premium judgment work to Claude Opus and cheap mechanical work to Gemini Flash, and hands your project both generated code under src/ and a full audit trail under .sdlc/. Cost is about ten times lower than a one-model run because most of the work is mechanical.</desc>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6B7280"/>
+    </marker>
+    <style>
+      .tag  { font: 700 10px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #6B7280; letter-spacing: 0.10em; }
+      .h    { font: 700 16px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #111827; }
+      .b    { font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #1F2937; }
+      .s    { font: 400 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #4B5563; }
+      .mono { font: 500 12px ui-monospace, "SF Mono", Menlo, Consolas, monospace; fill: #1F2937; }
+      .note { font: 500 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #059669; }
+      @media (prefers-color-scheme: dark) {
+        .tag  { fill: #9CA3AF; }
+        .h    { fill: #F9FAFB; }
+        .b    { fill: #E5E7EB; }
+        .s    { fill: #D1D5DB; }
+        .mono { fill: #E5E7EB; }
+        .note { fill: #34D399; }
+      }
+    </style>
+  </defs>
+
+  <rect width="1000" height="380" fill="none"/>
+
+  <text x="60"  y="42" class="tag">STEP 1 — YOU</text>
+  <text x="360" y="42" class="tag">STEP 2 — ORCHESTRATOR SUBAGENT</text>
+  <text x="760" y="42" class="tag">STEP 3 — YOUR PROJECT</text>
+
+  <g>
+    <rect x="60" y="60" width="240" height="230" rx="10" fill="#EFF2FA" stroke="#375A9D" stroke-width="1.5"/>
+    <text x="180" y="92"  text-anchor="middle" class="h">You paste 2 prompts</text>
+    <text x="180" y="112" text-anchor="middle" class="s">in a Claude Code session</text>
+
+    <rect x="78" y="130" width="204" height="46" rx="6" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="180" y="150" text-anchor="middle" class="mono">Setup this plugin from</text>
+    <text x="180" y="166" text-anchor="middle" class="mono">this repo — &lt;url&gt;</text>
+
+    <rect x="78" y="188" width="204" height="46" rx="6" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="180" y="208" text-anchor="middle" class="mono">/sdlc:run</text>
+    <text x="180" y="224" text-anchor="middle" class="mono">or /sdlc:brownfield</text>
+
+    <text x="180" y="264" text-anchor="middle" class="s">a project brief · or an</text>
+    <text x="180" y="280" text-anchor="middle" class="s">existing repo · your call</text>
+  </g>
+
+  <path d="M 305 175 L 355 175" stroke="#6B7280" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+
+  <g>
+    <rect x="360" y="60" width="280" height="290" rx="10" fill="#F9FAFB" stroke="#D1D5DB" stroke-width="1.5"/>
+    <text x="500" y="92"  text-anchor="middle" class="h">orchestrator</text>
+    <text x="500" y="112" text-anchor="middle" class="s">reads a policy YAML · decomposes</text>
+    <text x="500" y="128" text-anchor="middle" class="s">the brief into TaskPackets ·</text>
+    <text x="500" y="144" text-anchor="middle" class="s">dispatches each to the tier the</text>
+    <text x="500" y="160" text-anchor="middle" class="s">policy names</text>
+
+    <path d="M 500 178 L 500 200" stroke="#6B7280" stroke-width="1.5" fill="none"/>
+    <path d="M 500 200 L 435 200 L 435 220" stroke="#6B7280" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+    <path d="M 500 200 L 565 200 L 565 220" stroke="#6B7280" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+
+    <rect x="378" y="222" width="114" height="102" rx="8" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+    <text x="435" y="244" text-anchor="middle" class="b" style="fill:#78350F">Claude Opus</text>
+    <text x="435" y="260" text-anchor="middle" class="s" style="fill:#92400E">judgment</text>
+    <line x1="388" y1="270" x2="482" y2="270" stroke="#B45309" stroke-width="0.5"/>
+    <text x="435" y="286" text-anchor="middle" class="s" style="fill:#78350F">requirements</text>
+    <text x="435" y="300" text-anchor="middle" class="s" style="fill:#78350F">architecture</text>
+    <text x="435" y="314" text-anchor="middle" class="s" style="fill:#78350F">reviews · security</text>
+
+    <rect x="508" y="222" width="114" height="102" rx="8" fill="#E0F2FE" stroke="#0369A1" stroke-width="1.5"/>
+    <text x="565" y="244" text-anchor="middle" class="b" style="fill:#0C4A6E">Gemini Flash</text>
+    <text x="565" y="260" text-anchor="middle" class="s" style="fill:#075985">mechanical</text>
+    <line x1="518" y1="270" x2="612" y2="270" stroke="#0369A1" stroke-width="0.5"/>
+    <text x="565" y="286" text-anchor="middle" class="s" style="fill:#0C4A6E">codegen</text>
+    <text x="565" y="300" text-anchor="middle" class="s" style="fill:#0C4A6E">tests · docs</text>
+    <text x="565" y="314" text-anchor="middle" class="s" style="fill:#0C4A6E">debug</text>
+  </g>
+
+  <path d="M 645 175 L 695 175" stroke="#6B7280" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+
+  <g>
+    <rect x="700" y="60"  width="240" height="130" rx="10" fill="#ECFDF5" stroke="#059669" stroke-width="1.5"/>
+    <text x="820" y="94"  text-anchor="middle" class="h" style="fill:#065F46">./src/</text>
+    <text x="820" y="116" text-anchor="middle" class="s" style="fill:#047857">generated application</text>
+    <text x="820" y="132" text-anchor="middle" class="s" style="fill:#047857">code · tests · docs</text>
+    <text x="820" y="164" text-anchor="middle" class="s" style="fill:#047857">runs your test command</text>
+    <text x="820" y="180" text-anchor="middle" class="s" style="fill:#047857">before it declares done</text>
+  </g>
+
+  <g>
+    <rect x="700" y="210" width="240" height="140" rx="10" fill="#ECFDF5" stroke="#059669" stroke-width="1.5"/>
+    <text x="820" y="242" text-anchor="middle" class="h" style="fill:#065F46">.sdlc/</text>
+    <text x="820" y="262" text-anchor="middle" class="s" style="fill:#047857">manifest.json — rollups</text>
+    <text x="820" y="278" text-anchor="middle" class="s" style="fill:#047857">telemetry.jsonl — every call</text>
+    <text x="820" y="294" text-anchor="middle" class="s" style="fill:#047857">provenance.json — what changed</text>
+    <text x="820" y="310" text-anchor="middle" class="s" style="fill:#047857">final_report.md — cost per phase</text>
+    <text x="820" y="338" text-anchor="middle" class="note">~10× cheaper than one-model runs</text>
+  </g>
+</svg>
