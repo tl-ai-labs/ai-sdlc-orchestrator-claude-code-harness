@@ -214,7 +214,7 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function thinkingSupport(model) {
   if (!model) return [];
-  if (model.adapter === "mcp:gemini-flash-server" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
+  if (model.adapter === "mcp:model-dispatch" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
   if (model.adapter === "builtin-anthropic") return ANTHROPIC_EFFORT_TIERS;
   return [];
 }

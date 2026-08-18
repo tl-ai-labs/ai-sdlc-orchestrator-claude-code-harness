@@ -14,17 +14,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SERVER_DIR = join(ROOT, "plugin", "mcp", "gemini-flash-server");
+const SERVER_DIR = join(ROOT, "plugin", "mcp", "model-dispatch");
 
 if (!existsSync(join(SERVER_DIR, "node_modules"))) {
   console.log(
-    "\n! MCP server tests NOT RUN — plugin/mcp/gemini-flash-server has no installed\n" +
+    "\n! MCP server tests NOT RUN — plugin/mcp/model-dispatch has no installed\n" +
       "  dependencies, so its TypeScript cannot be compiled. Everything above passed.\n" +
       "  To include them:  npm run verify -- --fix   (then re-run npm test)\n",
   );
   process.exit(0);
 }
 
-console.log("\n> MCP server tests (plugin/mcp/gemini-flash-server)\n");
+console.log("\n> MCP server tests (plugin/mcp/model-dispatch)\n");
 const result = spawnSync("npm", ["test"], { cwd: SERVER_DIR, stdio: "inherit" });
 process.exit(result.status ?? 1);

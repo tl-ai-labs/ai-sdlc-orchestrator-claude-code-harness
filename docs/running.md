@@ -1,8 +1,8 @@
 # Running
 
-> **For:** every `/sdlc:pass` flag; scripting a run for CI or replay. **Also see:** [tutorial-first-run.md](tutorial-first-run.md) · [brownfield.md](brownfield.md) · [troubleshooting.md](troubleshooting.md).
+> **For:** every `/mmo:pass` flag; scripting a run for CI or replay. **Also see:** [tutorial-first-run.md](tutorial-first-run.md) · [brownfield.md](brownfield.md) · [troubleshooting.md](troubleshooting.md).
 
-This page is the reference for `/sdlc:pass` — the same run as `/sdlc:run` or `/sdlc:brownfield`, but with every setting exposed as a flag. Useful for repeat runs, for scripting, and for understanding what the interactive commands chose for you. If you installed the plugin, start with `/sdlc:run` (greenfield) or `/sdlc:brownfield` (existing repo) in a new session — Claude Code registers slash commands and starts plugin MCP servers only at session start, so the session that installed the plugin does not yet see them.
+This page is the reference for `/mmo:pass` — the same run as `/mmo:greenfield` or `/mmo:brownfield`, but with every setting exposed as a flag. Useful for repeat runs, for scripting, and for understanding what the interactive commands chose for you. If you installed the plugin, start with `/mmo:greenfield` (greenfield) or `/mmo:brownfield` (existing repo) in a new session — Claude Code registers slash commands and starts plugin MCP servers only at session start, so the session that installed the plugin does not yet see them.
 
 Two policies ship with this repository. Pick one to start.
 
@@ -43,13 +43,13 @@ claude --permission-mode acceptEdits
 Then, at the prompt:
 
 ```
-/sdlc:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
+/mmo:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
 ```
 
 Or with the multi-model policy:
 
 ```
-/sdlc:pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md
+/mmo:pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md
 ```
 
 The session pauses at each HITL gate; approve or redirect at each one.
@@ -59,7 +59,7 @@ The session pauses at each HITL gate; approve or redirect at each one.
 Best when you want to script the run, redirect all output to a file, or run overnight without babysitting.
 
 ```bash
-claude --print "/sdlc:pass --auth=vendor --policy=opus-only --run-id=pass1 examples/workforce-ops/brief.md" \
+claude --print "/mmo:pass --auth=vendor --policy=opus-only --run-id=pass1 examples/workforce-ops/brief.md" \
   --permission-mode acceptEdits \
   --output-format stream-json --verbose \
   > examples/workforce-ops/passes/pass1/live-run.log
@@ -79,14 +79,14 @@ Every HITL gate auto-approves. The full transcript lands in `live-run.log`.
 ### Arguments
 
 - `--auth=<vendor|estimated>` — **required**. `vendor` dispatches every LLM call via the MCP server so telemetry carries real vendor-reported tokens (needs `ANTHROPIC_API_KEY`); `estimated` uses a char-count heuristic for direct-tier calls (works on a Claude Code subscription without an API key). See [setup.md](setup.md#anthropic) and [methodology.md](methodology.md).
-- `--policy=<name>` — routing policy. Resolves in this order: the flag, then `.sdlc/project.json.default_policy` written by `/sdlc:setup` or `/sdlc:policy change`, then `opus-plus-flash`. Shipped presets: `opus-only`, `opus-plus-flash`. Any file under `plugin/config/policies/*.yaml` is a valid name.
+- `--policy=<name>` — routing policy. Resolves in this order: the flag, then `.sdlc/project.json.default_policy` written by `/mmo:setup` or `/mmo:policy change`, then `opus-plus-flash`. Shipped presets: `opus-only`, `opus-plus-flash`. Any file under `plugin/config/policies/*.yaml` is a valid name.
 - `--study=<id>` — case-study identifier. Defaults to `workforce-ops`. Change this whenever you run the pipeline on a brief other than the shipped one, so telemetry and packets stay grouped by project. Output lands in `examples/<study-id>/passes/<run-id>/`.
 - `--run-id=<id>` — becomes the pass's directory name under `examples/<study-id>/passes/`. Any string works. Defaults to `pass1`.
 - The remaining positional argument is the path to the brief. Use `examples/workforce-ops/brief.md` to reproduce the Workforce Ops case, or point at any other markdown file — see [Bring your own brief](#bring-your-own-brief) below.
 
 ## Brownfield mode
 
-`/sdlc:brownfield` is the interactive entry point for running against an existing repository. The same pipeline exposed as `/sdlc:pass --mode=brownfield` for scripting and CI. Additional flags apply only in brownfield mode:
+`/mmo:brownfield` is the interactive entry point for running against an existing repository. The same pipeline exposed as `/mmo:pass --mode=brownfield` for scripting and CI. Additional flags apply only in brownfield mode:
 
 | Flag | Purpose |
 |---|---|
@@ -101,13 +101,13 @@ Every HITL gate auto-approves. The full transcript lands in `live-run.log`.
 | `--adaptive-profile` | Force Tier 2b adaptive stack profile even when a matching pre-authored adapter exists. |
 | `--refresh-profile` | Force stack-profile re-scan (implies `--recheck`). Use after a substantial repo restructure. |
 
-Brownfield writes to `.sdlc/runs/<YYYYMMDD-HHMMSS>-<intent>-<slug>/` — `telemetry.jsonl`, `manifest.json`, `provenance.json`, `senior-review.md`, `security-review.md`, `final_report.md`. `provenance.json` is what `/sdlc:revert` reads to undo a run.
+Brownfield writes to `.sdlc/runs/<YYYYMMDD-HHMMSS>-<intent>-<slug>/` — `telemetry.jsonl`, `manifest.json`, `provenance.json`, `senior-review.md`, `security-review.md`, `final_report.md`. `provenance.json` is what `/mmo:revert` reads to undo a run.
 
 Full command surface for the interactive equivalent is in [plugin/commands/brownfield.md](../plugin/commands/brownfield.md).
 
 ## Bring your own brief
 
-The shipped `examples/workforce-ops/brief.md` is the Workforce Ops case. `/sdlc:pass` reads whatever markdown file it is given as a positional argument; substituting a different brief runs the orchestrator against that brief.
+The shipped `examples/workforce-ops/brief.md` is the Workforce Ops case. `/mmo:pass` reads whatever markdown file it is given as a positional argument; substituting a different brief runs the orchestrator against that brief.
 
 Steps:
 
@@ -116,13 +116,13 @@ Steps:
 3. Pick a `--run-id` for this pass. Interactive form:
 
    ```
-   /sdlc:pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md
+   /mmo:pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md
    ```
 
    Or headless:
 
    ```bash
-   claude --print "/sdlc:pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md" \
+   claude --print "/mmo:pass --auth=vendor --study=my-project --run-id=pass1 my-brief.md" \
      --permission-mode acceptEdits \
      --output-format stream-json --verbose \
      > examples/my-project/passes/pass1/live-run.log
@@ -175,10 +175,10 @@ Each pass writes to a separate directory under `examples/<study-id>/passes/`. To
 
 ```bash
 # headless form
-claude --print "/sdlc:pass --auth=vendor --policy=opus-only --run-id=baseline examples/workforce-ops/brief.md" \
+claude --print "/mmo:pass --auth=vendor --policy=opus-only --run-id=baseline examples/workforce-ops/brief.md" \
   --output-format stream-json --verbose > examples/workforce-ops/passes/baseline/live-run.log
 
-claude --print "/sdlc:pass --auth=vendor --policy=opus-plus-flash --run-id=multi-model examples/workforce-ops/brief.md" \
+claude --print "/mmo:pass --auth=vendor --policy=opus-plus-flash --run-id=multi-model examples/workforce-ops/brief.md" \
   --output-format stream-json --verbose > examples/workforce-ops/passes/multi-model/live-run.log
 
 node tools/report.mjs examples/workforce-ops/passes/baseline

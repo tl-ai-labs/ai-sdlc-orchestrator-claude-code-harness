@@ -27,10 +27,10 @@ const PHASES = [
   { id: "debug", label: "Debug", note: "escalates to opus at retry ≥ 2" },
 ];
 
-const KNOWN_ADAPTERS = ["builtin-anthropic", "mcp:gemini-flash-server", "antigravity-worker"];
+const KNOWN_ADAPTERS = ["builtin-anthropic", "mcp:model-dispatch", "antigravity-worker"];
 const ADAPTER_LABEL = {
   "builtin-anthropic": "Anthropic (Claude)",
-  "mcp:gemini-flash-server": "Gemini — completion call",
+  "mcp:model-dispatch": "Gemini — completion call",
   "antigravity-worker": "Gemini — Antigravity agent (SDK worker)",
 };
 
@@ -40,7 +40,7 @@ const SHIPPED_PRESETS = ["opus-only", "opus-plus-flash"];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function thinkingSupport(model) {
-  if (model.adapter === "mcp:gemini-flash-server" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
+  if (model.adapter === "mcp:model-dispatch" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
   if (model.adapter === "builtin-anthropic") return ANTHROPIC_EFFORT_TIERS;
   return [];
 }

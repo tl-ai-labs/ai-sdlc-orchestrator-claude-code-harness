@@ -43,7 +43,7 @@ Behavior:
 1. On every `Write` or `Edit` tool call, Claude Code invokes the hook.
 2. The hook reads `.sdlc/local/write-contract.json` from an ancestor of the current directory.
 3. If the file is missing or `active:false` → allow (greenfield mode or no active run — the
-   hook silently no-ops so `/sdlc:run` in an empty folder is unaffected).
+   hook silently no-ops so `/mmo:greenfield` in an empty folder is unaffected).
 4. If active:
    - Check the target path against `off_limits` patterns — deny with reason if hit.
    - Check against `allowlist` patterns — allow if hit.
@@ -61,7 +61,7 @@ Off-limits paths come from two sources merged into the run's write contract:
 
 | Tier | Source | Written when | Examples |
 |---|---|---|---|
-| **Project defaults** | `.sdlc/project.json.off_limits_default` | Once at setup by `/sdlc:setup` — a fixed list every run in this folder inherits. | `.env*`, `.mcp.json`, `.cursor/`, `.aider*`, `.continue/`, `.github/copilot-instructions.md`, `.roo/`, `node_modules/**`, `dist/**`, LFS-marked files, submodules. |
+| **Project defaults** | `.sdlc/project.json.off_limits_default` | Once at setup by `/mmo:setup` — a fixed list every run in this folder inherits. | `.env*`, `.mcp.json`, `.cursor/`, `.aider*`, `.continue/`, `.github/copilot-instructions.md`, `.roo/`, `node_modules/**`, `dist/**`, LFS-marked files, submodules. |
 | **Per-run additions** | Gate 0's off-limits list | Each brownfield run, on top of the defaults. | Anything ticket-specific — a directory you know shouldn't move for this particular change. |
 
 The merge happens at Gate 0. The write contract at `.sdlc/local/write-contract.json` holds the merged result. The PreToolUse hook reads it and never sees the two tiers as distinct — a hit in either denies the write.

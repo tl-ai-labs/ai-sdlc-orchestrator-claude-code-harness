@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.5.0-blue)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-0.6.0-blue)](.claude-plugin/marketplace.json)
 
 ![How the plugin works — you paste two prompts, an orchestrator routes premium work to Claude Opus and mechanical work to Gemini Flash, and your project gets both generated code and a full audit trail](docs/assets/hero.svg)
 
@@ -20,7 +20,7 @@ Every generated file, every telemetry event, and every cost report lands under y
 
 ```mermaid
 flowchart TD
-    User["You in a Claude Code session<br/>/sdlc:run<br/>/sdlc:brownfield<br/>/sdlc:pass"]
+    User["You in a Claude Code session<br/>/mmo:greenfield<br/>/mmo:brownfield<br/>/mmo:pass"]
     Orch["orchestrator subagent<br/>reads policy YAML<br/>decomposes into TaskPackets"]
     Anthropic["Anthropic (direct)<br/>Claude Opus<br/>requirements · design<br/>senior review · security"]
     MCP["bundled MCP server<br/>routing · adapters<br/>telemetry · cost<br/>mechanical phases"]
@@ -83,7 +83,7 @@ The full plugin file inventory lives in [docs/architecture.md](docs/architecture
 
 ### Tasks — the seven brownfield job types
 
-Pick one at Gate 0 in `/sdlc:brownfield`.
+Pick one at Gate 0 in `/mmo:brownfield`.
 
 | Job type | When to use | Who does the heavy lifting |
 |---|---|---|
@@ -95,7 +95,7 @@ Pick one at Gate 0 in `/sdlc:brownfield`.
 | `test` | Backfill tests to a coverage target | Gemini Flash |
 | `deps` | Upgrade a dependency + patch breaking-change fallout | Opus for dep-swap plan · Gemini for adjacent-code patches |
 
-Full intent-by-phase matrix in [plugin/skills/run-ai-sdlc/SKILL.md:255](plugin/skills/run-ai-sdlc/SKILL.md).
+Full intent-by-phase matrix in [plugin/skills/pipeline/SKILL.md:255](plugin/skills/pipeline/SKILL.md).
 
 ### Routing — model per phase
 
@@ -110,7 +110,7 @@ Same rule applies to greenfield and brownfield. The default `opus-plus-flash` po
 | `debug` (retry_count ≥ 2) | premium | Claude Opus (auto-escalation) |
 | `test_run` | local | Bash on your machine, no model call |
 
-Source: [plugin/config/policies/opus-plus-flash.yaml:64](plugin/config/policies/opus-plus-flash.yaml). Every rule is data — change routing by editing the YAML, or author a new policy in the browser console via `/sdlc:policy change`.
+Source: [plugin/config/policies/opus-plus-flash.yaml:64](plugin/config/policies/opus-plus-flash.yaml). Every rule is data — change routing by editing the YAML, or author a new policy in the browser console via `/mmo:policy change`.
 
 Two guardrails ship on:
 
@@ -133,8 +133,8 @@ flowchart LR
     Q{What do you have?}
     E[empty folder<br/>+ a project brief]
     R[existing repo<br/>any stack, any conventions]
-    G["/sdlc:run<br/>generate a whole new app"]:::opus
-    B["/sdlc:brownfield<br/>pick 1 of 7 job types<br/>confirm scope at Gate 0"]:::gem
+    G["/mmo:greenfield<br/>generate a whole new app"]:::opus
+    B["/mmo:brownfield<br/>pick 1 of 7 job types<br/>confirm scope at Gate 0"]:::gem
 
     Q --> E --> G
     Q --> R --> B
@@ -145,10 +145,10 @@ flowchart LR
 
 | Mode | Command | What it does |
 |---|---|---|
-| **Greenfield** | `/sdlc:run` | Generates a whole new application from a project brief into `./src/`. Original flow the plugin was built for. |
-| **Brownfield** | `/sdlc:brownfield` | Extends an existing repository. Pick one of the seven job types above, confirm scope at Gate 0, run the pipeline with a non-destructive write contract that guarantees off-limits files stay untouched. |
+| **Greenfield** | `/mmo:greenfield` | Generates a whole new application from a project brief into `./src/`. Original flow the plugin was built for. |
+| **Brownfield** | `/mmo:brownfield` | Extends an existing repository. Pick one of the seven job types above, confirm scope at Gate 0, run the pipeline with a non-destructive write contract that guarantees off-limits files stay untouched. |
 
-Both use the same install, same policies, same MCP dispatch layer. `/sdlc:run` in an existing repo warns you and offers `/sdlc:brownfield` instead.
+Both use the same install, same policies, same MCP dispatch layer. `/mmo:greenfield` in an existing repo warns you and offers `/mmo:brownfield` instead.
 
 Brownfield reference:
 
@@ -184,13 +184,13 @@ Claude Code follows [SETUP.md](SETUP.md): registers the marketplace, installs th
 **Prompt 2 — run.** Start a **new session in the same folder**, then whichever fits:
 
 ```
-/sdlc:run             # greenfield: empty folder + project brief
-/sdlc:brownfield      # brownfield: existing repo, pick a job type
+/mmo:greenfield             # greenfield: empty folder + project brief
+/mmo:brownfield      # brownfield: existing repo, pick a job type
 ```
 
 Both check the install, show which model each phase will run on, confirm the plan (Gate 0 in brownfield), and only then start spending.
 
-> **Why a new session matters.** Claude Code registers a plugin's slash commands and starts its MCP servers only when a session begins. In the install session, `/sdlc:run`, `/sdlc:brownfield`, and the bundled server are not yet live — a run started there would route every phase to the premium model.
+> **Why a new session matters.** Claude Code registers a plugin's slash commands and starts its MCP servers only when a session begins. In the install session, `/mmo:greenfield`, `/mmo:brownfield`, and the bundled server are not yet live — a run started there would route every phase to the premium model.
 
 ## Commands
 
@@ -200,34 +200,34 @@ Six commands, split by purpose. All are declared in [plugin/commands/](plugin/co
 
 | Command | What it does | When to use it |
 |---|---|---|
-| [`/sdlc:run`](plugin/commands/run.md) | Runs the greenfield pipeline. Interviews you for the brief (or reads one you point at), confirms the output path, shows the routing plan, then starts spending. Takes no arguments. | Empty folder + a project brief. Generates a whole new app into `./src/`. |
-| [`/sdlc:brownfield`](plugin/commands/brownfield.md) | Runs the brownfield pipeline. Hydrates prior state, runs discovery (or resumes), asks for the intent and brief, freezes scope at Gate 0, then executes. Takes no arguments. | Existing repo. Extends the code you already have. |
-| [`/sdlc:pass`](plugin/commands/pass.md) | Headless twin of the two above. Every setting a flag: `--auth=vendor\|estimated`, `--policy`, `--mode=greenfield\|brownfield`, `--intent`, `--brief`, `--gates`, `--strict-write`, and more. | CI, scripted replays, batch runs. |
+| [`/mmo:greenfield`](plugin/commands/greenfield.md) | Runs the greenfield pipeline. Interviews you for the brief (or reads one you point at), confirms the output path, shows the routing plan, then starts spending. Takes no arguments. | Empty folder + a project brief. Generates a whole new app into `./src/`. |
+| [`/mmo:brownfield`](plugin/commands/brownfield.md) | Runs the brownfield pipeline. Hydrates prior state, runs discovery (or resumes), asks for the intent and brief, freezes scope at Gate 0, then executes. Takes no arguments. | Existing repo. Extends the code you already have. |
+| [`/mmo:pass`](plugin/commands/pass.md) | Headless twin of the two above. Every setting a flag: `--auth=vendor\|estimated`, `--policy`, `--mode=greenfield\|brownfield`, `--intent`, `--brief`, `--gates`, `--strict-write`, and more. | CI, scripted replays, batch runs. |
 
 ### Setup and configuration
 
 | Command | What it does | When to use it |
 |---|---|---|
-| [`/sdlc:setup`](plugin/commands/setup.md) | Rebuilds the MCP server, re-checks credentials, opens the browser only when a human decision is genuinely needed (missing key, Gemini door choice, policy pick). Idempotent. | After `/plugin update`, a credential change, or an unexpected refusal. Also the everyday "did I set this up right?" check. |
-| [`/sdlc:policy`](plugin/commands/policy.md) | Bare: prints the active policy for this project. `change`: opens the browser console to pick or author a new one. `--policy=<name>`: silent set, no browser. Per-project — writes `.sdlc/project.json.default_policy`. | Check or change which policy this project uses. |
+| [`/mmo:setup`](plugin/commands/setup.md) | Rebuilds the MCP server, re-checks credentials, opens the browser only when a human decision is genuinely needed (missing key, Gemini door choice, policy pick). Idempotent. | After `/plugin update`, a credential change, or an unexpected refusal. Also the everyday "did I set this up right?" check. |
+| [`/mmo:policy`](plugin/commands/policy.md) | Bare: prints the active policy for this project. `change`: opens the browser console to pick or author a new one. `--policy=<name>`: silent set, no browser. Per-project — writes `.sdlc/project.json.default_policy`. | Check or change which policy this project uses. |
 
 ### Undo
 
 | Command | What it does | When to use it |
 |---|---|---|
-| [`/sdlc:revert <run-id>`](plugin/commands/revert.md) | Reads `.sdlc/runs/<run-id>/provenance.json` and restores each touched file to its pre-run state — git checkout for tracked-committed files, per-run backup for uncommitted ones. Refuses in dirty cases and prints a three-way diff instead. No `--force`. Flags: `--skip-dirty`, `--dry-run`, `--keep-backups`. | Undoing a specific brownfield run. |
+| [`/mmo:revert <run-id>`](plugin/commands/revert.md) | Reads `.sdlc/runs/<run-id>/provenance.json` and restores each touched file to its pre-run state — git checkout for tracked-committed files, per-run backup for uncommitted ones. Refuses in dirty cases and prints a three-way diff instead. No `--force`. Flags: `--skip-dirty`, `--dry-run`, `--keep-backups`. | Undoing a specific brownfield run. |
 
-Full flag surface for `/sdlc:pass` is in [docs/running.md](docs/running.md).
+Full flag surface for `/mmo:pass` is in [docs/running.md](docs/running.md).
 
 ## What a run produces
 
-Every artifact lands under `./.sdlc/` (for `/sdlc:run`) or `examples/<study-id>/passes/<run-id>/` (for `/sdlc:pass`). Generated source lands under `./src/`.
+Every artifact lands under `./.sdlc/` (for `/mmo:greenfield`) or `examples/<study-id>/passes/<run-id>/` (for `/mmo:pass`). Generated source lands under `./src/`.
 
 | File | Contents |
 |---|---|
 | `telemetry.jsonl` | One JSON line per LLM call: phase, model, tokens (input / cached / output), cost, latency, task_id. |
 | `manifest.json` | Rollup of the telemetry: totals, per-phase, per-module, per-task-type. |
-| `provenance.json` | Every file the run touched, with pre-run hash — the input `/sdlc:revert` reads. |
+| `provenance.json` | Every file the run touched, with pre-run hash — the input `/mmo:revert` reads. |
 | `delegation/` | Only on runs that used the agent path. Three files per delegated packet: task brief, worker usage sidecar, receipt. |
 | `.hook-logs/hook.jsonl` | One line per `execute_with_model` call. Backup heartbeat; safe to delete. |
 | Cost report | `node tools/report.mjs <pass-dir>` — per-phase table, delegation table if any, total cost, methodology footer. |
@@ -255,16 +255,16 @@ Step-by-step walkthrough of a real first run: [docs/tutorial-first-run.md](docs/
 
 ## Verify or repair the install
 
-Re-run the setup check any time. `/sdlc:setup` rebuilds the MCP server, re-checks credentials, and pauses only when a human decision is needed:
+Re-run the setup check any time. `/mmo:setup` rebuilds the MCP server, re-checks credentials, and pauses only when a human decision is needed:
 
 ```
-/sdlc:setup
+/mmo:setup
 ```
 
 Also the repair after `/plugin update`, which re-copies the plugin from source and removes the build. The raw script still works for scripted invocation:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --fix
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)" --fix
 ```
 
 ## Clone route

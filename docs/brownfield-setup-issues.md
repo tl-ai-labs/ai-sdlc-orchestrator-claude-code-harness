@@ -56,7 +56,7 @@ The table's "handled by" column names the script or subagent that owns each issu
 ## How to run just the brownfield checks
 
 ```bash
-node ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs --brownfield-check
+node ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs --brownfield-check
 ```
 
 Or run them independently:
@@ -78,5 +78,5 @@ node .../plugin/scripts/pre-check.mjs --report
 ## For issues not on this list
 
 If you hit a problem that is not described here, capture it in a support bundle (v1.5 — the
-`/sdlc:support-bundle` command) and file an issue. The bundle redacts secrets and includes
+`/mmo:support-bundle` command) and file an issue. The bundle redacts secrets and includes
 enough context (versions, git status, last few runs) to diagnose the report.

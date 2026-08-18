@@ -1,5 +1,5 @@
 /**
- * Guards the two-prompt user surface: `/sdlc:run` takes no arguments (a
+ * Guards the two-prompt user surface: `/mmo:greenfield` takes no arguments (a
  * required flag turns "type this" into "read the docs first"). Contract
  * tests over command + agent definitions — catches regressions cheaply.
  */
@@ -14,7 +14,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const read = (...parts) => readFileSync(join(ROOT, ...parts), "utf8");
 
-const WIZARD = "plugin/commands/run.md";
+const WIZARD = "plugin/commands/greenfield.md";
 const FULL = "plugin/commands/pass.md";
 const AGENT = "plugin/agents/orchestrator.md";
 
@@ -30,7 +30,7 @@ test("both commands ship, and the wizard is the one prompt 2 names", () => {
   assert.ok(existsSync(join(ROOT, FULL)), `${FULL} is missing — the flag surface is documented as still available`);
 });
 
-test("/sdlc:run declares no arguments", () => {
+test("/mmo:greenfield declares no arguments", () => {
   const { head } = frontmatter(read(WIZARD));
 
   // An empty argument-hint is what tells Claude Code, and the reader of
@@ -40,7 +40,7 @@ test("/sdlc:run declares no arguments", () => {
   assert.match(head, /description:\s*\S/, "a description is what the user sees in /help");
 });
 
-test("/sdlc:run keeps the run-record flags off the user surface", () => {
+test("/mmo:greenfield keeps the run-record flags off the user surface", () => {
   const body = frontmatter(read(WIZARD)).body;
 
   // --study and --run-id name an internal layout that meant something when
@@ -55,7 +55,7 @@ test("/sdlc:run keeps the run-record flags off the user surface", () => {
     }
 });
 
-test("/sdlc:run checks the install before it can spend anything", () => {
+test("/mmo:greenfield checks the install before it can spend anything", () => {
   const body = frontmatter(read(WIZARD)).body;
 
   // The bundled model server is built at setup time, not committed. If that
@@ -68,7 +68,7 @@ test("/sdlc:run checks the install before it can spend anything", () => {
   assert.ok(existsSync(join(ROOT, "plugin", "scripts", "verify-setup.mjs")), "the script the wizard calls must exist");
 });
 
-test("/sdlc:run offers every brief the repo actually ships, by its installed path", () => {
+test("/mmo:greenfield offers every brief the repo actually ships, by its installed path", () => {
   const body = frontmatter(read(WIZARD)).body;
 
   // The wizard runs from wherever the user is standing — normally an empty
@@ -119,8 +119,8 @@ test("every plugin file the wizard names is inside the part of the repo that shi
 });
 
 test("the briefs shipped inside the plugin are the briefs kept at the repo root", () => {
-  // Two copies exist because they serve two entry points: `/sdlc:pass` is
-  // run from a clone and reads `examples/<name>/brief.md`, while `/sdlc:run` is
+  // Two copies exist because they serve two entry points: `/mmo:pass` is
+  // run from a clone and reads `examples/<name>/brief.md`, while `/mmo:greenfield` is
   // run from an empty folder and can only read what the install copied. Neither
   // location can be dropped, so this asserts they never drift — editing one and
   // forgetting the other fails here rather than shipping a stale brief to the
@@ -147,7 +147,7 @@ test("the section layout the wizard dictates is the one the brief template docum
 
   // The wizard spells the layout out inline rather than pointing at
   // docs/brief-template.md, because that file documents the clone workflow —
-  // it opens with `/sdlc:pass` usage and repo-relative output paths that
+  // it opens with `/mmo:pass` usage and repo-relative output paths that
   // mean nothing in an empty folder, and it does not ship with the plugin
   // either. Inlining removes the dependency; this test removes the drift it
   // would otherwise allow, in both directions.
@@ -168,7 +168,7 @@ test("the section layout the wizard dictates is the one the brief template docum
   }
 });
 
-test("/sdlc:run writes generated code to src/, and the run record beside it", () => {
+test("/mmo:greenfield writes generated code to src/, and the run record beside it", () => {
   const body = frontmatter(read(WIZARD)).body;
   assert.match(body, /`\.\/src`/, "generated code goes to ./src — an ordinary directory the user can run and commit");
   assert.match(body, /`\.\/\.sdlc\/?`/, "the run record goes to ./.sdlc, out of the way of the code");
@@ -182,7 +182,7 @@ test("the orchestrator accepts the settings the wizard resolves", () => {
   for (const setting of ["brief_path", "auth_mode", "policy", "code_dir", "output_dir"]) {
     assert.ok(agent.includes(setting), `the orchestrator must name ${setting} — the wizard passes it`);
   }
-  assert.match(agent, /\/sdlc:run/, "the orchestrator must know which command invokes it");
+  assert.match(agent, /\/mmo:greenfield/, "the orchestrator must know which command invokes it");
 });
 
 test("the orchestrator runs the generated tests where the generated code is", () => {
@@ -199,8 +199,8 @@ test("the orchestrator runs the generated tests where the generated code is", ()
 });
 
 // The orchestrator's granted tools, parsed into an exact set. Substring checks
-// are not good enough here: `mcp__gemini-flash-server__execute_with_model` and
-// `mcp__plugin_sdlc_gemini-flash-server__execute_with_model`
+// are not good enough here: `mcp__model-dispatch__execute_with_model` and
+// `mcp__plugin_mmo_model-dispatch__execute_with_model`
 // share a long tail, and the whole point of these tests is to tell them apart.
 function grantedTools() {
   const { head } = frontmatter(read(AGENT));
@@ -221,9 +221,9 @@ test("the agent frontmatter grants the MCP tools under BOTH install-route names"
   //
   //   /plugin install      → Claude Code namespaces a plugin-provided MCP server
   //                          with the plugin's own name, giving
-  //                          mcp__plugin_sdlc_gemini-flash-server__*
+  //                          mcp__plugin_mmo_model-dispatch__*
   //   clone + setup.mjs    → registers the server in a project .mcp.json under a
-  //                          bare key, giving mcp__gemini-flash-server__*
+  //                          bare key, giving mcp__model-dispatch__*
   //
   // Only one resolves in any given session; the other is silently absent, which
   // is exactly why both must be granted. Naming a tool that does not exist is
@@ -237,8 +237,8 @@ test("the agent frontmatter grants the MCP tools under BOTH install-route names"
   const tools = grantedTools();
   for (const short of ["execute_with_model", "log_telemetry", "load_policy"]) {
     for (const full of [
-      `mcp__gemini-flash-server__${short}`,
-      `mcp__plugin_sdlc_gemini-flash-server__${short}`,
+      `mcp__model-dispatch__${short}`,
+      `mcp__plugin_mmo_model-dispatch__${short}`,
     ]) {
       assert.ok(
         tools.has(full),
@@ -267,7 +267,7 @@ test("the orchestrator can spawn every subagent the workflow tells it to invoke"
       "(TaskCreate/TaskUpdate/TaskList are the to-do list, not delegation)",
   );
 
-  const skill = read("plugin", "skills", "run-ai-sdlc", "SKILL.md");
+  const skill = read("plugin", "skills", "pipeline", "SKILL.md");
   for (const sub of ["architect", "senior-reviewer", "security-reviewer"]) {
     assert.match(
       skill,
@@ -314,8 +314,8 @@ test("the telemetry hook matches the dispatch tool under both install routes", (
   assert.ok(entries.length > 0, "the telemetry hook must still be registered on PostToolUse");
 
   for (const name of [
-    "mcp__gemini-flash-server__execute_with_model",
-    "mcp__plugin_sdlc_gemini-flash-server__execute_with_model",
+    "mcp__model-dispatch__execute_with_model",
+    "mcp__plugin_mmo_model-dispatch__execute_with_model",
   ]) {
     assert.ok(
       entries.some((e) => new RegExp(e.matcher).test(name)),

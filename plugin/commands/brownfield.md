@@ -32,7 +32,7 @@ Read the JSON. Three cases:
 - **`resume.pending: true` with `kind: "run"`** — a previous task run was interrupted at phase
   &lt;phase&gt;. Print *"A previous &lt;intent&gt; run (`&lt;run_id&gt;`) was interrupted at phase &lt;phase&gt;.
   Would you like to resume it, or start fresh?"* Accept `resume`, `discard`, or `abort`. If
-  `resume`, follow the resume path in [plugin/skills/run-ai-sdlc/SKILL.md](/plugin/skills/run-ai-sdlc/SKILL.md).
+  `resume`, follow the resume path in [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md).
   If `discard`, clear `.sdlc/local/state.json` and continue to step 2.
 
 - **`resume.pending: null`** — normal flow. Print the one-line `marker` from the hydrate
@@ -43,7 +43,7 @@ Read the JSON. Three cases:
 
 Verify the machinery works on this specific repo before spending money on a real intent.
 
-**On the first `/sdlc:brownfield` per project** OR when `.sdlc/pre-check-status.json` is missing
+**On the first `/mmo:brownfield` per project** OR when `.sdlc/pre-check-status.json` is missing
 OR when the baseline hint from step 1 says the baseline is stale, run the full 6-step pre-check.
 Otherwise (cached, fresh, plugin version unchanged), report *"pre-check cached from &lt;date&gt;,
 all steps still valid"* and skip to step 3.
@@ -137,7 +137,7 @@ Fill in "Files in scope" and "Files off-limits" with your best guess based on di
 # 5. Gate 0 — Discovery Confirmation
 
 The one confirmation moment before real work begins. Print the gate template from
-[plugin/skills/run-ai-sdlc/SKILL.md](/plugin/skills/run-ai-sdlc/SKILL.md) (search for "Gate 0"),
+[plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md) (search for "Gate 0"),
 filling in:
 
 - **Stack** — top-detected from `baseline.stacks`. Ask if it's right; accept overrides.
@@ -183,7 +183,7 @@ run directory (leave it as a partial record), and stop.
 
 # 6. Run the pipeline
 
-Delegate to the `orchestrator` subagent per [plugin/skills/run-ai-sdlc/SKILL.md](/plugin/skills/run-ai-sdlc/SKILL.md).
+Delegate to the `orchestrator` subagent per [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md).
 Pass:
 - `mode: brownfield`
 - `intent: <from Gate 0>`
@@ -210,7 +210,7 @@ Do not propose a follow-up run.
 
 # Flag surface (headless / repeat runs)
 
-`/sdlc:pass` is the flag-driven twin of this command for scripted / CI invocations:
+`/mmo:pass` is the flag-driven twin of this command for scripted / CI invocations:
 
 ```
 --mode brownfield --intent <docs|bugfix|feature-extend|feature-new|refactor|test|deps>

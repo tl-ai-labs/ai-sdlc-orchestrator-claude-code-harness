@@ -40,8 +40,8 @@
     <text x="180" y="166" text-anchor="middle" class="mono">this repo — &lt;url&gt;</text>
 
     <rect x="78" y="188" width="204" height="46" rx="6" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1"/>
-    <text x="180" y="208" text-anchor="middle" class="mono">/sdlc:run</text>
-    <text x="180" y="224" text-anchor="middle" class="mono">or /sdlc:brownfield</text>
+    <text x="180" y="208" text-anchor="middle" class="mono">/mmo:greenfield</text>
+    <text x="180" y="224" text-anchor="middle" class="mono">or /mmo:brownfield</text>
 
     <text x="180" y="264" text-anchor="middle" class="s">a project brief · or an</text>
     <text x="180" y="280" text-anchor="middle" class="s">existing repo · your call</text>

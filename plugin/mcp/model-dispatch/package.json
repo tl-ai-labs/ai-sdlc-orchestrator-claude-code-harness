@@ -1,11 +1,11 @@
 {
-  "name": "@mmo/gemini-flash-server",
+  "name": "@mmo/model-dispatch",
   "version": "0.1.0",
   "description": "MCP server adapter for Gemini 3.5 Flash + policy-driven multi-model routing",
   "type": "module",
   "main": "dist/server.js",
   "bin": {
-    "gemini-flash-server": "dist/server.js"
+    "model-dispatch": "dist/server.js"
   },
   "scripts": {
     "build": "tsc",

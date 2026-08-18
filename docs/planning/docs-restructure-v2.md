@@ -33,18 +33,18 @@ docs/
 │
 ├── tutorial/                        — learning-oriented
 │   ├── first-run.md                 (from: tutorial-first-run.md at docs root)
-│   └── first-brownfield.md          (NEW — analog for /sdlc:brownfield)
+│   └── first-brownfield.md          (NEW — analog for /mmo:brownfield)
 │
 ├── how-to/                          — task-oriented
 │   ├── install.md                   (from: setup.md)
 │   ├── run-a-pass.md                (from: running.md)
 │   ├── bring-your-own-brief.md      (from: brief-template.md)
 │   ├── change-policy.md             (NEW — extracted from setup.md's policy section)
-│   ├── revert-a-run.md              (NEW — small how-to for /sdlc:revert)
+│   ├── revert-a-run.md              (NEW — small how-to for /mmo:revert)
 │   └── run-in-ci.md                 (NEW — headless / auto-approve / auto-abort)
 │
 ├── reference/                       — information-oriented
-│   ├── commands.md                  (NEW — every /sdlc:* command in one page)
+│   ├── commands.md                  (NEW — every /mmo:* command in one page)
 │   ├── flags.md                     (NEW — every flag on every command)
 │   ├── policies.md                  (NEW — policy YAML schema + shipped presets)
 │   ├── output-files.md              (from: understanding-output.md)
@@ -74,11 +74,11 @@ Total: 14 existing files → 22 files across four categories, with 6 new files.
 
 | File | Purpose | Rough length |
 |---|---|---|
-| `tutorial/first-brownfield.md` | 10-minute walkthrough of running `/sdlc:brownfield` on a small existing repo. Same shape as the greenfield tutorial. | ~150 lines |
-| `how-to/change-policy.md` | Wraps `/sdlc:policy` — show, change via browser, silent set, per-run override. | ~60 lines |
-| `how-to/revert-a-run.md` | Wraps `/sdlc:revert` — the interactive picker and by-id form; explains the dirty-tree refusal. | ~50 lines |
+| `tutorial/first-brownfield.md` | 10-minute walkthrough of running `/mmo:brownfield` on a small existing repo. Same shape as the greenfield tutorial. | ~150 lines |
+| `how-to/change-policy.md` | Wraps `/mmo:policy` — show, change via browser, silent set, per-run override. | ~60 lines |
+| `how-to/revert-a-run.md` | Wraps `/mmo:revert` — the interactive picker and by-id form; explains the dirty-tree refusal. | ~50 lines |
 | `how-to/run-in-ci.md` | `--gates=auto-approve`, `--gates=auto-abort`, `--from-config`, headless invocation via `claude --print`. | ~80 lines |
-| `reference/commands.md` | Every `/sdlc:*` command with a one-line description and a link to its how-to. Alphabetized. | ~40 lines |
+| `reference/commands.md` | Every `/mmo:*` command with a one-line description and a link to its how-to. Alphabetized. | ~40 lines |
 | `reference/flags.md` | Table: flag × command × meaning × default. Sorted by flag name. | ~120 lines |
 | `reference/policies.md` | Policy YAML schema, shipped presets side-by-side, custom-policy walkthrough. | ~150 lines |
 | `reference/env-vars.md` | Every env var the plugin reads. Extracted from `setup.md`; leaves setup.md focused on the credential flow. | ~80 lines |

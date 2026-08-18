@@ -416,7 +416,7 @@ function scanAntigravity(gcpAuthDetected) {
     found,
     sources,
     note:
-      "Antigravity is opt-in. Only checked when the policy uses flash-agsdk-worker or SDLC_SELECT names it. " +
+      "Antigravity is opt-in. Only checked when the policy uses flash-agsdk-worker or MMO_SELECT names it. " +
       "This scan is informational; the real reachability check runs at preflight_dispatch.",
   };
 }

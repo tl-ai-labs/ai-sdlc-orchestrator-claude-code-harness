@@ -57,7 +57,7 @@ function validateTaskPacket(raw: unknown): TaskPacket {
   if (missing.length > 0) {
     throw new Error(
       `execute_with_model: TaskPacket is missing required field${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}. ` +
-      `See plugin/mcp/gemini-flash-server/src/types.ts for the schema (or plugin/agents/orchestrator.md for the required-fields table).`,
+      `See plugin/mcp/model-dispatch/src/types.ts for the schema (or plugin/agents/orchestrator.md for the required-fields table).`,
     );
   }
   if (!Array.isArray(packet.inputs)) {
@@ -74,7 +74,7 @@ function validateTaskPacket(raw: unknown): TaskPacket {
   return packet as unknown as TaskPacket;
 }
 
-const SERVER_NAME = "gemini-flash-server";
+const SERVER_NAME = "model-dispatch";
 const SERVER_VERSION = "0.1.0";
 
 // Runtime state: loaded policies cached by name, adapters cached by model id.
@@ -83,7 +83,10 @@ let activePolicy: Policy | null = null;
 let activePolicyKey = "";
 
 /** Slot choices, spelled `slot=option[,slot=option...]`. Property of the install. */
-const SELECT_ENV = "SDLC_SELECT";
+const SELECT_ENV = "MMO_SELECT";
+/** MMO-D8 compat shim: pre-rename installs still export this. Warn once, keep working. */
+const LEGACY_SELECT_ENV = "SDLC_SELECT";
+let legacySelectWarned = false;
 
 function ensurePolicy(policyName?: string, projectRoot?: string, policyPath?: string): Policy {
   const key = `${policyName ?? "opus-only"}|${projectRoot ?? ""}|${policyPath ?? ""}`;
@@ -101,7 +104,20 @@ function ensurePolicy(policyName?: string, projectRoot?: string, policyPath?: st
 
 /** Re-read on every call — a test can set the variable without restarting. */
 function selectOverrides(): SelectOverrides {
-  return parseSelectOverrides(process.env[SELECT_ENV]);
+  const value = process.env[SELECT_ENV] ?? legacySelectValue();
+  return parseSelectOverrides(value);
+}
+
+function legacySelectValue(): string | undefined {
+  const value = process.env[LEGACY_SELECT_ENV];
+  if (value === undefined) return undefined;
+  if (!legacySelectWarned) {
+    legacySelectWarned = true;
+    process.stderr.write(
+      `model-dispatch: ${LEGACY_SELECT_ENV} is deprecated, use ${SELECT_ENV} instead\n`
+    );
+  }
+  return value;
 }
 
 function adapterFor(policy: Policy, modelId: string) {
@@ -140,8 +156,9 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
   let gemini: Record<string, unknown>;
   try {
     const keyEnvName =
-      policy.models.find((m) => m.adapter === "mcp:gemini-flash-server")?.auth?.env ??
-      "GEMINI_API_KEY";
+      policy.models.find(
+        (m) => m.adapter === "mcp:model-dispatch" || m.adapter === "mcp:gemini-flash-server"
+      )?.auth?.env ?? "GEMINI_API_KEY";
     const choice = selectGeminiBackend({ env: process.env, keyEnvName, adcFileExists });
     gemini = {
       backend: choice.backend,

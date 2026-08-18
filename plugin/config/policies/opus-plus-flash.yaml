@@ -17,7 +17,7 @@ models:
 
   # Gemini as a MODEL. One completion call per packet.
   - id: flash-completion
-    adapter: mcp:gemini-flash-server
+    adapter: mcp:model-dispatch
     model_name: gemini-3.5-flash
     display_name: gemini-3.5-flash
     # Flat global/AI-Studio rates. Vertex adds +10% on every token class for
@@ -51,7 +51,7 @@ models:
     # chose the ceiling. An agent session sets its own per-turn limits.
 
 # Logical slots. A rule names the slot; the run picks one option, or gets
-# `default`. The run's choice arrives in SDLC_SELECT, spelled `slot=option`
+# `default`. The run's choice arrives in MMO_SELECT, spelled `slot=option`
 # (comma-separated for more than one), written by verify-setup.mjs.
 select:
   gemini-flash:

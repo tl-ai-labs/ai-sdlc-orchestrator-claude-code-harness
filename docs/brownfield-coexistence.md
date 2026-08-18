@@ -17,7 +17,7 @@ Real repos have four flavors of overlap with what the plugin does:
 |---|---|---|
 | **Adjacent** | You use Cursor for editor autocomplete; the plugin handles SDLC | Zero conflict. Both tools run in different contexts. |
 | **Overlapping** | You also use Aider or a custom code-gen script | Coexists at rest; **don't run them simultaneously on the same files.** The plugin does not detect a concurrent Aider session. |
-| **Layered** | Your existing Claude Code setup already registers MCP servers (custom Gemini adapter, etc.) | Claude Code namespaces plugin MCP tools separately (`mcp__plugin_sdlc_...`). Both coexist. |
+| **Layered** | Your existing Claude Code setup already registers MCP servers (custom Gemini adapter, etc.) | Claude Code namespaces plugin MCP tools separately (`mcp__plugin_mmo_...`). Both coexist. |
 | **Configured** | Your repo ships `routing-policy.yaml` at root, overriding the plugin's default policy | The plugin's policy loader **silently honors your file** — discovery surfaces this at Gate 0 so it's never a surprise. |
 
 ## Per-tool detection (v1 — presence only)
@@ -89,6 +89,6 @@ The plugin coexists with your normal development tools too:
 | Concern | What actually happens | What to do |
 |---|---|---|
 | I use Cursor for autocomplete and the plugin edits `src/` — will they fight? | In v1 the two tools do not detect each other. Running both simultaneously (Cursor's edit session open while the plugin writes) can produce merge conflicts in Cursor. | Close Cursor's edit session during a plugin run, or run the plugin on a different branch. |
-| I have a custom MCP server that also uses Gemini — will they compete? | No. Claude Code namespaces plugin MCP tools (`mcp__plugin_sdlc_...`). Your MCP server keeps its own tool names. The plugin's dispatcher never calls your MCP — it uses the bundled server. | Nothing. |
-| I have a `routing-policy.yaml` at repo root for other AI tooling. | The plugin's policy loader picks it up and honors it. Discovery surfaces this at Gate 0 so the override is visible before the run starts. | To use the shipped default instead, pass `--policy opus-plus-flash` at run start, or write `.sdlc/project.json.default_policy` via `/sdlc:policy change`. |
+| I have a custom MCP server that also uses Gemini — will they compete? | No. Claude Code namespaces plugin MCP tools (`mcp__plugin_mmo_...`). Your MCP server keeps its own tool names. The plugin's dispatcher never calls your MCP — it uses the bundled server. | Nothing. |
+| I have a `routing-policy.yaml` at repo root for other AI tooling. | The plugin's policy loader picks it up and honors it. Discovery surfaces this at Gate 0 so the override is visible before the run starts. | To use the shipped default instead, pass `--policy opus-plus-flash` at run start, or write `.sdlc/project.json.default_policy` via `/mmo:policy change`. |
 | My pre-commit hooks are strict (typecheck, format-check, security-scan) — will the plugin's writes pass? | The plugin runs the project's own format command on written files before closing a packet, so what lands is already formatted. Typecheck and security scan run at commit time when `commit_strategy != none`. | Failures halt the plugin cleanly and print the error. Fix, then re-run. |

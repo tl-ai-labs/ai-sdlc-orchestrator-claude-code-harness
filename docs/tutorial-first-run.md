@@ -1,4 +1,4 @@
-# Your first `/sdlc:run`
+# Your first `/mmo:greenfield`
 
 Ten minutes end to end. You install the plugin, run it against the shipped one-endpoint demo brief, and end with a small NestJS + Prisma + SQLite app in `./src/`, per-phase telemetry, and a cost report you can read.
 
@@ -24,7 +24,7 @@ Total time: about 2 minutes on a fresh laptop. Nothing has been spent yet.
 
 ## 2. Open a NEW session in an empty folder
 
-Slash commands and plugin MCP servers register when a session starts, not during install. The session that installed the plugin does not yet see `/sdlc:run`. Open a fresh one in an empty directory:
+Slash commands and plugin MCP servers register when a session starts, not during install. The session that installed the plugin does not yet see `/mmo:greenfield`. Open a fresh one in an empty directory:
 
 ```bash
 mkdir first-run && cd first-run && claude
@@ -35,7 +35,7 @@ mkdir first-run && cd first-run && claude
 At the Claude Code prompt:
 
 ```
-/sdlc:run
+/mmo:greenfield
 ```
 
 The command takes no arguments — it asks. Two questions:
@@ -63,7 +63,7 @@ At each gate, the artifact prints on screen. Read it, then approve to continue o
 The output lives under `.sdlc/` (telemetry, manifest, cost report) and `./src/` (the generated application code). Read the cost report:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/../tools/report.mjs 2>/dev/null | tail -1)" .sdlc
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/../tools/report.mjs 2>/dev/null | tail -1)" .sdlc
 ```
 
 Or, if you cloned the repo:
@@ -96,7 +96,7 @@ Then `curl http://localhost:3000/ping` — the response is what the brief asked 
 
 - **Understand the numbers.** [understanding-output.md](understanding-output.md) walks every field in `telemetry.jsonl` and the report.
 - **Understand the cost.** [methodology.md](methodology.md) explains how tokens and costs are counted, and why `opus-plus-flash` is ~10× cheaper than `opus-only`.
-- **Run on an existing repo.** [brownfield.md](brownfield.md) covers `/sdlc:brownfield`, which extends real code with a non-destructive write contract.
-- **Script it.** [running.md](running.md) documents `/sdlc:pass`, the headless equivalent — every setting exposed as a flag, for CI or repeat runs.
+- **Run on an existing repo.** [brownfield.md](brownfield.md) covers `/mmo:brownfield`, which extends real code with a non-destructive write contract.
+- **Script it.** [running.md](running.md) documents `/mmo:pass`, the headless equivalent — every setting exposed as a flag, for CI or repeat runs.
 
 **See also:** [running.md](running.md) · [understanding-output.md](understanding-output.md) · [troubleshooting.md](troubleshooting.md)

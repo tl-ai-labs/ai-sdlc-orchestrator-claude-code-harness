@@ -139,7 +139,7 @@ function readContractSafe(path) {
 }
 
 function allow(msg) {
-  if (msg && process.env.SDLC_DEBUG === "1") {
+  if (msg && process.env.MMO_DEBUG === "1") {
     console.error(`[sdlc-brownfield write-contract] ALLOW: ${msg}`);
   }
   process.exit(0);
@@ -211,7 +211,7 @@ async function main() {
       deny(
         `${target} matches always-off-limits pattern "${preHit}" (no active brownfield contract; ` +
         `this is the pre-contract safety net for credentials, MCP config, other-AI-tool state, ` +
-        `and plugin bookkeeping). If this write is legitimate, run /sdlc:setup or /sdlc:brownfield ` +
+        `and plugin bookkeeping). If this write is legitimate, run /mmo:setup or /mmo:brownfield ` +
         `first to establish an explicit contract, then re-issue.`
       );
     }
@@ -281,6 +281,6 @@ async function main() {
 
 main().catch((e) => {
   // Unhandled error — fail-open. Better to permit a write than to wedge the user.
-  if (process.env.SDLC_DEBUG === "1") console.error(`[sdlc-brownfield write-contract] unhandled: ${e?.message ?? e}`);
+  if (process.env.MMO_DEBUG === "1") console.error(`[sdlc-brownfield write-contract] unhandled: ${e?.message ?? e}`);
   process.exit(0);
 });

@@ -18,8 +18,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only --project-roo
 This reads `.sdlc/project.json.default_policy` and prints the policy name (or an empty line if
 none is set). Also read `.sdlc/project.json.last_updated_at` and include it in the message:
 
-- If a policy is set: `Current policy: <name>   (set <last_updated_at>, change with /sdlc:policy change)`.
-- If no policy is set: `No policy set yet — run /sdlc:policy change to pick one, or /sdlc:setup
+- If a policy is set: `Current policy: <name>   (set <last_updated_at>, change with /mmo:policy change)`.
+- If no policy is set: `No policy set yet — run /mmo:policy change to pick one, or /mmo:setup
   --policy=<name>.`
 
 Do not open the browser here. Do not error. This shape is purely read.
@@ -50,17 +50,17 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --policy=<name> --project-
 
 No browser. The script validates `<name>` against files in `plugin/config/policies/`, writes it to
 `.sdlc/project.json.default_policy`, and exits. Fails if `<name>` doesn't exist on disk — offer
-`/sdlc:policy change` to author it, or list the shipped presets (`opus-only`, `opus-plus-flash`).
+`/mmo:policy change` to author it, or list the shipped presets (`opus-only`, `opus-plus-flash`).
 
 # Notes
 
-- The change is per-project. Once written to `.sdlc/project.json`, every subsequent `/sdlc:run` or
-  `/sdlc:brownfield` in this folder uses the new policy. Prior runs' `provenance.json` records the
+- The change is per-project. Once written to `.sdlc/project.json`, every subsequent `/mmo:greenfield` or
+  `/mmo:brownfield` in this folder uses the new policy. Prior runs' `provenance.json` records the
   policy that was in effect at run time — those don't get rewritten.
 - To change the policy for a single ticket without touching the project's default:
-  - **Interactive** (`/sdlc:brownfield`): type a different policy name at Gate 0's Policy bullet
+  - **Interactive** (`/mmo:brownfield`): type a different policy name at Gate 0's Policy bullet
     when reviewing the discovery summary. Accepted for that run only.
-  - **Headless** (`/sdlc:pass`): pass `--policy <name>` on the command line. Same one-run scope.
+  - **Headless** (`/mmo:pass`): pass `--policy <name>` on the command line. Same one-run scope.
   Neither path writes to `.sdlc/project.json`.
 - The browser opens exactly one place in the whole flow: the `change` sub-command (and the same
-  underlying script during first-time `/sdlc:setup`).
+  underlying script during first-time `/mmo:setup`).

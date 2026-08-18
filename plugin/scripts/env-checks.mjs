@@ -156,7 +156,7 @@ function checkSdlcDirWritable() {
   const root = findRepoRoot();
   if (!root) {
     return check("sdlc-dir-writable", "advisory", true, {
-      note: "Not in a git repo — .sdlc/ writability check deferred to first /sdlc:brownfield invocation in a project.",
+      note: "Not in a git repo — .sdlc/ writability check deferred to first /mmo:brownfield invocation in a project.",
     });
   }
   const dir = join(root, ".sdlc", "local");

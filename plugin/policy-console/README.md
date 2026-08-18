@@ -19,7 +19,7 @@ One HTML page + a ~350-line Node http server. No framework, no build step, one n
 ## Run it
 
 You do not normally run this directly. `plugin/scripts/setup-policy.mjs` (called by the shepherd
-during setup, and by the `/sdlc:policy change` command later) starts the server on the first free
+during setup, and by the `/mmo:policy change` command later) starts the server on the first free
 port ≥3000, opens your browser, and writes the picked/authored policy name to
 `.sdlc/project.json.default_policy` in the current project.
 
@@ -40,7 +40,7 @@ with the model — grounded in the vendors' own docs, not SDK guesswork:
 
 | Adapter | Picker shows | Real request field | Source |
 |---|---|---|---|
-| `mcp:gemini-flash-server` (`flash-completion`) | `off`, `minimal`, `low`, `medium`, `high` | `thinking.thinkingLevel`, written here as `reasoning.tier` | `@google/genai` (Node) / `google-genai` (Python) `ThinkingLevel` enum |
+| `mcp:model-dispatch` (`flash-completion`) | `off`, `minimal`, `low`, `medium`, `high` | `thinking.thinkingLevel`, written here as `reasoning.tier` | `@google/genai` (Node) / `google-genai` (Python) `ThinkingLevel` enum |
 | `antigravity-worker` (`flash-agsdk-worker`) | `off`, `minimal`, `low`, `medium`, `high` | same as above | same enum, both packages agree |
 | `builtin-anthropic` (`opus`) | `off`, `low`, `medium`, `high`, `xhigh`, `max` | `output_config.effort`, written here as `reasoning.effort` | [platform.claude.com/.../effort](https://platform.claude.com/docs/en/build-with-claude/effort) |
 

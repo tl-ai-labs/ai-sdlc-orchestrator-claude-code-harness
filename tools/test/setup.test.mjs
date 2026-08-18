@@ -49,9 +49,9 @@ test("nodeMajorFrom reads the major version, and refuses to guess", () => {
 
 test("mcpPaths resolves the server paths under the plugin root", () => {
   const paths = mcpPaths("/plugins/orch");
-  assert.equal(paths.serverDir, "/plugins/orch/mcp/gemini-flash-server");
-  assert.equal(paths.distEntry, "/plugins/orch/mcp/gemini-flash-server/dist/server.js");
-  assert.equal(paths.nodeModules, "/plugins/orch/mcp/gemini-flash-server/node_modules");
+  assert.equal(paths.serverDir, "/plugins/orch/mcp/model-dispatch");
+  assert.equal(paths.distEntry, "/plugins/orch/mcp/model-dispatch/dist/server.js");
+  assert.equal(paths.nodeModules, "/plugins/orch/mcp/model-dispatch/node_modules");
 });
 
 // ─── the decision table ───────────────────────────────────────────────
@@ -201,7 +201,7 @@ test("every credential the check accepts is one the server actually honours", ()
   const source = ["geminiTransports.ts", "GeminiFlashAdapter.ts"]
     .map((f) =>
       stripComments(
-        readFileSync(join(ROOT, "plugin/mcp/gemini-flash-server/src/adapters", f), "utf8"),
+        readFileSync(join(ROOT, "plugin/mcp/model-dispatch/src/adapters", f), "utf8"),
       ),
     )
     .join("\n");
@@ -359,15 +359,15 @@ test("SETUP.md quotes the names the catalogue actually publishes", () => {
   );
 });
 
-test("every document that hands a fresh install to /sdlc:run says to open a new session", () => {
+test("every document that hands a fresh install to /mmo:greenfield says to open a new session", () => {
   // Claude Code builds its slash-command list when a session starts, and
   // nothing written to disk afterwards can add a command to a session that is
-  // already running. So a successful install leaves `/sdlc:run` genuinely
+  // already running. So a successful install leaves `/mmo:greenfield` genuinely
   // absent from the very session that performed it. The plugin is fine; the
   // command arrives one session late.
   //
   // Caught on 2026-08-04 during the first end-to-end install: setup reported
-  // success, the documented next prompt was `/sdlc:run`, and it was not in the
+  // success, the documented next prompt was `/mmo:greenfield`, and it was not in the
   // menu. The install session then offered `/reload-plugins`, which the
   // desktop app does not have — leaving a working install and no way forward.
   //
@@ -378,7 +378,7 @@ test("every document that hands a fresh install to /sdlc:run says to open a new 
     assert.match(
       text,
       /new session/i,
-      `${file} sends the user to /sdlc:run without saying it needs a session opened ` +
+      `${file} sends the user to /mmo:greenfield without saying it needs a session opened ` +
         `after the install — the command will not be in the menu of the one that installed it`,
     );
     // These documents put every command the reader is meant to type inside a
@@ -441,7 +441,7 @@ test("usableEnv drops placeholders and empties, keeps real values", () => {
 
 test("usableEnv does not mutate its input", () => {
   // This script only reports; the in-place stripping is the server's job
-  // (mcp/gemini-flash-server/src/envBootstrap.ts).
+  // (mcp/model-dispatch/src/envBootstrap.ts).
   const env = { GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT}" };
   usableEnv(env);
   assert.equal(env.GOOGLE_CLOUD_PROJECT, "${GOOGLE_CLOUD_PROJECT}");
@@ -514,7 +514,7 @@ test("the declared list matches what plugin.json actually forwards", () => {
   const manifest = JSON.parse(
     readFileSync(join(ROOT, "plugin/.claude-plugin/plugin.json"), "utf8"),
   );
-  const forwarded = Object.keys(manifest.mcpServers["gemini-flash-server"].env);
+  const forwarded = Object.keys(manifest.mcpServers["model-dispatch"].env);
   assert.deepEqual([...DECLARED_ENV].sort(), forwarded.sort());
 });
 
@@ -523,7 +523,7 @@ test("the server sanitizes exactly the names this script declares", () => {
   // TypeScript, so the two lists are hand-synced. This is the only thing
   // stopping them drifting apart.
   const envTs = readFileSync(
-    join(ROOT, "plugin/mcp/gemini-flash-server/src/env.ts"),
+    join(ROOT, "plugin/mcp/model-dispatch/src/env.ts"),
     "utf8",
   );
   const block = envTs.slice(envTs.indexOf("PLUGIN_DECLARED_ENV"));
@@ -569,7 +569,7 @@ const MATRIX_SCENARIOS = {
     adcFile: { present: true, usable: true, type: "authorized_user", detail: null },
   },
   8: {
-    env: { GEMINI_API_KEY: "AIza-test", SDLC_SELECT: "gemini-flash=flash-agsdk-worker" },
+    env: { GEMINI_API_KEY: "AIza-test", MMO_SELECT: "gemini-flash=flash-agsdk-worker" },
     // A fully built worker environment, so the only thing left to fail is the
     // credential — which is the row's whole point. Without this the row would
     // also report a missing venv, and the table would look wrong for a reason
@@ -676,7 +676,7 @@ test("the findings named in the matrix prose are ones the checker can produce", 
     hasClaudeCli: true,
     hasNodeModules: true,
     hasDist: true,
-    env: { GOOGLE_CLOUD_PROJECT: "some-project", SDLC_SELECT: "gemini-flash=flash-agsdk-worker" },
+    env: { GOOGLE_CLOUD_PROJECT: "some-project", MMO_SELECT: "gemini-flash=flash-agsdk-worker" },
     vertex: vertexCredentialState({ env: { GOOGLE_CLOUD_PROJECT: "some-project" } }),
     agentWorker: { hasVenv: true, sdkImportable: true, detail: null },
   });

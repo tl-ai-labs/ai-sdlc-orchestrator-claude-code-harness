@@ -96,7 +96,7 @@ Every run produces:
 - **Gate answers** logged with each run.
 
 These are what a compliance officer asks for: "what data went where, when, at whose
-direction." `/sdlc:audit` (v1.5) exports these into a single `.sdlc/audit-export.md` +
+direction." `/mmo:audit` (v1.5) exports these into a single `.sdlc/audit-export.md` +
 `.json` suitable for ingestion into your compliance tooling.
 
 ## Data locality guarantees

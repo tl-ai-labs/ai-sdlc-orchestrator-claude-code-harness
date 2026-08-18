@@ -4,9 +4,9 @@
 
 The AI-SDLC Orchestrator plugin ships in two modes:
 
-- **Greenfield** (`/sdlc:run`) — generates a whole new application from a project brief into an
+- **Greenfield** (`/mmo:greenfield`) — generates a whole new application from a project brief into an
   empty folder. This is what the plugin was originally built for.
-- **Brownfield** (`/sdlc:brownfield`) — extends an existing repository. Pick one of seven job
+- **Brownfield** (`/mmo:brownfield`) — extends an existing repository. Pick one of seven job
   types (docs, bugfix, feature-extend, feature-new, refactor, test, deps), confirm scope at
   one Gate 0 confirmation screen, run the pipeline with a non-destructive write contract that
   guarantees off-limits files stay untouched.
@@ -14,14 +14,14 @@ The AI-SDLC Orchestrator plugin ships in two modes:
 Both modes share the same install (SETUP.md), same policies (`opus-only` / `opus-plus-flash`),
 same MCP dispatch layer. What differs is what happens after the setup check completes.
 
-This doc walks brownfield end-to-end. For the greenfield equivalent see [/sdlc:run's operating
-manual](../plugin/commands/run.md).
+This doc walks brownfield end-to-end. For the greenfield equivalent see [/mmo:greenfield's operating
+manual](../plugin/commands/greenfield.md).
 
 ---
 
 ## The 20-second version
 
-Type `/sdlc:brownfield` in a session opened in your project directory. Six steps run in order:
+Type `/mmo:brownfield` in a session opened in your project directory. Six steps run in order:
 
 | # | Step | What it does |
 |---|---|---|
@@ -32,14 +32,14 @@ Type `/sdlc:brownfield` in a session opened in your project directory. Six steps
 | 5 | Gate 0 | One confirmation screen: stack, test command, off-limits, intent, scope. |
 | 6 | Pipeline | Requirements → (architecture) → packet plan → execute → review → tests → security → report. |
 
-Two prompts total from installation to done: `Setup this plugin from…` then `/sdlc:brownfield`. Every setup step (env checks, credential shepherd, discovery, pre-check, baseline save) folds into those two. Task-agnostic helpers exist for occasional use:
+Two prompts total from installation to done: `Setup this plugin from…` then `/mmo:brownfield`. Every setup step (env checks, credential shepherd, discovery, pre-check, baseline save) folds into those two. Task-agnostic helpers exist for occasional use:
 
 | Command | When |
 |---|---|
-| `/sdlc:setup` | Re-verify or re-configure after `/plugin update`, a credential change, or an unexpected refusal. Idempotent. |
-| `/sdlc:policy` | Show the active policy; `change` opens the browser console. |
-| `/sdlc:revert` | Undo a brownfield run using its `provenance.json`. |
-| `/sdlc:pass` | Headless / scripted equivalent (`--mode=brownfield`). |
+| `/mmo:setup` | Re-verify or re-configure after `/plugin update`, a credential change, or an unexpected refusal. Idempotent. |
+| `/mmo:policy` | Show the active policy; `change` opens the browser console. |
+| `/mmo:revert` | Undo a brownfield run using its `provenance.json`. |
+| `/mmo:pass` | Headless / scripted equivalent (`--mode=brownfield`). |
 
 No `/sdlc-precheck` or `/sdlc-doctor` sub-commands exist — the four above cover every path.
 
@@ -122,7 +122,7 @@ The plugin's per-project state. Split into committed (team-shared) and gitignore
     ├── setup-status.json — shepherd resume state
     ├── write-contract.json — active run's allowlist/off-limits
     ├── user-policy.yaml  — personal policy override
-    ├── cache/            — per-run backup copies for /sdlc:revert
+    ├── cache/            — per-run backup copies for /mmo:revert
     └── debug.log
 ```
 

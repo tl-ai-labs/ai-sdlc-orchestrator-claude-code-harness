@@ -29,7 +29,8 @@ export const PLUGIN_DECLARED_ENV = [
   "GOOGLE_CLOUD_PROJECT",
   "GOOGLE_CLOUD_LOCATION",
   "GEMINI_BACKEND",
-  "SDLC_SELECT",
+  "MMO_SELECT",
+  "SDLC_SELECT", // MMO-D8 compat shim — pre-rename installs still export this
   "GEMINI_WORKER_PYTHON",
 ] as const;
 

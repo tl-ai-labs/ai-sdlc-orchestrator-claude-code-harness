@@ -7,7 +7,7 @@
  * launched it. So this script does the coupling: snapshot policies before →
  * launch server + browser → wait for user to save → diff to find the
  * new/modified policy → write its name to the current project's
- * .sdlc/project.json as `default_policy`. Both /sdlc:run and /sdlc:brownfield
+ * .sdlc/project.json as `default_policy`. Both /mmo:greenfield and /mmo:brownfield
  * read that field via session-hydrate.
  *
  * Flow is hybrid on purpose:
@@ -347,7 +347,7 @@ async function interactiveFlow(resolved, args) {
   const { added, modified } = diffPolicies(before);
   // Strip the .yaml extension — `default_policy` in project.json is a policy
   // *name* (`opus-only`, `opus-plus-flash`), not a filename. Downstream
-  // consumers (session-hydrate, MCP policy loader, /sdlc:policy print) all
+  // consumers (session-hydrate, MCP policy loader, /mmo:policy print) all
   // treat it as the bare stem; the old single-candidate branch left the
   // extension on, producing `default_policy="foo.yaml"` and 404s downstream.
   const candidates = [...added, ...modified].map((f) => f.replace(/\.ya?ml$/, ""));

@@ -15,7 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const WORKER = join(ROOT, "plugin", "mcp", "gemini-flash-server", "worker", "gemini_worker.py");
+const WORKER = join(ROOT, "plugin", "mcp", "model-dispatch", "worker", "gemini_worker.py");
 const source = () => readFileSync(WORKER, "utf8");
 
 test("the worker pins no region of its own and refuses when nobody supplies one", () => {

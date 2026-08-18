@@ -10,7 +10,7 @@ Learn by doing. Follow along top to bottom, no prior knowledge assumed.
 
 | Doc | For |
 |---|---|
-| [Your first `/sdlc:run`](tutorial-first-run.md) | Ten minutes from a fresh install to a completed greenfield pass with real telemetry and a cost report. |
+| [Your first `/mmo:greenfield`](tutorial-first-run.md) | Ten minutes from a fresh install to a completed greenfield pass with real telemetry and a cost report. |
 
 ## How-to guides
 
@@ -19,9 +19,9 @@ Direct, imperative. Each guide gets a specific job done.
 | Doc | For |
 |---|---|
 | [Install & credentials](setup.md) | Setting up a fresh install: prerequisites, Anthropic and Gemini providers, the per-project policy pick. |
-| [Run a pass](running.md) | Every flag on `/sdlc:pass` explained — greenfield mode and brownfield mode, interactive and headless. |
+| [Run a pass](running.md) | Every flag on `/mmo:pass` explained — greenfield mode and brownfield mode, interactive and headless. |
 | [Bring your own brief](brief-template.md) | Writing a project brief in the section layout the requirements phase expects. |
-| [Brownfield walkthrough](brownfield.md) | Running `/sdlc:brownfield` on an existing repo — the seven job types and the Gate 0 confirmation. |
+| [Brownfield walkthrough](brownfield.md) | Running `/mmo:brownfield` on an existing repo — the seven job types and the Gate 0 confirmation. |
 
 ## Reference
 

@@ -1,5 +1,5 @@
 /**
- * `--enable-agent` writes the SDLC_SELECT pair so nobody has to know its
+ * `--enable-agent` writes the MMO_SELECT pair so nobody has to know its
  * shape. Pinned here: the command writes both files (settings + .mcp.json),
  * malformed specs are blocking, and agent-selection-without-Vertex-credentials
  * is blocking.
@@ -50,7 +50,7 @@ const healthy = {
   hasAdcFile: false,
   env: {},
   // null, not an object with everything false — observeAgentWorker returns null
-  // outright when SDLC_SELECT does not name the agent worker, and a fixture that
+  // outright when MMO_SELECT does not name the agent worker, and a fixture that
   // invents a shape the real observer never produces tests nothing.
   agentWorker: null,
 };
@@ -98,13 +98,13 @@ test("one bad piece does not discard the good ones alongside it", () => {
 // ─── the malformed-spec finding ──────────────────────────────────────────
 
 test("a valid spec produces no finding", () => {
-  assert.equal(selectSpecProblem({ SDLC_SELECT: AGENT_WORKER_SELECT }), null);
+  assert.equal(selectSpecProblem({ MMO_SELECT: AGENT_WORKER_SELECT }), null);
   assert.equal(selectSpecProblem({}), null);
-  assert.equal(selectSpecProblem({ SDLC_SELECT: "" }), null);
+  assert.equal(selectSpecProblem({ MMO_SELECT: "" }), null);
 });
 
 test("the bare leaf is named as the exact mistake it is", () => {
-  const problem = selectSpecProblem({ SDLC_SELECT: AGENT_WORKER_MODEL_ID });
+  const problem = selectSpecProblem({ MMO_SELECT: AGENT_WORKER_MODEL_ID });
   assert.ok(problem, "a bare leaf must be a finding");
   assert.equal(problem.severity, "blocking");
   // The message has to say WHICH half is missing. "Invalid value" sends the
@@ -115,7 +115,7 @@ test("the bare leaf is named as the exact mistake it is", () => {
 });
 
 test("any other malformed spec is blocking too, and quotes what it saw", () => {
-  const problem = selectSpecProblem({ SDLC_SELECT: "gibberish" });
+  const problem = selectSpecProblem({ MMO_SELECT: "gibberish" });
   assert.ok(problem);
   assert.equal(problem.severity, "blocking");
   assert.match(problem.message, /'gibberish'/);
@@ -127,7 +127,7 @@ test("any other malformed spec is blocking too, and quotes what it saw", () => {
 test("evaluate surfaces the malformed spec as a blocking problem", () => {
   const { ok, problems } = evaluate({
     ...healthy,
-    env: { SDLC_SELECT: AGENT_WORKER_MODEL_ID },
+    env: { MMO_SELECT: AGENT_WORKER_MODEL_ID },
   });
   assert.equal(ok, false, "a spec no policy can load must not report a runnable install");
   assert.ok(problems.some((p) => p.id === "select-spec"));
@@ -224,7 +224,7 @@ test("an AI Studio key does not satisfy the agent path", () => {
   // is the wrong door entirely, and saying so is the whole value of the check.
   const { ok, problems } = evaluate({
     ...healthy,
-    env: { SDLC_SELECT: AGENT_WORKER_SELECT, GEMINI_API_KEY: "AIza-x" },
+    env: { MMO_SELECT: AGENT_WORKER_SELECT, GEMINI_API_KEY: "AIza-x" },
     vertex: vertexCredentialState({ env: {}, adcFile: absentFile }),
     agentWorker: { hasVenv: true, sdkImportable: true, detail: null },
   });
@@ -244,7 +244,7 @@ test("a named project with no credential warns on the agent path, and does not b
   // two-cent probe that actually decides.
   const { ok, problems } = evaluate({
     ...healthy,
-    env: { SDLC_SELECT: AGENT_WORKER_SELECT, GOOGLE_CLOUD_PROJECT: "proj" },
+    env: { MMO_SELECT: AGENT_WORKER_SELECT, GOOGLE_CLOUD_PROJECT: "proj" },
     vertex: vertexCredentialState({ env: { GOOGLE_CLOUD_PROJECT: "proj" }, adcFile: absentFile }),
     agentWorker: { hasVenv: true, sdkImportable: true, detail: null },
   });
@@ -320,7 +320,7 @@ test("an install on the model path is told when the agent door has opened", () =
 test("that hint is silent for everyone it would only be noise for", () => {
   const good = vertexCredentialState({ env: {}, adcFile: goodFile });
   // Already through the door.
-  assert.equal(agentPathAvailableHint("/plugins/orch", good, { SDLC_SELECT: AGENT_WORKER_SELECT }), null);
+  assert.equal(agentPathAvailableHint("/plugins/orch", good, { MMO_SELECT: AGENT_WORKER_SELECT }), null);
   // No door: an AI Studio key cannot reach the agent path at all.
   assert.equal(
     agentPathAvailableHint("/plugins/orch", vertexCredentialState({ env: {}, adcFile: absentFile }), { GEMINI_API_KEY: "k" }),
@@ -344,7 +344,7 @@ test("Vertex credentials present means no credential finding", () => {
   const { problems } = evaluate({
     ...healthy,
     hasAdcFile: true,
-    env: { SDLC_SELECT: AGENT_WORKER_SELECT },
+    env: { MMO_SELECT: AGENT_WORKER_SELECT },
     agentWorker: { hasVenv: true, sdkImportable: true, detail: null },
   });
   assert.ok(!problems.some((p) => p.id === "agent-worker-credentials"));
@@ -372,7 +372,7 @@ test("enabling adds the pair and leaves every other key alone", () => {
     { permissions: { allow: ["Bash"] }, env: { ANTHROPIC_API_KEY: "sk-x" } },
     true
   );
-  assert.equal(next.env.SDLC_SELECT, AGENT_WORKER_SELECT);
+  assert.equal(next.env.MMO_SELECT, AGENT_WORKER_SELECT);
   assert.equal(next.env.ANTHROPIC_API_KEY, "sk-x", "the user's key must survive");
   assert.deepEqual(next.permissions, { allow: ["Bash"] });
 });
@@ -383,19 +383,19 @@ test("enabling is idempotent, so running the command twice is harmless", () => {
 });
 
 test("disabling removes our pair and keeps anyone else's", () => {
-  const next = withAgentSelection({ env: { SDLC_SELECT: `other=x,${AGENT_WORKER_SELECT}` } }, false);
-  assert.equal(next.env.SDLC_SELECT, "other=x");
+  const next = withAgentSelection({ env: { MMO_SELECT: `other=x,${AGENT_WORKER_SELECT}` } }, false);
+  assert.equal(next.env.MMO_SELECT, "other=x");
 });
 
 test("disabling deletes the variable rather than leaving an empty string", () => {
   // An empty spec and an absent one must behave identically at the parser, and
   // only one of the two looks like it was meant.
-  const next = withAgentSelection({ env: { SDLC_SELECT: AGENT_WORKER_SELECT } }, false);
-  assert.ok(!("SDLC_SELECT" in (next.env ?? {})));
+  const next = withAgentSelection({ env: { MMO_SELECT: AGENT_WORKER_SELECT } }, false);
+  assert.ok(!("MMO_SELECT" in (next.env ?? {})));
 });
 
 test("an env block that becomes empty is removed, not left as {}", () => {
-  const next = withAgentSelection({ env: { SDLC_SELECT: AGENT_WORKER_SELECT } }, false);
+  const next = withAgentSelection({ env: { MMO_SELECT: AGENT_WORKER_SELECT } }, false);
   assert.ok(!("env" in next), "an empty env block is noise in a file the user reads");
 });
 
@@ -403,17 +403,17 @@ test("disabling leaves a selection this command did not make", () => {
   // Someone who pinned the slot to the completion leaf on purpose said
   // something; --disable-agent means "not the agent", not "forget everything".
   const next = withAgentSelection(
-    { env: { SDLC_SELECT: `${AGENT_WORKER_SLOT}=flash-completion` } },
+    { env: { MMO_SELECT: `${AGENT_WORKER_SLOT}=flash-completion` } },
     false
   );
-  assert.equal(next.env.SDLC_SELECT, `${AGENT_WORKER_SLOT}=flash-completion`);
+  assert.equal(next.env.MMO_SELECT, `${AGENT_WORKER_SLOT}=flash-completion`);
 });
 
 test("a malformed existing spec is repaired, not merged", () => {
   // This is the mistake the command exists to fix. Preserving the bad piece
   // would leave the policy unable to load and make the command useless.
-  const next = withAgentSelection({ env: { SDLC_SELECT: AGENT_WORKER_MODEL_ID } }, true);
-  assert.equal(next.env.SDLC_SELECT, AGENT_WORKER_SELECT);
+  const next = withAgentSelection({ env: { MMO_SELECT: AGENT_WORKER_MODEL_ID } }, true);
+  assert.equal(next.env.MMO_SELECT, AGENT_WORKER_SELECT);
 });
 
 test("withAgentSelection does not mutate what it was given", () => {
@@ -425,7 +425,7 @@ test("withAgentSelection does not mutate what it was given", () => {
 // ─── the clone route's .mcp.json ─────────────────────────────────────────
 
 test("only the bundled server is recognised, and by its script not its key", () => {
-  const ours = { command: "node", args: [join("/x", "gemini-flash-server", "dist", "server.js")] };
+  const ours = { command: "node", args: [join("/x", "model-dispatch", "dist", "server.js")] };
   assert.equal(isBundledServerEntry(ours), true);
   assert.equal(isBundledServerEntry({ command: "node", args: ["/x/other/dist/server.js"] }), false);
   assert.equal(isBundledServerEntry({ command: "uvx", args: ["some-mcp"] }), false);
@@ -438,18 +438,18 @@ test("the selection reaches the clone route's server entry", () => {
   // Claude Code and then dropped at the server boundary.
   const doc = {
     mcpServers: {
-      "gemini-flash-server": {
+      "model-dispatch": {
         command: "node",
-        args: [join("/x", "gemini-flash-server", "dist", "server.js")],
+        args: [join("/x", "model-dispatch", "dist", "server.js")],
         env: { GEMINI_API_KEY: "AIza-x" },
       },
       other: { command: "uvx", args: ["some-mcp"], env: { A: "1" } },
     },
   };
   const { config, updated } = withMcpSelection(doc, true);
-  assert.deepEqual(updated, ["gemini-flash-server"]);
-  assert.equal(config.mcpServers["gemini-flash-server"].env.SDLC_SELECT, AGENT_WORKER_SELECT);
-  assert.equal(config.mcpServers["gemini-flash-server"].env.GEMINI_API_KEY, "AIza-x");
+  assert.deepEqual(updated, ["model-dispatch"]);
+  assert.equal(config.mcpServers["model-dispatch"].env.MMO_SELECT, AGENT_WORKER_SELECT);
+  assert.equal(config.mcpServers["model-dispatch"].env.GEMINI_API_KEY, "AIza-x");
   assert.deepEqual(config.mcpServers.other.env, { A: "1" }, "another server must be untouched");
 });
 
@@ -468,7 +468,7 @@ test("the settings file is created when it does not exist", () =>
     assert.equal(result.spec, AGENT_WORKER_SELECT);
     assert.equal(result.mcpPath, null, "no .mcp.json here, so nothing to report");
     assert.deepEqual(JSON.parse(readFileSync(result.path, "utf8")), {
-      env: { SDLC_SELECT: AGENT_WORKER_SELECT },
+      env: { MMO_SELECT: AGENT_WORKER_SELECT },
     });
   }));
 
@@ -481,7 +481,7 @@ test("an existing settings file is merged, not replaced", () =>
     enableAgentPath({ cwd, enabled: true });
     const after = JSON.parse(readFileSync(path, "utf8"));
     assert.equal(after.env.ANTHROPIC_API_KEY, "sk-x");
-    assert.equal(after.env.SDLC_SELECT, AGENT_WORKER_SELECT);
+    assert.equal(after.env.MMO_SELECT, AGENT_WORKER_SELECT);
     assert.equal(after.model, "opus");
   }));
 
@@ -492,9 +492,9 @@ test("a clone's .mcp.json is updated alongside the settings file", () =>
       mcpPath,
       JSON.stringify({
         mcpServers: {
-          "gemini-flash-server": {
+          "model-dispatch": {
             command: "node",
-            args: [join(cwd, "plugin", "mcp", "gemini-flash-server", "dist", "server.js")],
+            args: [join(cwd, "plugin", "mcp", "model-dispatch", "dist", "server.js")],
             env: { GEMINI_API_KEY: "AIza-x" },
           },
         },
@@ -504,8 +504,8 @@ test("a clone's .mcp.json is updated alongside the settings file", () =>
     const result = enableAgentPath({ cwd, enabled: true });
     assert.equal(result.mcpPath, mcpPath, "the caller must be able to name the file it changed");
     const after = JSON.parse(readFileSync(mcpPath, "utf8"));
-    assert.equal(after.mcpServers["gemini-flash-server"].env.SDLC_SELECT, AGENT_WORKER_SELECT);
-    assert.equal(after.mcpServers["gemini-flash-server"].env.GEMINI_API_KEY, "AIza-x");
+    assert.equal(after.mcpServers["model-dispatch"].env.MMO_SELECT, AGENT_WORKER_SELECT);
+    assert.equal(after.mcpServers["model-dispatch"].env.GEMINI_API_KEY, "AIza-x");
   }));
 
 test("no .mcp.json is created where there was none", () =>
@@ -525,10 +525,10 @@ test("disabling clears the selection from both files", () =>
       mcpPath,
       JSON.stringify({
         mcpServers: {
-          "gemini-flash-server": {
+          "model-dispatch": {
             command: "node",
-            args: [join(cwd, "gemini-flash-server", "dist", "server.js")],
-            env: { SDLC_SELECT: AGENT_WORKER_SELECT, GEMINI_API_KEY: "AIza-x" },
+            args: [join(cwd, "model-dispatch", "dist", "server.js")],
+            env: { MMO_SELECT: AGENT_WORKER_SELECT, GEMINI_API_KEY: "AIza-x" },
           },
         },
       })
@@ -537,10 +537,10 @@ test("disabling clears the selection from both files", () =>
     const result = enableAgentPath({ cwd, enabled: false });
 
     assert.equal(result.spec, null);
-    assert.ok(!("SDLC_SELECT" in (JSON.parse(readFileSync(result.path, "utf8")).env ?? {})));
+    assert.ok(!("MMO_SELECT" in (JSON.parse(readFileSync(result.path, "utf8")).env ?? {})));
     const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
-    assert.ok(!("SDLC_SELECT" in mcp.mcpServers["gemini-flash-server"].env));
-    assert.equal(mcp.mcpServers["gemini-flash-server"].env.GEMINI_API_KEY, "AIza-x");
+    assert.ok(!("MMO_SELECT" in mcp.mcpServers["model-dispatch"].env));
+    assert.equal(mcp.mcpServers["model-dispatch"].env.GEMINI_API_KEY, "AIza-x");
   }));
 
 test("an unreadable settings file is refused, and nothing at all is written", () =>
@@ -553,7 +553,7 @@ test("an unreadable settings file is refused, and nothing at all is written", ()
       mcpPath,
       JSON.stringify({
         mcpServers: {
-          s: { command: "node", args: [join(cwd, "gemini-flash-server", "dist", "server.js")] },
+          s: { command: "node", args: [join(cwd, "model-dispatch", "dist", "server.js")] },
         },
       })
     );
@@ -563,7 +563,7 @@ test("an unreadable settings file is refused, and nothing at all is written", ()
     assert.match(result.detail, /not valid JSON/);
     assert.equal(readFileSync(path, "utf8"), "{ not json", "the user's file must be left alone");
     // The refusal happens before any write, so the install is not half-changed.
-    assert.ok(!/SDLC_SELECT/.test(readFileSync(mcpPath, "utf8")));
+    assert.ok(!/MMO_SELECT/.test(readFileSync(mcpPath, "utf8")));
   }));
 
 test("an unreadable .mcp.json is refused before the settings file is touched", () =>

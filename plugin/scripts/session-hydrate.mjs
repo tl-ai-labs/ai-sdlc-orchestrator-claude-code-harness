@@ -5,7 +5,7 @@
  * compact JSON payload the orchestrator uses to produce a one-line
  * "SDLC: N prior runs (last: <intent>, <age>); baseline <state>; <resume>"
  * marker at session start (and to make the correct routing decision on
- * first /sdlc:brownfield invocation — normal task vs resume interrupted setup
+ * first /mmo:brownfield invocation — normal task vs resume interrupted setup
  * vs first-time-in-this-repo).
  *
  * Purely a reader. Never writes state, never mutates anything.
@@ -29,7 +29,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 
-const SDLC_REL = ".sdlc";
+const MMO_REL = ".sdlc";
 const MAX_RECENT_RUNS = 3;
 
 // ─── path discovery ──────────────────────────────────────────────────
@@ -37,7 +37,7 @@ const MAX_RECENT_RUNS = 3;
 function findSdlcRoot(start = process.cwd()) {
   let dir = resolve(start);
   for (let i = 0; i < 40; i++) {
-    const c = join(dir, SDLC_REL);
+    const c = join(dir, MMO_REL);
     if (existsSync(c)) return c;
     const parent = dirname(dir);
     if (parent === dir) return null;

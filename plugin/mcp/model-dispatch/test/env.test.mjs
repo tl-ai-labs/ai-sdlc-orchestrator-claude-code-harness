@@ -103,7 +103,7 @@ test("every variable plugin.json declares is covered", async () => {
     ),
   );
   const declaredInManifest = Object.keys(
-    pluginJson.mcpServers["gemini-flash-server"].env,
+    pluginJson.mcpServers["model-dispatch"].env,
   ).sort();
 
   assert.deepEqual([...PLUGIN_DECLARED_ENV].sort(), declaredInManifest);
