@@ -2,9 +2,11 @@
 
 **Type:** Epic · **Priority:** High · **Estimate:** 1–1.5 weeks · **Depends on:** none (extends the shipped plugin)
 
-**Design plan:** `docs/planning/mmo-rename-commands-logging.md` lands with the implementation. This ticket is self-contained enough to implement without it.
+**Design plan:** none shipped separately — this ticket is the design. §14 lists every source it draws on.
 
-**Status:** awaiting approval. No code has landed. A verified reference implementation of §5.1 exists on the local branch `feat/mmo-rename-code-wip` (commit `6e6b6a6`, 106 files, 210/212 tests, MCP handshake confirmed) and is deliberately unpushed.
+**Status:** awaiting approval. No code has landed.
+
+A reference implementation of §5.1 sits on the local branch `feat/mmo-rename-code-wip` (commit `6e6b6a6`, 106 files), deliberately unpushed. What was verified on it: root suite 210/212, `tsc` clean, build clean, and a live MCP `initialize` + `tools/list` returning `model-dispatch` with all five tools and zero non-JSON bytes on stdout. What was **not**: the 107-test server suite was never re-run there, so treat §5.1 as demonstrated rather than fully proven.
 
 ---
 
@@ -32,7 +34,7 @@ The seven job types are re-listed in prose across six files with no machine-read
 
 | Observation | Evidence |
 |---|---|
-| The MCP server writes to a stream twice in ~2,000 lines of TypeScript | `plugin/mcp/gemini-flash-server/src/envBootstrap.ts:16`, `src/adapters/AntigravityWorkerAdapter.ts:343` |
+| The MCP server writes to a stream twice in ~3,200 lines of TypeScript | `plugin/mcp/gemini-flash-server/src/envBootstrap.ts:16`, `src/adapters/AntigravityWorkerAdapter.ts:343` |
 | No logger, no level, no timestamp, no prefix | whole of `src/` |
 | The AG SDK worker's stderr is captured then discarded on success; only the last 4000 chars survive, and only on a non-zero exit | `src/adapters/AntigravityWorkerAdapter.ts:283-284`, `tail()` at `:388` |
 | `.sdlc/local/debug.log` is promised in two shipped docs and written by nothing | `docs/brownfield.md:126`, `docs/brownfield-setup-issues.md:35` |
@@ -58,30 +60,32 @@ The delegation you most want to watch — the AG SDK worker editing files and ru
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | `MMO` everywhere — `/mmo:*`, `MMO:` log prefix, `MMO_*` variables | One token to learn. Reverses commit `bf6e94d` (`multi-model-orchestrator` → `sdlc`); say so in the PR or it reads as churn. |
-| D2 | `/mmo:greenfield` + `/mmo:brownfield` as a symmetric pair | `run` gives no hint it means "new app," and it sorts away from `brownfield` in `/help`, so the pair is invisible. |
-| D3 | `/mmo:pass` keeps its name | Considered `unattended`, `auto`, `no-prompts`, `headless`. Deferred rather than churned; revisit separately. |
-| D4 | Skills renamed `pipeline` and `brownfield-guide` | `run-ai-sdlc` carries two stale words — `run` (a command that stops existing) and `sdlc` (the namespace being left). |
-| D5 | MCP server renamed `gemini-flash-server` → `model-dispatch` | It has three dispatch paths — Anthropic Opus, Gemini as a model, Gemini as an agent — and the old name describes one. The MCP tool names break from the plugin rename regardless, so breaking them once beats breaking them twice. |
-| D6 | `.sdlc/` is **not** renamed | It holds `provenance.json` and the per-run backups `/mmo:revert` reads, and appears verbatim in `OFF_LIMITS_DEFAULT` as `.sdlc/**`. Renaming it would silently stop the write contract protecting it. It is hidden and nobody types it, so the readability payoff is zero against a real data-migration risk. `AI-SDLC` (the methodology) is likewise untouched. |
-| D7 | Hard rename, no `/sdlc:*` aliases | The MCP tool-name change already forces a reinstall, so aliases soften nothing while doubling the `/help` listing — working directly against the readability goal. |
-| D8 | Two compatibility shims, warn-and-continue | A plugin update replaces everything under `plugin/`, but never a policy the user authored into their own repo nor a variable `tools/setup.mjs` wrote into their shell profile. |
-| D9 | Seven job commands are aliases, not a second pipeline | Preserves the substance of the brownfield ticket's D5 (§12 of this document). |
+| MMO-D1 | `MMO` everywhere — `/mmo:*`, `MMO:` log prefix, `MMO_*` variables | One token to learn. Reverses commit `bf6e94d` (`multi-model-orchestrator` → `sdlc`); say so in the PR or it reads as churn. |
+| MMO-D2 | `/mmo:greenfield` + `/mmo:brownfield` as a symmetric pair | `run` gives no hint it means "new app," and it sorts away from `brownfield` in `/help`, so the pair is invisible. |
+| MMO-D3 | `/mmo:pass` keeps its name | Considered `unattended`, `auto`, `no-prompts`, `headless`. Deferred rather than churned; revisit separately. |
+| MMO-D4 | Skills renamed `pipeline` and `brownfield-guide` | `run-ai-sdlc` carries two stale words — `run` (a command that stops existing) and `sdlc` (the namespace being left). |
+| MMO-D5 | MCP server renamed `gemini-flash-server` → `model-dispatch` | It has three dispatch paths — Anthropic Opus, Gemini as a model, Gemini as an agent — and the old name describes one. The MCP tool names break from the plugin rename regardless, so breaking them once beats breaking them twice. |
+| MMO-D6 | `.sdlc/` is **not** renamed | It holds `provenance.json` and the per-run backups `/mmo:revert` reads, and appears verbatim in `OFF_LIMITS_DEFAULT` as `.sdlc/**`. Renaming it would silently stop the write contract protecting it. It is hidden and nobody types it, so the readability payoff is zero against a real data-migration risk. `AI-SDLC` (the methodology) is likewise untouched. |
+| MMO-D7 | Hard rename, no `/sdlc:*` aliases | The MCP tool-name change already forces a reinstall, so aliases soften nothing while doubling the `/help` listing — working directly against the readability goal. |
+| MMO-D8 | Two compatibility shims, warn-and-continue | A plugin update replaces everything under `plugin/`, but never a policy the user authored into their own repo nor a variable `tools/setup.mjs` wrote into their shell profile. |
+| MMO-D9 | Seven job commands are aliases, not a second pipeline | Preserves the substance of the brownfield plan's D5, which is a different decision from MMO-D5 above. See §12.1. |
 
-### D8 in detail — the only two names that need a compatibility path
+### MMO-D8 in detail — the only two names that need a compatibility path
 
 | Name | Lives in | Handling |
 |---|---|---|
 | `mcp:gemini-flash-server` (adapter id) | `routing-policy.yaml` and `.sdlc/local/user-policy.yaml` in the **user's** repo; also `plugin/policy-console/index.html:217` | Canonical becomes `mcp:model-dispatch`; `createAdapter` accepts the old id and warns |
-| `SDLC_SELECT` (72 occurrences) | Shell profiles and `settings.json`, written by `tools/setup.mjs` | Canonical becomes `MMO_SELECT`; the reader accepts the old name and warns |
+| `SDLC_SELECT` (92 occurrences; 72 in executable code) | Shell profiles and `settings.json`, written by `tools/setup.mjs` | Canonical becomes `MMO_SELECT`; the reader accepts the old name and warns |
 
 Everything else hard-breaks, because reinstalling replaces it.
+
+**Reading the decision ids.** This ticket numbers its own decisions `MMO-D1`–`MMO-D9`. A bare `D<n>` anywhere in this document refers to a decision in `docs/brownfield-v1-planning/plan.md`, which has its own unrelated numbering — that plan's D4 and D5 are cited below and are not this ticket's MMO-D4 and MMO-D5.
 
 ## 5. In scope
 
 ### 5.1 The rename
 
-Measured surface: **~250 `/sdlc:` occurrences across 50 files**, **~120 `gemini-flash-server` across 30 files**.
+Measured surface, excluding the historical directories named below: **247 `/sdlc:` occurrences across 49 files**, **124 `gemini-flash-server` across 34 files**. Counting the historical directories as well: 311 and 144.
 
 Directory and file moves (use `git mv` so history follows):
 
@@ -263,9 +267,9 @@ Free text that cannot be structured — error messages, worker stderr — passes
 
 ### 6.1 Deferred
 
-- **`.sdlc/` → `.mmo/`.** A data migration, not a rename (D6). Would need a dual-read shim across `session-hydrate`, `revert`, `write-contract-check`, and `off-limits`, plus a migration script and coverage for the mixed state where a repo has both directories.
-- **`/sdlc:*` deprecation aliases.** See D7.
-- **Renaming `/mmo:pass`.** See D3.
+- **`.sdlc/` → `.mmo/`.** A data migration, not a rename (MMO-D6). Would need a dual-read shim across `session-hydrate`, `revert`, `write-contract-check`, and `off-limits`, plus a migration script and coverage for the mixed state where a repo has both directories.
+- **`/sdlc:*` deprecation aliases.** See MMO-D7.
+- **Renaming `/mmo:pass`.** See MMO-D3.
 - **`/mmo:support-bundle`.** `plan.md` §14.11 specifies it; it is a separate deliverable from the log stream itself.
 - **Structured JSONL twin of the log.** The logfmt line is greppable and parseable; a second machine format can wait for a consumer that needs it.
 
@@ -284,7 +288,7 @@ Three commits on one branch, in this order. Reviewing a mechanical rename mixed 
 1. Three `git mv` operations (§5.1).
 2. Ordered token replacement across the tracked, non-historical file set.
 3. Both manifests: name, version, MCP server key, `args` path, env whitelist.
-4. The two compatibility shims (D8).
+4. The two compatibility shims (MMO-D8).
 5. New `tools/test/namespace.test.mjs`.
 6. Dated notes on the two historical directories.
 
@@ -315,7 +319,7 @@ Three commits on one branch, in this order. Reviewing a mechanical rename mixed 
 | `plugin/commands/{docs,bugfix,feature-extend,feature-new,refactor,test,deps}.md` | The seven job commands |
 | `plugin/mcp/model-dispatch/src/log.ts` | Server-side logger |
 | `plugin/scripts/lib/log.mjs` | Script-side twin |
-| `plugin/scripts/lib/env.mjs` | The central env reader D4 specified |
+| `plugin/scripts/lib/env.mjs` | The central env reader the brownfield plan's D4 specified and nobody built |
 | `plugin/scripts/mmo-log.mjs` | CLI wrapper for taxonomy A and B; fail-open, matching `write-provenance.mjs` |
 | `docs/logging.md` | Format, levels, taxonomy, enablement, redaction |
 | `tools/test/namespace.test.mjs` | Rename guards, both directions |
@@ -440,8 +444,43 @@ Both are called out here rather than discovered in review.
 
 ### 12.3 Pre-existing test failures
 
-Two tests in `tools/test/publish.test.mjs` fail on any machine with leftover git worktrees under `.claude/` or a populated `src/` sandbox, because they walk the working tree without honoring `.gitignore`. Both flagged paths are untracked and cannot ship. Unrelated to this work; tracked separately. Baseline is **210 pass, 2 fail**, and this ticket does not change it.
+Two tests in `tools/test/publish.test.mjs` fail on any machine with leftover git worktrees under `.claude/` or a populated `src/` sandbox, because they walk the working tree without honoring `.gitignore`. Both flagged paths are untracked and cannot ship. Unrelated to this work; tracked separately.
+
+Baseline on `main` is **312 tests, 310 pass, 2 fail** — root suite 205/207 plus server suite 107/107. This ticket does not change it.
+
+**Trap when checking that number.** `npm test` chains two commands and only the first prints the summary most readers copy. When `plugin/mcp/gemini-flash-server/node_modules` is absent, `tools/test-mcp.mjs` prints a NOT RUN banner and **exits 0**, so all 107 server tests disappear from a run that still looks green. Install the server's dependencies before trusting any count.
 
 ### 12.4 Open question — the `/mmo:pass` name
 
-`pass` is the one word in the surface a newcomer provably cannot guess. Alternatives considered: `unattended`, `auto`, `no-prompts`, `flags`, `headless`. Held at `pass` for now (D3). Worth revisiting once the rest lands.
+`pass` is the one word in the surface a newcomer provably cannot guess. Alternatives considered: `unattended`, `auto`, `no-prompts`, `flags`, `headless`. Held at `pass` for now (MMO-D3). Worth revisiting once the rest lands.
+
+## 13. Non-goals for this ticket
+
+Distinct from §6, which lists work that is deferred. These are things this ticket is not, and will not become:
+
+- **Not a behavior change.** After all three commits, the pipeline does the same work in the same order for the same cost. Names change, seven aliases appear, and a log stream starts. No phase, gate, routing rule, or write-contract semantic moves.
+- **Not a telemetry change.** `telemetry.jsonl`, `manifest.json`, and the cost report keep their current schemas. The log stream sits alongside them and never replaces them; §5.3 exists because cost accounting is not a log.
+- **Not a policy change.** The shipped policies keep their routing. Only the adapter id string is renamed, with the old one still accepted.
+- **Not a fix for the two failing tests.** They pre-date this work and are tracked separately (§12.3).
+
+## 14. References
+
+Everything this ticket draws on. Line numbers are against `main` at the time of writing.
+
+| Source | Relevance |
+|---|---|
+| `docs/brownfield-v1-planning/plan.md:573` (§14.11) | The debug-mode design this ticket implements: `.sdlc/local/debug.log`, `run_id` + `phase` tagging, 5 MB rotation |
+| `docs/brownfield-v1-planning/plan.md:1454` (D4) | The central env reader at `plugin/scripts/env.mjs`, specified and never built |
+| `docs/brownfield-v1-planning/plan.md:1078-1080` (§23, D5) | The two-prompt UX lock this ticket must not violate — see §12.1 |
+| `docs/brownfield-v1-planning/BROWNFIELD-MODE-V1-TICKET.md` | Format precedent for this document; §12 lists the commands v1 deliberately withheld |
+| `plugin/skills/run-ai-sdlc/SKILL.md:255` | The 7×5 Intent matrix — the authority for which intents exist |
+| `plugin/agents/orchestrator.md:143-148` | Rule 6, which aborts the run when `auth_mode` is missing (§5.2) |
+| `plugin/agents/orchestrator.md:92-96` | Why run evidence is anchored to the telemetry path (§5.3 sinks) |
+| `plugin/mcp/gemini-flash-server/src/envBootstrap.ts:13-15` | The stdout rule: stdout is the JSON-RPC transport, so logs go to stderr |
+| `plugin/scripts/dispatch-sanitize.mjs` | The tested secret-pattern registry the logger reuses for redaction |
+| `docs/brownfield-privacy.md` | What currently leaves the machine — the bound logging must not widen |
+| `CONTRIBUTING.md` | One topic per PR; no `Co-Authored-By` trailers; reporting/telemetry changes need a `docs/methodology.md` entry |
+| `CLAUDE.md` | Writing conventions enforced by `tools/test/style.test.mjs` |
+| Commits `3f03ce8`, `e7e0081` | `/sdlc:setup` and `/sdlc:policy`, added after the D5 lock (§12.1) |
+| Commit `bf6e94d` | The `multi-model-orchestrator` → `sdlc` rename this ticket reverses |
+| Commit `6e6b6a6` | Reference implementation of §5.1, on the unpushed branch `feat/mmo-rename-code-wip` |
