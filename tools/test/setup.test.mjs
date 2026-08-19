@@ -221,19 +221,31 @@ test("every credential the check accepts is one the server actually honours", ()
   }
 });
 
+/**
+ * Server source, not a hardcoded array, is the list this test checks against.
+ * Before this fix (ticket §5.3), the list here was six names typed by hand —
+ * plugin.json already forwarded SDLC_SELECT and GEMINI_WORKER_PYTHON, neither
+ * of which that list mentioned, so adding a variable to the server and
+ * forgetting one of the two forwarding sites passed green. Reading
+ * PLUGIN_DECLARED_ENV out of env.ts (text, not import — this file runs
+ * before `npm ci` in plugin/mcp/model-dispatch, same constraint as
+ * verify-setup.mjs's DECLARED_ENV) closes that gap: every name the server
+ * actually declares is checked, not just the ones someone remembered.
+ */
+function serverDeclaredEnvNames() {
+  const envTs = readFileSync(join(ROOT, "plugin/mcp/model-dispatch/src/env.ts"), "utf8");
+  const start = envTs.indexOf("PLUGIN_DECLARED_ENV");
+  const block = envTs.slice(start, envTs.indexOf("];", start) + 1);
+  return [...block.matchAll(/"([A-Z][A-Z0-9_]*)"/g)].map((m) => m[1]);
+}
+
 test("both env-forwarding sites carry every name the server reads", () => {
   // A stdio MCP server does not inherit the parent environment. Anything the
   // server reads has to be forwarded explicitly, in both places that spawn it:
   // the plugin manifest (install path) and tools/setup.mjs (clone path).
   // Miss one and that path alone fails, which is the hardest kind to notice.
-  const names = [
-    "ANTHROPIC_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "GOOGLE_CLOUD_PROJECT",
-    "GOOGLE_CLOUD_LOCATION",
-    "GEMINI_BACKEND",
-  ];
+  const names = serverDeclaredEnvNames();
+  assert.ok(names.length > 0, "could not parse PLUGIN_DECLARED_ENV out of env.ts — regex drifted from the source shape");
   // Read whichever server the manifest declares rather than a hardcoded key,
   // so renaming the server does not turn this into a false pass.
   const servers = Object.values(readJson("plugin/.claude-plugin/plugin.json").mcpServers ?? {});

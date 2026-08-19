@@ -3,6 +3,7 @@ import type { ModelAdapter } from "./ModelAdapter.js";
 import { GeminiFlashAdapter } from "./GeminiFlashAdapter.js";
 import { BuiltinAnthropicAdapter } from "./BuiltinAnthropicAdapter.js";
 import { AntigravityWorkerAdapter } from "./AntigravityWorkerAdapter.js";
+import { log } from "../log.js";
 
 /**
  * Adapter registry, keyed on the policy YAML's `adapter:` field.
@@ -21,9 +22,7 @@ export function createAdapter(config: ModelConfig): ModelAdapter {
   if (config.adapter === LEGACY_GEMINI_ADAPTER_ID) {
     if (!legacyAdapterIdWarned) {
       legacyAdapterIdWarned = true;
-      process.stderr.write(
-        `model-dispatch: adapter id '${LEGACY_GEMINI_ADAPTER_ID}' is deprecated, use 'mcp:model-dispatch' instead\n`
-      );
+      log("warn", "policy.adapter.deprecated", { adapter_id_seen: LEGACY_GEMINI_ADAPTER_ID, canonical: "mcp:model-dispatch" });
     }
     return new GeminiFlashAdapter(config);
   }

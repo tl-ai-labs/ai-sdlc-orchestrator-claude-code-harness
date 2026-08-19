@@ -40,6 +40,7 @@ import {
   diffInventories,
   takeInventory,
 } from "../delegation/evidence.js";
+import { log } from "../log.js";
 
 // Module-location relative, not cwd — the server runs in the user's project.
 // dist/adapters/ → package root two levels up.
@@ -162,8 +163,29 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     // in the delta. `outDir` is excluded because it sits inside the workspace
     // and the SDK writes session state there.
     const before = takeInventory(workdir, { exclude: [outDir] });
+    log("debug", "agsdk.inventory.before", {
+      packet_id: packet.id,
+      files_scanned: before.entries.length,
+      truncated: before.truncated,
+    });
 
-    const run = await this.spawnWorker(args, workdir, timeoutSec);
+    log("info", "agsdk.spawn", {
+      packet_id: packet.id,
+      python_path: this.python,
+      arg_count: args.length,
+      work_dir: workdir,
+      timeout_sec: timeoutSec,
+      forwarded_env_keys: Object.keys(
+        buildWorkerEnv(process.env as Record<string, string | undefined>, {
+          project: this.project,
+          location: this.location,
+        }),
+      ).join(","),
+      project: this.project,
+      location: this.location,
+    });
+
+    const run = await this.spawnWorker(args, workdir, timeoutSec, packet.id);
 
     const after = takeInventory(workdir, { exclude: [outDir] });
 
@@ -172,6 +194,38 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     const tokens = mapSidecarTokens(sidecar);
     const cost = computeCostUsd(tokens, this.billedPricing);
     const latency = Date.now() - started;
+
+    if (sidecar) {
+      log("info", "agsdk.sidecar", {
+        packet_id: packet.id,
+        sdk: sidecar.sdk,
+        sdk_version: sidecar.sdk_version,
+        vertex_project: sidecar.vertex_project,
+        vertex_location: sidecar.vertex_location,
+        thinking: sidecar.thinking,
+        tool_call_count: sidecar.tool_call_count,
+        tool_calls_truncated: sidecar.tool_calls_truncated,
+      });
+      for (const [index, tc] of (sidecar.tool_calls ?? []).entries()) {
+        log("debug", "agsdk.toolcall", {
+          packet_id: packet.id,
+          index,
+          name: tc?.name,
+          target: tc?.canonical_path,
+        });
+      }
+    }
+
+    const diff = diffInventories(before, after);
+    log("info", "agsdk.diff", {
+      packet_id: packet.id,
+      added_n: diff.added.length,
+      modified_n: diff.modified.length,
+      removed_n: diff.removed.length,
+      unchanged: diff.unchanged,
+      truncated: diff.truncated,
+      unreadable_n: diff.unreadable.length,
+    });
 
     // Written for BOTH outcomes — a failed delegation is what a reader most
     // needs a receipt for.
@@ -192,7 +246,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
       costUsd: cost,
       tokens,
       sidecar,
-      diff: diffInventories(before, after),
+      diff,
       briefFile: basename(taskFile),
       usageFile: basename(usageFile),
     });
@@ -264,7 +318,9 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     args: string[],
     cwd: string,
     timeoutSec: number,
+    packetId: string,
   ): Promise<{ ok: true; stdout: string } | { ok: false; error: string; stdout: string }> {
+    const spawnStarted = Date.now();
     return new Promise((resolveRun) => {
       const child = spawn(this.python, args, {
         cwd,
@@ -278,10 +334,23 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
 
       let stdout = "";
       let stderr = "";
+      let stderrLineBuf = "";
       let timedOut = false;
 
       child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
-      child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+      child.stderr.on("data", (chunk) => {
+        const text = chunk.toString();
+        stderr += text; // still buffered whole, for tail() on the error path
+
+        // Streamed line by line at TRACE — was previously discarded entirely
+        // on success and only the last STDERR_TAIL_CHARS survived a failure.
+        stderrLineBuf += text;
+        const lines = stderrLineBuf.split("\n");
+        stderrLineBuf = lines.pop() ?? "";
+        for (const line of lines) {
+          log("trace", "agsdk.worker.stderr", { packet_id: packetId, line });
+        }
+      });
 
       // Deadline = worker's timeout + grace, so the worker's own timeout
       // (which exits cleanly with a diagnosable message) fires first.
@@ -308,6 +377,18 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
 
       child.on("close", (code) => {
         clearTimeout(timer);
+        if (stderrLineBuf) {
+          log("trace", "agsdk.worker.stderr", { packet_id: packetId, line: stderrLineBuf });
+          stderrLineBuf = "";
+        }
+        log("info", "agsdk.exit", {
+          packet_id: packetId,
+          exit_code: code,
+          timed_out: timedOut,
+          duration_ms: Date.now() - spawnStarted,
+          stdout_bytes: Buffer.byteLength(stdout),
+          stderr_bytes: Buffer.byteLength(stderr),
+        });
         if (timedOut) {
           resolveRun({
             ok: false,
@@ -339,7 +420,9 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
   private writeRecord(path: string, input: Parameters<typeof buildDelegationRecord>[0]): void {
     try {
       writeFileSync(path, JSON.stringify(buildDelegationRecord(input), null, 2), "utf8");
+      log("debug", "agsdk.record.write", { packet_id: input.packet.id, path, ok: true });
     } catch (err: any) {
+      log("debug", "agsdk.record.write", { packet_id: input.packet.id, path, ok: false });
       process.stderr.write(
         `[antigravity-worker] could not write the delegation record to '${path}': ` +
           `${err?.message ?? err}. The delegation itself was unaffected.\n`,

@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { GoogleGenAI } from "@google/genai";
+import { log } from "../log.js";
 
 // ─── backend selection (pure; unit-tested) ────────────────────────────
 
@@ -46,37 +47,51 @@ export interface BackendChoice {
  */
 export function selectGeminiBackend(input: BackendSelectionInput): BackendChoice {
   const { env, keyEnvName, adcFileExists } = input;
+  const choice = resolveGeminiBackend(input);
+  // "Once per run" per the taxonomy is aspirational for a pure function
+  // called from both preflight and dispatch — logged on every call instead
+  // of tracking run-scoped dedup state a pure function has no business
+  // holding. Harmless: identical INFO lines, not a volume problem.
+  log("info", "api.gemini.backend", {
+    backend: choice.backend,
+    reason: choice.reason,
+    project: env.GOOGLE_CLOUD_PROJECT,
+    adc_file_present: adcFileExists,
+  });
+  return choice;
 
-  const override = env.GEMINI_BACKEND?.trim().toLowerCase();
-  if (override) {
-    if (override === "vertex") return { backend: "vertex-adc", reason: "GEMINI_BACKEND=vertex" };
-    if (override === "api-key") return { backend: "api-key", reason: "GEMINI_BACKEND=api-key" };
+  function resolveGeminiBackend(input: BackendSelectionInput): BackendChoice {
+    const override = env.GEMINI_BACKEND?.trim().toLowerCase();
+    if (override) {
+      if (override === "vertex") return { backend: "vertex-adc", reason: "GEMINI_BACKEND=vertex" };
+      if (override === "api-key") return { backend: "api-key", reason: "GEMINI_BACKEND=api-key" };
+      throw new Error(
+        `GEMINI_BACKEND='${env.GEMINI_BACKEND}' is not a recognized value. Use 'vertex' or 'api-key', ` +
+          `or unset it to let credentials decide.`,
+      );
+    }
+
+    if (env[keyEnvName]) return { backend: "api-key", reason: `${keyEnvName} is set` };
+
+    if (env.GOOGLE_APPLICATION_CREDENTIALS) {
+      return { backend: "vertex-adc", reason: "GOOGLE_APPLICATION_CREDENTIALS is set" };
+    }
+    if (adcFileExists) {
+      return { backend: "vertex-adc", reason: "gcloud ADC file present" };
+    }
+    if (env.GOOGLE_CLOUD_PROJECT) {
+      return { backend: "vertex-adc", reason: "GOOGLE_CLOUD_PROJECT is set" };
+    }
+
+    // Keep aligned with verify-setup.mjs's `gemini-credentials` warning
+    // (synced by hand — that script runs pre-build).
     throw new Error(
-      `GEMINI_BACKEND='${env.GEMINI_BACKEND}' is not a recognized value. Use 'vertex' or 'api-key', ` +
-        `or unset it to let credentials decide.`,
+      `No Gemini credentials found. Either authenticate to Vertex AI with ` +
+        `\`gcloud auth application-default login\` (no key; the project is read from ` +
+        `GOOGLE_CLOUD_PROJECT, or from the ADC file's quota project), or export ` +
+        `${keyEnvName}=... for the AI Studio path (https://aistudio.google.com/app/apikey).`,
     );
   }
-
-  if (env[keyEnvName]) return { backend: "api-key", reason: `${keyEnvName} is set` };
-
-  if (env.GOOGLE_APPLICATION_CREDENTIALS) {
-    return { backend: "vertex-adc", reason: "GOOGLE_APPLICATION_CREDENTIALS is set" };
-  }
-  if (adcFileExists) {
-    return { backend: "vertex-adc", reason: "gcloud ADC file present" };
-  }
-  if (env.GOOGLE_CLOUD_PROJECT) {
-    return { backend: "vertex-adc", reason: "GOOGLE_CLOUD_PROJECT is set" };
-  }
-
-  // Keep aligned with verify-setup.mjs's `gemini-credentials` warning
-  // (synced by hand — that script runs pre-build).
-  throw new Error(
-    `No Gemini credentials found. Either authenticate to Vertex AI with ` +
-      `\`gcloud auth application-default login\` (no key; the project is read from ` +
-      `GOOGLE_CLOUD_PROJECT, or from the ADC file's quota project), or export ` +
-      `${keyEnvName}=... for the AI Studio path (https://aistudio.google.com/app/apikey).`,
-  );
 }
 
 /** Default location of the ADC file `gcloud auth application-default login` writes. */
@@ -239,10 +254,25 @@ abstract class GenAiTransport implements GeminiTransport {
         ttl: `${ttlSeconds}s`,
       },
     });
+    log("debug", "api.gemini.cache.create", {
+      cache_context: displayName,
+      token_count: undefined,
+      ttl: ttlSeconds,
+    });
     return created?.name;
   }
 
   async generate(args: GenerateArgs): Promise<GenerateOutcome> {
+    log("debug", "api.gemini.request", {
+      model_name: args.modelName,
+      transport: this.backend,
+      cached_content: args.cachedContentName,
+      max_output_tokens: (args.generationConfig as any)?.maxOutputTokens,
+      thinking_budget: (args.generationConfig as any)?.thinkingConfig?.thinkingBudget,
+    });
+    if (args.cachedContentName) {
+      log("debug", "api.gemini.cache.hit", { cache_context: args.cachedContentName });
+    }
     const resp = await this.ai.models.generateContent({
       model: args.modelName,
       contents: [{ role: "user", parts: [{ text: args.prompt }] }],
@@ -251,14 +281,22 @@ abstract class GenAiTransport implements GeminiTransport {
         ...(args.cachedContentName ? { cachedContent: args.cachedContentName } : {}),
       },
     });
+    const finishReason = resp.candidates?.[0]?.finishReason
+      ? String(resp.candidates[0].finishReason)
+      : undefined;
+    log("debug", "api.gemini.response", {
+      model_name: args.modelName,
+      transport: this.backend,
+      finish_reason: finishReason,
+      usage: JSON.stringify(resp.usageMetadata ?? {}),
+      http_status: 200,
+    });
     return {
       // `text` is "" (not undefined) when the model returned no text —
       // happens when the output cap is spent entirely on thinking.
       text: resp.text ?? "",
       usage: (resp.usageMetadata ?? {}) as Record<string, number | undefined>,
-      finishReason: resp.candidates?.[0]?.finishReason
-        ? String(resp.candidates[0].finishReason)
-        : undefined,
+      finishReason,
     };
   }
 }

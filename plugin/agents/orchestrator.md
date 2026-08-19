@@ -223,6 +223,66 @@ Three enforcement layers make this promise stick — the third is the only one y
 
 See `plugin/scripts/write-contract-check.mjs` for the hook implementation and the exact schema of `.sdlc/local/write-contract.json`.
 
+# Run logging — every run, both modes
+
+Every run emits an `MMO:`-prefixed log line at each of the points below, via a
+CLI wrapper — you are a prompt and cannot call the logger module directly.
+See docs/logging.md for the full taxonomy, levels, and redaction rules; this
+section only covers the events you (the orchestrator prompt) are responsible
+for emitting. The MCP server emits its own share (dispatch, routing, vendor
+API, AG SDK) without your involvement.
+
+**Every call passes `--run-id=<run-id> --project-root "$(pwd)"`**, same
+reasoning as the provenance calls below — a drifted cwd must not write the
+log into the wrong project. Omit any field you don't have a real value for;
+the logger drops missing fields rather than printing them empty.
+
+1. **Once at run start** — right after rule 0's `preflight_dispatch` succeeds:
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.start --level=info \
+     --run-id=<run-id> --project-root "$(pwd)" \
+     --mode=<greenfield|brownfield> --intent=<intent-or-omit> --policy=<policy-name> \
+     --auth-mode=<vendor|estimated> --code-dir=<code_dir> --output-dir=<output_dir>
+   ```
+
+2. **At the start and end of every phase** (`requirements_analysis`, `architecture_design`,
+   `plan_task_packets`, `execute_packets`, `senior_code_review`, `test_run`, `security_review`,
+   `generate_final_report`, plus `discovery`/`change_plan` in brownfield):
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=phase.start --level=info \
+     --run-id=<run-id> --project-root "$(pwd)" --phase=<phase> --form=<default|intent-specific>
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=phase.end --level=info \
+     --run-id=<run-id> --project-root "$(pwd)" --phase=<phase> --form=<default|intent-specific>
+   ```
+   A phase the Intent matrix marks **SKIP** for this run's intent gets `phase.skip` instead of
+   the pair above, with `--reason` naming the matrix cell (e.g. `docs-skips-architecture`).
+
+3. **At every HITL gate** — when you print the gate prompt, and again once the user replies:
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=gate.open --level=info \
+     --run-id=<run-id> --project-root "$(pwd)" --gate=<gate-1|gate-2|gate-3|gate-4|gate-0> --title=<short-title>
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=gate.resolved --level=info \
+     --run-id=<run-id> --project-root "$(pwd)" --gate=<same> --response=<approved|revise|abort>
+   ```
+
+4. **Around every subagent delegation** (`architect`, `senior-reviewer`, `security-reviewer`,
+   `discovery`):
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=delegate.subagent.start --level=info \
+     --run-id=<run-id> --project-root "$(pwd)" --phase=<phase> --subagent=<name>
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=delegate.subagent.end --level=info \
+     --run-id=<run-id> --project-root "$(pwd)" --phase=<phase> --subagent=<name> --ok=<true|false> --artifact-path=<path>
+   ```
+
+5. **Once at run end** — right before you print the final report:
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.end --level=info \
+     --run-id=<run-id> --project-root "$(pwd)" --outcome=<completed|aborted|failed> --total-cost-usd=<from manifest.json>
+   ```
+
+**Fail-open by design**, same as the provenance helper: a logging call never blocks the run. If
+`mmo-log.mjs` errors, it warns to stderr and exits 0 — treat every one of these calls as fire-and-forget.
+
 # Provenance recording — brownfield only
 
 **Applies only when a brownfield run is active** (same trigger as the Write gate above). Every file the run touches must land in `.sdlc/runs/<run-id>/provenance.json` so `/mmo:revert <run-id>` can restore the pre-run state. Uncommitted files (dirty tracked or untracked) additionally need a backup copy taken **before** the write — git has no record of their pre-run content, so the backup is the only recovery path.

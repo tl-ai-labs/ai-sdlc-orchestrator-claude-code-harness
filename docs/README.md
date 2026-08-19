@@ -32,6 +32,7 @@ Look things up. Exact answers, exhaustive.
 | [Troubleshooting](troubleshooting.md) | Symptom → cause → fix, keyed by the error message on screen. |
 | [Brownfield setup issues (17 known)](brownfield-setup-issues.md) | Every install-time issue that has hit real users and how the plugin handles each. |
 | [Understanding output](understanding-output.md) | Reading `telemetry.jsonl`, `manifest.json`, `provenance.json`, and the cost report. |
+| [Logging](logging.md) | The `MMO:` log stream — format, levels, taxonomy, enablement, redaction. |
 
 ## Concepts
 

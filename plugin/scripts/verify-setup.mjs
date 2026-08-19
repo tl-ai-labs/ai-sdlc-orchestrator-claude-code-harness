@@ -53,6 +53,9 @@ export const DECLARED_ENV = [
   "MMO_SELECT",
   "SDLC_SELECT", // MMO-D8 compat shim — pre-rename installs still export this
   "GEMINI_WORKER_PYTHON",
+  "MMO_LOG_LEVEL",
+  "MMO_VERBOSE",
+  "MMO_LOG_PREFIX",
 ];
 
 /** `${NAME}` and nothing else. Anchored so a real value with `$` survives. */

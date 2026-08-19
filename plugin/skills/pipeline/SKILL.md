@@ -167,6 +167,11 @@ Every attempt emits its own TelemetryEvent with `attempt_number`, `ceiling_used`
 
 ### Phase 5 — execute_packets
 
+Emit `phase.start` before the first packet and `phase.end` after the last — see "Run logging" in
+orchestrator.md. This is the phase with the most silence between pre-flight and Gate 1 otherwise:
+every dispatch inside the loop below already logs itself via the MCP server (`route.decide`,
+`dispatch.start`/`.end`), but nothing marks the loop's own boundaries without this call.
+
 For each packet, in dependency order:
 
 **Direct-tier work (subagent handles it, no MCP dispatch):** the orchestrator (Opus) writes the file directly. Estimate tokens via `chars/3.8` heuristic for both inputs and outputs; source pricing constants from the loaded policy's `pricing:` block for this model; log a TelemetryEvent via `log_telemetry`.

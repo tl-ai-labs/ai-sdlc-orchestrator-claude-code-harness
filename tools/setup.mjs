@@ -251,7 +251,11 @@ const mcpEntry = {
             "GOOGLE_CLOUD_LOCATION",
             "GEMINI_BACKEND",
             "MMO_SELECT",
+            "SDLC_SELECT", // MMO-D8 compat shim — pre-rename installs still export this
             "GEMINI_WORKER_PYTHON",
+            "MMO_LOG_LEVEL",
+            "MMO_VERBOSE",
+            "MMO_LOG_PREFIX",
           ]
             .filter((name) => process.env[name])
             .map((name) => [name, process.env[name]]),
