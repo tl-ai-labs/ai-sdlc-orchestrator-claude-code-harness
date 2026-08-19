@@ -154,6 +154,15 @@ if the wiring edit fails, roll back the new-file packet within the same pair.
 **Every brownfield packet MUST set `artifact_path`** (§7.1) so the write-contract validator can
 reject off-limits paths at dispatch time. Missing `artifact_path` is a planner bug.
 
+**`doc_addition` vs `doc_update` — read from the brief, don't infer.** When `intent_brief.md`
+carries a "## Task type" heading (only present when the chosen intent declares `task_types` in
+`intents.json` — currently just `docs`), every packet you plan for this run uses that exact
+`task_type` value. Do not infer `doc_addition` vs `doc_update` from file existence or context —
+the user already chose it at brief-collection time (`brownfield-guide/SKILL.md` step 4b), and a
+per-project policy may route the two differently (an update is a smaller edit than fresh
+authoring, and might reasonably go to a cheaper model). When the heading is absent — every
+non-docs intent, and `docs` runs from before this existed — infer as before.
+
 ### TaskPacket initial output-ceiling budgets
 
 Set `budget.maxOutputTokens` per phase type. The adapter automatically doubles this ceiling on any attempt that terminates with the vendor's max-tokens stop reason (Anthropic `stop_reason: "max_tokens"`, Gemini `finishReason: "MAX_TOKENS"`), up to 3 doublings or the model's absolute output limit declared in the policy YAML (`max_output_tokens_absolute`), whichever comes first. Cached input keeps retry cost low.
@@ -242,9 +251,18 @@ Read all events in `<telemetry_path>`. Build rollup manifest using the `buildMan
   acceptance: ["<testable bullet>", ...],
   budget: { maxInputTokens: 4000, maxOutputTokens: 3000 },  // codegen initial; adapter doubles on max_tokens truncation up to 3× (see below)
   retry_count: 0,
-  pass_id: "pass1" | "pass2"
+  pass_id: "pass1" | "pass2",
+  intent: "docs" | "bugfix" | "feature-extend" | "feature-new" | "refactor" | "test" | "deps"  // brownfield only — omit entirely on greenfield packets
 }
 ```
+
+**Set `intent` on every brownfield packet, from the confirmed value in `intent_brief.md`.** A
+policy may route the same `phase` differently per intent (e.g. `refactor`'s Tests phase to a
+different model than `docs`'s) via a rule matching on both `phase` and `intent` — the router
+falls back to the phase's blanket rule when no intent-specific one exists. Omitting `intent`
+silently drops the packet out of every intent-scoped rule and back onto the blanket rule, which
+is exactly greenfield's existing behavior — so this is safe to skip on greenfield packets, but
+never skip it on brownfield.
 
 ---
 

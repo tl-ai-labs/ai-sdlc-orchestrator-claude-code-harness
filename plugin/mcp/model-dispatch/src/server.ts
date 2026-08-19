@@ -370,6 +370,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             task_type: packet.task_type,
             module: packet.module,
             retry_count: packet.retry_count ?? 0,
+            intent: packet.intent,
           },
           policy,
           selectOverrides()
@@ -377,6 +378,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         log("info", "route.decide", {
           packet_id: packet.id,
           phase: packet.phase,
+          intent: packet.intent,
           task_type: packet.task_type,
           module: packet.module,
           rule_index: decision.ruleIndex,

@@ -20,6 +20,8 @@ export interface TaskContext {
   task_type: string;
   module: string;
   retry_count: number;
+  /** Brownfield only. Undefined on greenfield packets — never matched against a rule that omits it. */
+  intent?: string;
 }
 
 /**
@@ -172,6 +174,8 @@ function matches(matcher: RuleMatcher, ctx: TaskContext): boolean {
   if (matcher.phase !== undefined && !inSet(matcher.phase, ctx.phase)) return false;
   if (matcher.task_type !== undefined && !inSet(matcher.task_type, ctx.task_type)) return false;
   if (matcher.module !== undefined && !inSet(matcher.module, ctx.module)) return false;
+  // A rule scoped to an intent never matches a packet with no intent (greenfield).
+  if (matcher.intent !== undefined && (ctx.intent === undefined || !inSet(matcher.intent, ctx.intent))) return false;
   if (matcher.retry_count !== undefined) {
     const r = ctx.retry_count;
     const m = matcher.retry_count;
@@ -190,7 +194,7 @@ function inSet(set: string | string[], value: string): boolean {
 
 function describeMatcher(m: RuleMatcher): string {
   const parts: string[] = [];
-  for (const k of ["phase", "task_type", "module"] as const) {
+  for (const k of ["phase", "task_type", "module", "intent"] as const) {
     if (m[k] !== undefined) parts.push(`${k}=${JSON.stringify(m[k])}`);
   }
   if (m.retry_count) parts.push(`retry_count=${JSON.stringify(m.retry_count)}`);

@@ -133,6 +133,11 @@ Two things to collect from the user. Both go into `.sdlc/runs/<run-id>/intent_br
 - **Inline chat** — if the user just describes it in this message (and no `seed_description` was
   already supplied by the handover), capture their words verbatim into the brief.
 
+**Task type — only when the chosen intent declares `task_types` in `intents.json`.** Ask one more
+question after the interview above, offering each option's `label`: *"Which kind of &lt;intent&gt; job
+is this — &lt;label 1&gt; or &lt;label 2&gt;?"* Record the chosen `id`. Intents with no `task_types` array
+(everything except `docs`, for now) skip this — nothing changes for them.
+
 Write the brief to `.sdlc/runs/<run-id>/intent_brief.md` with this heading contract:
 
 ```
@@ -140,11 +145,18 @@ Write the brief to `.sdlc/runs/<run-id>/intent_brief.md` with this heading contr
 
 ## Context
 ## Goal
+## Task type          (omit this heading entirely when the intent has no task_types)
 ## Files in scope
 ## Files off-limits
 ## Acceptance criteria
 ## Non-goals
 ```
+
+"Task type" holds the chosen `id` verbatim (e.g. `doc_update`), not the label — Phase 4 in
+`pipeline/SKILL.md` reads it back to set the generated TaskPacket's `task_type` field directly,
+instead of inferring it from context. A policy can then route `doc_update` differently from
+`doc_addition` via an ordinary `rules[].when.task_type` match — no new policy schema needed, since
+`task_type` is already a routing key.
 
 Fill in "Files in scope" and "Files off-limits" with your best guess based on discovery + intent
 + the user's description. These are proposals; Gate 0 lets the user adjust before commit.

@@ -11,6 +11,10 @@
         "What should get documented — a specific module, endpoint, or the whole repo?",
         "Who's the audience — other engineers, API consumers, or both?",
         "Any existing docs to update rather than write fresh, or a format/style to match?"
+      ],
+      "task_types": [
+        { "id": "doc_update", "label": "Update an existing doc" },
+        { "id": "doc_addition", "label": "Write a new doc" }
       ]
     },
     {

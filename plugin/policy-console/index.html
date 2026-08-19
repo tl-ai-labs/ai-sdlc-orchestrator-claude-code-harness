@@ -95,6 +95,16 @@
     .seg button:hover { background: var(--surface-2); }
     .seg button.active { background: var(--primary); color: var(--primary-fg); }
     .no-thinking { color: var(--text-subtle); font-size: 12px; font-style: italic; padding: 0 12px; }
+    .intent-grid-wrap { overflow-x: auto; }
+    .intent-grid { border-collapse: collapse; width: 100%; font-size: 12px; }
+    .intent-grid th, .intent-grid td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; white-space: nowrap; }
+    .intent-grid thead th { background: var(--surface-2); color: var(--text-muted); font-weight: 500; position: sticky; top: 0; }
+    .intent-grid .grid-row-label { background: var(--surface-2); font-weight: 500; color: var(--text); position: sticky; left: 0; z-index: 1; }
+    .intent-grid tbody tr:nth-child(even) td:not(.grid-row-label) { background: var(--surface); }
+    .intent-grid tbody tr:nth-child(odd) td:not(.grid-row-label) { background: var(--bg); }
+    .intent-grid .grid-skip { color: var(--text-subtle); text-align: center; font-style: italic; cursor: help; }
+    .intent-grid .grid-overridden { background: #e8f0fe !important; }
+    .grid-select { width: 100%; min-width: 150px; padding: 4px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); font: inherit; font-size: 12px; }
     .add-model-btn { margin-top: 12px; }
     .add-model-form { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; padding: 16px; background: var(--surface-2); border-radius: var(--radius-sm); margin-top: 12px; }
     .add-model-actions { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
@@ -186,10 +196,21 @@
         <span class="swatch"></span>
         <div>
           <h2>Routing &amp; thinking capacity — per phase</h2>
-          <p>The thinking picker sits next to each model and shows that model's own real range — Gemini's named levels via <span class="mono">reasoning.tier</span>, Opus's effort levels via <span class="mono">reasoning.effort</span>.</p>
+          <p>The thinking picker sits next to each model and shows that model's own real range — Gemini's named levels via <span class="mono">reasoning.tier</span>, Opus's effort levels via <span class="mono">reasoning.effort</span>. This is what every intent uses unless the table below overrides a cell.</p>
         </div>
       </div>
       <div id="phase-rows" class="rows"></div>
+    </section>
+
+    <section class="module">
+      <div class="module-head">
+        <span class="swatch"></span>
+        <div>
+          <h2>Per-intent overrides</h2>
+          <p>One row per brownfield intent, one column per phase. Each cell shows the model that phase currently uses; picking a different one writes a rule scoped to that exact intent + phase. Grayed cells never run for that intent (see the Intent matrix in <span class="mono">pipeline/SKILL.md</span>).</p>
+        </div>
+      </div>
+      <div id="intent-grid-wrap" class="intent-grid-wrap"></div>
     </section>
 
     <div id="validation-banner"></div>
@@ -230,8 +251,11 @@ let allPolicyIds = [];       // string[]
 let phases = [];             // {id,label,note}[]
 let adapters = [];           // string[]
 let adapterLabel = {};       // {adapter: label}
+let intents = [];            // {id,title}[]
+let intentSkippedPhases = {}; // {intentId: phaseId[]}
+let conditionalSkipNote = {}; // {"intentId:phaseId": note}
 let base = null;             // active PolicySummary being edited
-let editorState = null;      // { models, routing, thinking, name }
+let editorState = null;      // { models, routing, thinking, name, intentOverrides }
 let previewTimer = null;
 
 // ── boot ───────────────────────────────────────────────────────
@@ -244,6 +268,9 @@ async function boot() {
   phases = data.phases;
   adapters = data.adapters;
   adapterLabel = data.adapterLabel;
+  intents = data.intents;
+  intentSkippedPhases = data.intentSkippedPhases;
+  conditionalSkipNote = data.conditionalSkipNote;
   renderGallery();
 }
 
@@ -299,6 +326,7 @@ function openEditor(policy, isNew) {
     models: JSON.parse(JSON.stringify(policy.models)),
     routing: { ...policy.routing },
     thinking: { ...policy.thinking },
+    intentOverrides: JSON.parse(JSON.stringify(policy.intentOverrides)),
     name: "",
   };
   document.getElementById("editor-title").textContent = isNew ? "Add a new policy" : `Customize "${policy.id}"`;
@@ -331,6 +359,11 @@ function renderModels() {
 }
 
 function renderPhases() {
+  renderDefaultPhases();
+  renderIntentGrid();
+}
+
+function renderDefaultPhases() {
   const container = document.getElementById("phase-rows");
   container.innerHTML = "";
   for (const phase of phases) {
@@ -355,14 +388,78 @@ function renderPhases() {
     row.innerHTML = `
       <div class="phase">${escapeHtml(phase.label)}<small>${escapeHtml(phase.note)}${codegenNote}</small></div>
       <div class="model-thinking-pair">
-        <select onchange="setPhaseModel('${phase.id}', this.value)">${options}</select>
-        ${seg}
+        <select onchange="setPhaseModel('${phase.id}', this.value)">${options}</select>${seg}
       </div>
       <div class="rate tnum">${model ? `<b>$${model.pricing.input.toFixed(2)}</b> in / <b>$${model.pricing.output.toFixed(2)}</b> out /1M` : ""}</div>
     `;
     container.appendChild(row);
   }
 }
+
+const GRID_DEFAULT_SENTINEL = "__default__";
+
+/**
+ * One table: a row per intent (first column), a column per phase. Every
+ * intent's row is fully visible at once — no click-through needed to
+ * compare, say, Tests across all seven. Each cell is one <select>; its first
+ * option is a sentinel (GRID_DEFAULT_SENTINEL) labeled with the phase's
+ * current default model — picking it clears the override, picking any other
+ * model sets one. Skipped cells (INTENT_SKIPPED_PHASES) render as a plain,
+ * non-interactive dash — an override there could never fire.
+ */
+function renderIntentGrid() {
+  const wrap = document.getElementById("intent-grid-wrap");
+
+  const headerCells = phases.map((p) => `<th>${escapeHtml(p.label)}</th>`).join("");
+
+  const bodyRows = intents.map((intent) => {
+    const skipped = new Set(intentSkippedPhases[intent.id] ?? []);
+    const overrides = editorState.intentOverrides[intent.id] ?? {};
+
+    const cells = phases.map((phase) => {
+      if (skipped.has(phase.id)) {
+        const note = conditionalSkipNote[`${intent.id}:${phase.id}`] ?? `Skipped for ${intent.id}`;
+        return `<td class="grid-skip" title="${escapeHtml(note)}">—</td>`;
+      }
+      const overrideModel = overrides[phase.id];
+      const on = overrideModel !== null && overrideModel !== undefined;
+      // The default-inherit option below already shows this phase's default
+      // model by name — excluding it here avoids two identically-labeled
+      // entries in the same dropdown. Kept in if it's also the active
+      // override (e.g. the default changed after the override was set),
+      // so that selection is never silently orphaned.
+      const options = editorState.models
+        .filter((m) => m.id !== editorState.routing[phase.id] || m.id === overrideModel)
+        .map((m) =>
+          `<option value="${escapeHtml(m.id)}" ${on && m.id === overrideModel ? "selected" : ""}>${escapeHtml(m.id)}</option>`
+        ).join("");
+      return `
+        <td class="${on ? "grid-overridden" : ""}">
+          <select class="grid-select" onchange="setIntentGridCell('${intent.id}', '${phase.id}', this.value)">
+            <option value="${GRID_DEFAULT_SENTINEL}" ${on ? "" : "selected"}>${escapeHtml(editorState.routing[phase.id])}</option>
+            ${options}
+          </select>
+        </td>
+      `;
+    }).join("");
+
+    return `<tr><th class="grid-row-label">${escapeHtml(intent.title)}</th>${cells}</tr>`;
+  }).join("");
+
+  wrap.innerHTML = `
+    <table class="intent-grid">
+      <thead><tr><th class="grid-row-label">Intent</th>${headerCells}</tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table>
+  `;
+}
+
+function setIntentGridCell(intentId, phaseId, value) {
+  editorState.intentOverrides[intentId][phaseId] = value === GRID_DEFAULT_SENTINEL ? null : value;
+  renderIntentGrid();
+  scheduleRefresh();
+}
+
 
 function setPhaseModel(phaseId, modelId) {
   editorState.routing[phaseId] = modelId;
@@ -386,6 +483,7 @@ function resetChanges() {
   editorState.models = JSON.parse(JSON.stringify(base.models));
   editorState.routing = { ...base.routing };
   editorState.thinking = { ...base.thinking };
+  editorState.intentOverrides = JSON.parse(JSON.stringify(base.intentOverrides));
   editorState.name = "";
   document.getElementById("policy-name").value = "";
   renderModels();
@@ -487,6 +585,7 @@ function updateValidation() {
 
   const hasChanges = JSON.stringify(editorState.routing) !== JSON.stringify(base.routing)
     || JSON.stringify(editorState.thinking) !== JSON.stringify(base.thinking)
+    || JSON.stringify(editorState.intentOverrides) !== JSON.stringify(base.intentOverrides)
     || editorState.models.length !== base.models.length;
 
   const saveBtn = document.getElementById("save-btn");
@@ -517,6 +616,7 @@ async function refreshPreview() {
       models: editorState.models,
       routing: editorState.routing,
       thinking: editorState.thinking,
+      intentOverrides: editorState.intentOverrides,
     }),
   });
   const data = await r.json();
@@ -533,6 +633,7 @@ async function doSave() {
       models: editorState.models,
       routing: editorState.routing,
       thinking: editorState.thinking,
+      intentOverrides: editorState.intentOverrides,
     }),
   });
   const data = await r.json();

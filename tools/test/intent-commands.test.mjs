@@ -37,6 +37,18 @@ test("intents.json is well-formed: six required string fields, interview has 2-4
       `intent '${intent.id}'.interview must have 2-4 entries, has ${intent.interview.length}`,
     );
   }
+  for (const intent of INTENTS.intents) {
+    if (intent.task_types === undefined) continue; // optional — only `docs` declares it today
+    assert.ok(Array.isArray(intent.task_types) && intent.task_types.length >= 2, `intent '${intent.id}'.task_types must be an array of 2+ options when present`);
+    const taskTypeIds = new Set();
+    for (const opt of intent.task_types) {
+      assert.match(opt.id, /^[a-z][a-z_]*$/, `intent '${intent.id}'.task_types has a non-snake_case id '${opt.id}'`);
+      assert.ok(typeof opt.label === "string" && opt.label.length > 0, `intent '${intent.id}'.task_types.${opt.id} is missing a label`);
+      taskTypeIds.add(opt.id);
+    }
+    assert.equal(taskTypeIds.size, intent.task_types.length, `intent '${intent.id}'.task_types has a duplicate id`);
+  }
+
   const ids = new Set(REGISTRY_IDS);
   assert.equal(ids.size, REGISTRY_IDS.length, "duplicate intent id in intents.json");
 });
@@ -106,4 +118,16 @@ test("README documents all seven job commands with their intent id", () => {
     assert.ok(readme.includes(`/mmo:${id}`), `README does not mention /mmo:${id}`);
   }
   assert.match(readme, /Thirteen commands/, "README's command count was not updated for the seven new commands");
+});
+
+test("docs's task_types match the doc_addition/doc_update ids pipeline/SKILL.md's planner expects", () => {
+  const docs = INTENTS.intents.find((i) => i.id === "docs");
+  assert.ok(docs?.task_types, "the docs intent should declare task_types");
+  const ids = docs.task_types.map((t) => t.id).sort();
+  assert.deepEqual(ids, ["doc_addition", "doc_update"]);
+
+  const skill = read("plugin", "skills", "pipeline", "SKILL.md");
+  for (const id of ids) {
+    assert.match(skill, new RegExp("`" + id + "`"), `pipeline/SKILL.md no longer mentions task_type '${id}'`);
+  }
 });

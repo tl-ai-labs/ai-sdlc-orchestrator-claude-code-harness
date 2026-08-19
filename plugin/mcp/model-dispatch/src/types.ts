@@ -46,6 +46,13 @@ export interface TaskPacket {
    * (analysis / review packet) or greenfield mode.
    */
   artifact_path?: string;
+  /**
+   * Brownfield only — the job type confirmed at Gate 0 (plugin/config/intents.json).
+   * Undefined on greenfield packets. Lets a policy route the same phase
+   * differently per intent (e.g. Tests routes differently for `refactor`
+   * than for `docs`) via a rule matching on both `phase` and `intent`.
+   */
+  intent?: string;
 }
 
 export interface TelemetryEvent {
@@ -169,6 +176,8 @@ export type RuleMatcher = {
   phase?: string | string[];
   task_type?: string | string[];
   module?: string | string[];
+  /** Brownfield only (see plugin/config/intents.json). Undefined on greenfield packets. */
+  intent?: string | string[];
   retry_count?: { lt?: number; lte?: number; gt?: number; gte?: number; eq?: number };
 };
 
