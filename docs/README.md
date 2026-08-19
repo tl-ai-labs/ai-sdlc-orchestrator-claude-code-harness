@@ -2,7 +2,7 @@
 
 Everything the [main README](../README.md) couldn't fit. Grouped by what you're trying to do — a tutorial to learn, how-to guides to accomplish, reference to look up, concepts to understand.
 
-Start with the tutorial if you have not run the plugin before. Skip straight to the how-to guides if you already know what you want to do.
+Start with the tutorial if you have not run the plugin before. Skip straight to the how-to guides if you already know what you want to do. New to the codebase itself rather than the plugin's usage? Start with [Repo overview](repo-overview.md).
 
 ## Tutorial
 
