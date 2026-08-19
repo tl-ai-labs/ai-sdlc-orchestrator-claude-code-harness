@@ -194,7 +194,7 @@ Both check the install, show which model each phase will run on, confirm the pla
 
 ## Commands
 
-Six commands, split by purpose. All are declared in [plugin/commands/](plugin/commands/) with the same descriptions shown here.
+Thirteen commands, split by purpose. All are declared in [plugin/commands/](plugin/commands/) with the same descriptions shown here.
 
 ### Run the pipeline
 
@@ -202,7 +202,21 @@ Six commands, split by purpose. All are declared in [plugin/commands/](plugin/co
 |---|---|---|
 | [`/mmo:greenfield`](plugin/commands/greenfield.md) | Runs the greenfield pipeline. Interviews you for the brief (or reads one you point at), confirms the output path, shows the routing plan, then starts spending. Takes no arguments. | Empty folder + a project brief. Generates a whole new app into `./src/`. |
 | [`/mmo:brownfield`](plugin/commands/brownfield.md) | Runs the brownfield pipeline. Hydrates prior state, runs discovery (or resumes), asks for the intent and brief, freezes scope at Gate 0, then executes. Takes no arguments. | Existing repo. Extends the code you already have. |
-| [`/mmo:pass`](plugin/commands/pass.md) | Headless twin of the two above. Every setting a flag: `--auth=vendor\|estimated`, `--policy`, `--mode=greenfield\|brownfield`, `--intent`, `--brief`, `--gates`, `--strict-write`, and more. | CI, scripted replays, batch runs. |
+| [`/mmo:pass`](plugin/commands/pass.md) | Headless twin of the above. Every setting a flag: `--auth=vendor\|estimated`, `--policy`, `--mode=greenfield\|brownfield`, `--intent`, `--brief`, `--gates`, `--strict-write`, and more. | CI, scripted replays, batch runs. |
+
+### Run a specific brownfield job
+
+Seven aliases into `/mmo:brownfield`, each with the job type pre-selected — one shared manual, one Gate 0, no second pipeline. Optional free-text argument seeds the brief; Gate 0 still fires and still re-confirms scope either way.
+
+| Command | Job type | Example |
+|---|---|---|
+| [`/mmo:docs`](plugin/commands/docs.md) | `docs` | write API docs, README, ADRs, docstrings for the auth module |
+| [`/mmo:bugfix`](plugin/commands/bugfix.md) | `bugfix` | fix the /login endpoint returning 500 on missing password |
+| [`/mmo:feature-extend`](plugin/commands/feature-extend.md) | `feature-extend` | add a `?filter` param to the existing /users endpoint |
+| [`/mmo:feature-new`](plugin/commands/feature-new.md) | `feature-new` | add a webhooks module (endpoint, storage, retry loop) |
+| [`/mmo:refactor`](plugin/commands/refactor.md) | `refactor` | extract shared date logic into a util module and update all call sites |
+| [`/mmo:test`](plugin/commands/test.md) | `test` | backfill unit tests for src/payments to reach 80% line coverage |
+| [`/mmo:deps`](plugin/commands/deps.md) | `deps` | upgrade jest 28 → 29 (and adapt breaking changes) |
 
 ### Setup and configuration
 

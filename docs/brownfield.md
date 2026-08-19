@@ -21,7 +21,12 @@ manual](../plugin/commands/greenfield.md).
 
 ## The 20-second version
 
-Type `/mmo:brownfield` in a session opened in your project directory. Six steps run in order:
+Type `/mmo:brownfield` in a session opened in your project directory. Six steps run in order.
+Already know the job type? Seven aliases skip step 4's job-type question — `/mmo:bugfix`,
+`/mmo:docs`, `/mmo:feature-extend`, `/mmo:feature-new`, `/mmo:refactor`, `/mmo:test`,
+`/mmo:deps` — each optionally taking the task description as free text, e.g.
+`/mmo:bugfix the /login endpoint returns 500 on missing password`. Gate 0 still fires and still
+re-confirms scope either way; these are shortcuts into the same manual, not a second pipeline.
 
 | # | Step | What it does |
 |---|---|---|

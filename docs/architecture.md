@@ -22,11 +22,14 @@ Additional plugin content:
 | [plugin/agents/](../plugin/agents/) | Subagents: `orchestrator`, `architect`, `senior-reviewer`, `security-reviewer`, `discovery` (brownfield only). |
 | [plugin/commands/greenfield.md](../plugin/commands/greenfield.md) | Greenfield two-prompt-flow entry point. Takes no arguments; asks for what it needs. |
 | [plugin/commands/pass.md](../plugin/commands/pass.md) | Every setting as a flag; the form used for scripting and repeat runs. Covers both greenfield and brownfield via `--mode=`. |
-| [plugin/commands/brownfield.md](../plugin/commands/brownfield.md) | Brownfield two-prompt-flow entry point. Picks an intent, adds Gate 0. |
+| [plugin/commands/brownfield.md](../plugin/commands/brownfield.md) | Brownfield two-prompt-flow entry point. Picks an intent, adds Gate 0. Thin caller into `brownfield-guide/SKILL.md` with no handover set. |
+| [plugin/commands/{bugfix,docs,feature-extend,feature-new,refactor,test,deps}.md](../plugin/commands/) | Seven aliases into brownfield with the job type pre-selected via the handover — see `plugin/config/intents.json` and `intent-commands.test.mjs`. |
 | [plugin/commands/revert.md](../plugin/commands/revert.md) | Reverts a brownfield run using `.sdlc/runs/<run-id>/provenance.json`. |
 | [plugin/commands/setup.md](../plugin/commands/setup.md) | Re-verify or re-configure the plugin for this project. Wraps `verify-setup.mjs` and `setup-policy.mjs`. |
 | [plugin/commands/policy.md](../plugin/commands/policy.md) | Show the active policy; `change` opens the browser console. |
+| [plugin/config/intents.json](../plugin/config/intents.json) | The seven-intent registry — id, title, example, argument hint, summary, interview questions. Single source for the job commands, the interview, and this table's own accuracy. |
 | [plugin/skills/pipeline/](../plugin/skills/pipeline/) | Skill body loaded by the orchestrator. |
+| [plugin/skills/brownfield-guide/](../plugin/skills/brownfield-guide/) | The shared seven-step brownfield manual. Every brownfield entry point (`brownfield.md` and the seven job commands) points here; step 4 branches on the `intent` / `seed_description` handover. |
 | [plugin/hooks/hooks.json](../plugin/hooks/hooks.json) | `PostToolUse` hook matching the MCP tool name under both install routes. |
 | [plugin/config/policies/](../plugin/config/policies/) | Shipped policy YAMLs (`opus-only`, `opus-plus-flash`). |
 | [plugin/policy-console/](../plugin/policy-console/) | Single-page HTML console + tiny http server, used at setup to pick or author the per-project policy. |
