@@ -15,6 +15,8 @@
 /**
  * Adapter the orchestrator runs in-session under `estimated` rather than
  * dispatching. Keyed by adapter name (a transport concept), not by tier.
+ * `claude-cli` is Anthropic but NOT in-session — it always spawns a
+ * subprocess, so its reachability must be checked under both auth modes.
  */
 export const IN_SESSION_ADAPTER = "builtin-anthropic";
 

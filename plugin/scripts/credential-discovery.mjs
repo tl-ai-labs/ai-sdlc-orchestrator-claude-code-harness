@@ -226,6 +226,19 @@ function scanAnthropic(envKeysInRepo, codeReferences) {
     detected: fileExistsSensibly(credPath),
   });
 
+  // The `claude` CLI itself — a Max-subscription user can dispatch Anthropic
+  // calls through it via the claude-cli adapter, no ANTHROPIC_API_KEY needed.
+  const claudeProbe = spawnSync("claude", ["--version"], { encoding: "utf8", timeout: 3000 });
+  const claudeCliDetected = claudeProbe.status === 0;
+  sources.push({
+    location: "claude-cli",
+    kind: "cli-subprocess",
+    detected: claudeCliDetected,
+    note: claudeCliDetected
+      ? "The claude-cli adapter can dispatch Anthropic calls through this binary using its OAuth session."
+      : "The `claude` binary is not on PATH — install Claude Code to use the claude-cli adapter.",
+  });
+
   // Fallback: Claude Code subscription auth — this is what estimated-mode uses
   // for judgment phases when no vendor key is set.
   sources.push({

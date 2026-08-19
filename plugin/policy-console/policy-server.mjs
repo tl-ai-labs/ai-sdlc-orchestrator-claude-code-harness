@@ -27,9 +27,15 @@ const PHASES = [
   { id: "debug", label: "Debug", note: "escalates to opus at retry ≥ 2" },
 ];
 
-const KNOWN_ADAPTERS = ["builtin-anthropic", "mcp:gemini-flash-server", "antigravity-worker"];
+const KNOWN_ADAPTERS = [
+  "builtin-anthropic",
+  "claude-cli",
+  "mcp:gemini-flash-server",
+  "antigravity-worker",
+];
 const ADAPTER_LABEL = {
   "builtin-anthropic": "Anthropic (Claude)",
+  "claude-cli": "Anthropic (Claude Code CLI, Max subscription)",
   "mcp:gemini-flash-server": "Gemini — completion call",
   "antigravity-worker": "Gemini — Antigravity agent (SDK worker)",
 };
@@ -41,12 +47,12 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function thinkingSupport(model) {
   if (model.adapter === "mcp:gemini-flash-server" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
-  if (model.adapter === "builtin-anthropic") return ANTHROPIC_EFFORT_TIERS;
+  if (model.adapter === "builtin-anthropic" || model.adapter === "claude-cli") return ANTHROPIC_EFFORT_TIERS;
   return [];
 }
 
 function thinkingField(model) {
-  return model.adapter === "builtin-anthropic" ? "effort" : "tier";
+  return model.adapter === "builtin-anthropic" || model.adapter === "claude-cli" ? "effort" : "tier";
 }
 
 // ── policy readers ────────────────────────────────────────────────────
