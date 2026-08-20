@@ -63,9 +63,15 @@ const CONDITIONAL_SKIP_NOTE = {
   "bugfix:architecture_design": "Skipped unless the fix is design-affecting",
 };
 
-const KNOWN_ADAPTERS = ["builtin-anthropic", "mcp:model-dispatch", "antigravity-worker"];
+const KNOWN_ADAPTERS = [
+  "builtin-anthropic",
+  "claude-cli",
+  "mcp:model-dispatch",
+  "antigravity-worker",
+];
 const ADAPTER_LABEL = {
   "builtin-anthropic": "Anthropic (Claude)",
+  "claude-cli": "Anthropic (Claude Code CLI, Max subscription)",
   "mcp:model-dispatch": "Gemini — completion call",
   "antigravity-worker": "Gemini — Antigravity agent (SDK worker)",
 };
@@ -77,12 +83,12 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function thinkingSupport(model) {
   if (model.adapter === "mcp:model-dispatch" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
-  if (model.adapter === "builtin-anthropic") return ANTHROPIC_EFFORT_TIERS;
+  if (model.adapter === "builtin-anthropic" || model.adapter === "claude-cli") return ANTHROPIC_EFFORT_TIERS;
   return [];
 }
 
 function thinkingField(model) {
-  return model.adapter === "builtin-anthropic" ? "effort" : "tier";
+  return model.adapter === "builtin-anthropic" || model.adapter === "claude-cli" ? "effort" : "tier";
 }
 
 // ── policy readers ────────────────────────────────────────────────────

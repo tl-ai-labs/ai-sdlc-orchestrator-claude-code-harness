@@ -169,63 +169,55 @@ entitlement or a region that does not serve the model. Both first appear at the 
 delegated packet, once the premium phases are already billed. The probe is one trivial delegation,
 about two cents, and it is the only thing here that settles them.
 
-## 5b. Choose this project's default policy — the browser moment
-
-The one and only step in the whole flow that opens a browser. Everything before this ran in the
-terminal; everything after it returns to the terminal.
+## 5b. Choose this project's default policy — terminal picker
 
 Per-project, not install-wide — a compliance-sensitive repo may want Opus everywhere while a
 side project runs on Flash. The choice is stored in `.sdlc/project.json.default_policy` in the
 current repo and picked up by every subsequent `/mmo:greenfield` or `/mmo:brownfield` in that folder.
 Applies equally to greenfield and brownfield projects.
 
-**Confirm you are in the project directory**, then offer the user this choice — do not skip
-straight to a two-preset picker, and do not omit the browser option:
+**Confirm you are in the project directory**, then run the picker. It stays in the terminal for
+every shipped preset; the browser only opens if the user picks `Author a new policy`.
 
-1. **Open the browser to author or customize a policy (Recommended)** —
+1. Enumerate policies:
+
+   ```bash
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/setup-policy.mjs | tail -1)" --list-json --project-root "$(pwd)"
+   ```
+
+2. Ask the user via `AskUserQuestion` which policy to use. Options are one per policy from step 1
+   (label = policy name) plus a final `Author a new policy (opens browser)`.
+
+3. If the user picks a policy name, run the credential check:
+
+   ```bash
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/setup-policy.mjs | tail -1)" --check-creds --policy=<chosen> --project-root "$(pwd)"
+   ```
+
+   - `ok: true` → persist with `--policy=<chosen>`. Done.
+   - `ok: false` → print each missing item with its `fix`, then re-ask: retry (loop back to the
+     check) or pick a different policy (loop back to step 2).
+
+4. If the user picks `Author a new policy (opens browser)`, run the script bare:
 
    ```bash
    node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/setup-policy.mjs | tail -1)" --project-root "$(pwd)"
    ```
 
-2. **Use `opus-plus-flash`** (shipped preset — Opus judgment + Flash mechanical, cost-efficient) —
-
-   ```bash
-   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/setup-policy.mjs | tail -1)" --policy=opus-plus-flash --project-root "$(pwd)"
-   ```
-
-3. **Use `opus-only`** (shipped preset — Opus for every phase, highest cost, single-model baseline) —
-
-   ```bash
-   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/setup-policy.mjs | tail -1)" --policy=opus-only --project-root "$(pwd)"
-   ```
-
-4. **Skip — set later via `/mmo:policy change`**. `/mmo:greenfield` and `/mmo:brownfield` will refuse
-   to start until a policy is picked.
+   This starts the policy console (`plugin/policy-console/`, a single HTML page served by a tiny
+   Node http server, ~350 lines) on the first free port from 3000 upward, bound to `127.0.0.1`.
+   First run only, `npm install` for one dep (`yaml`) — ~1 second. Opens the URL in the default
+   browser (`open` on macOS, `xdg-open` on Linux). On a headless machine, pass `--no-browser`
+   and the URL prints instead. Watches `plugin/config/policies/` via `fs.watch`; the save
+   auto-detects — no need to return to the terminal to press Enter. Non-interactive fallback:
+   after a 10-minute timeout the script exits cleanly with "no save detected".
 
 Whichever the user chooses, `.sdlc/project.json` must have a `default_policy` field when this
 step returns — the task commands read it via session-hydrate and refuse to run without it.
 
-What the browser option does, step by step:
-
-1. Starts the policy console (`plugin/policy-console/`, a single HTML page served by a tiny
-   Node http server, ~350 lines) on the first free port from 3000 upward, bound to `127.0.0.1`
-   (loopback only). First run only, `npm install` for one dep (`yaml`) — ~1 second.
-2. Opens the URL in the default browser (`open` on macOS, `xdg-open` on Linux). On a headless
-   machine, pass `--no-browser` and the URL prints instead.
-3. Watches `plugin/config/policies/` via `fs.watch`. When the user clicks Save in the browser,
-   the newly-written YAML fires a filesystem event and the script picks it up automatically —
-   no need to return to the terminal to press Enter.
-4. Writes the chosen policy name (bare stem, no `.yaml`) to `.sdlc/project.json.default_policy`
-   in the `--project-root` directory and kills the server. Terminal control returns to the
-   shepherd, which continues to section 6.
-
-Passing `--project-root "$(pwd)"` is required: the script writes bookkeeping into the caller's
-project, not into whichever git worktree an earlier `cd` may have drifted the shell into.
-
-Non-interactive fallback (browser closed without saving): after a 10-minute timeout the script
-exits cleanly with "no save detected"; nothing gets written and the shepherd surfaces the
-outcome so the user can re-run.
+Passing `--project-root "$(pwd)"` is required on every invocation: the script writes bookkeeping
+into the caller's project, not into whichever git worktree an earlier `cd` may have drifted the
+shell into.
 
 To inspect the current project's saved default from any terminal:
 

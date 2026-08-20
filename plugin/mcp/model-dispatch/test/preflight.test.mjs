@@ -156,3 +156,29 @@ test("every model is constructed, so the cache is warm and non-required failures
   });
   assert.deepEqual(built, ["opus", "gemini-flash"]);
 });
+
+test("the claude-cli adapter dispatches through the server in both auth modes", () => {
+  // It IS Anthropic, but it goes through a subprocess — the in-session
+  // shortcut does not apply. Both modes must construct and probe it.
+  assert.equal(requiresServerDispatch("claude-cli", "vendor"), true);
+  assert.equal(requiresServerDispatch("claude-cli", "estimated"), true);
+});
+
+test("a missing claude binary halts an estimated run that names the claude-cli adapter", () => {
+  const MIXED = [
+    { id: "opus", model_name: "claude-opus-5", adapter: "builtin-anthropic" },
+    { id: "sonnet-cli", model_name: "claude-sonnet-5", adapter: "claude-cli" },
+  ];
+  const factory = (modelId) => {
+    if (modelId === "sonnet-cli") {
+      throw new Error("ClaudeCliAdapter needs the `claude` binary on PATH");
+    }
+    return { id: modelId };
+  };
+  const out = assessModels(MIXED, "estimated", factory);
+  assert.equal(out.ok, false, "an unreachable claude-cli leaf must halt even under estimated");
+  assert.match(out.halt_reason, /sonnet-cli/);
+  const sonnet = out.models.find((m) => m.id === "sonnet-cli");
+  assert.equal(sonnet.required, true);
+  assert.equal(sonnet.severity, "blocking");
+});

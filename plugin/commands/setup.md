@@ -96,26 +96,32 @@ If `--policy=<name>` was supplied, honor it silently — no prompt, no browser:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --policy=<name> --project-root "$(pwd)"
 ```
 
-**Otherwise, ASK the user with these four options in this exact order.** Use whatever picker the
-main-loop provides (`AskUserQuestion` is fine). The browser is the FIRST option — do not skip it
-in favor of the two presets, and do not collapse this step into a two-preset picker.
+**Otherwise, use the same terminal picker as `/mmo:policy change` Shape 2.** Skip the mid-run
+guard here (no brownfield run has started yet in setup); everything else applies:
 
-1. **Open the browser to author or customize a policy (Recommended)** — the only path to a
-   non-preset policy. Runs:
+1. Enumerate policies:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --project-root "$(pwd)"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --list-json --project-root "$(pwd)"
    ```
-   The script starts a local server, opens the browser, and detects the save automatically via
-   filesystem watch — no need to switch back to the terminal.
-2. **Use `opus-plus-flash`** — shipped preset: Claude Opus for judgment phases, Gemini Flash for
-   mechanical. The cost-efficient default. Runs `setup-policy.mjs --policy=opus-plus-flash …`.
-3. **Use `opus-only`** — shipped preset: Claude Opus for every phase. Highest cost, single-model
-   baseline. Runs `setup-policy.mjs --policy=opus-only …`.
-4. **Skip — set later with `/mmo:policy change`** — leaves `default_policy` unset. Subsequent
-   `/mmo:greenfield` and `/mmo:brownfield` will refuse to start until a policy is picked.
+2. Ask via `AskUserQuestion`:
+   - question: `Which policy do you want as this project's default?`
+   - header: `Policy`
+   - multiSelect: `false`
+   - options: one per policy from step 1 (`label` = policy name, `description` = `""`), plus a
+     final `Author a new policy (opens browser)` option with description
+     `Opens the local policy console to create a custom YAML.`.
+3. Handle the pick:
+   - Policy name → run `--check-creds --policy=<chosen>`.
+     - `ok: true` → persist with `--policy=<chosen>` and print `Policy set: <chosen>`.
+     - `ok: false` → print each `missing` entry with its `fix`, then re-ask via `AskUserQuestion`
+       (options: `Retry (I fixed them)`, `Pick a different policy`). Retry → re-run `--check-creds`
+       with the same policy. Pick different → loop back to step 1.
+   - `Author a new policy (opens browser)` → run
+     `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --project-root "$(pwd)"`. The script
+     starts the local server, opens the browser, and detects the save automatically via `fs.watch`.
 
-Do not suggest "Type something" as a hidden fifth option — the user's typed name may not match a
-shipped preset, which fails downstream. The four options above cover every real path.
+Do not suggest "Type something" as a hidden option — the user's typed name may not match a
+shipped preset, which fails downstream. The picker above covers every real path.
 
 # 5. Print the next-steps banner
 

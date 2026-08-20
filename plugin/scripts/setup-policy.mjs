@@ -17,11 +17,14 @@
  *     list and asks them to type one name
  *
  * Usage:
- *   node setup-policy.mjs                    # interactive; the shepherd's default call
- *   node setup-policy.mjs --policy=<name>    # scripted; skip browser, just write the name
- *   node setup-policy.mjs --no-browser       # start server, print URL, don't auto-open
- *   node setup-policy.mjs --skip-install     # assume npm install already ran
- *   node setup-policy.mjs --print-only       # print resolved default_policy from project.json; no writes
+ *   node setup-policy.mjs                           # interactive; the shepherd's default call
+ *   node setup-policy.mjs --policy=<name>           # scripted; skip browser, just write the name
+ *   node setup-policy.mjs --no-browser              # start server, print URL, don't auto-open
+ *   node setup-policy.mjs --skip-install            # assume npm install already ran
+ *   node setup-policy.mjs --print-only              # print resolved default_policy from project.json; no writes
+ *   node setup-policy.mjs --list-json               # enumerate policies as JSON (no writes)
+ *   node setup-policy.mjs --check-creds --policy=X  # verify creds for a policy; JSON out
+ *   node setup-policy.mjs --guard-active-run        # check .sdlc/local/state.json; JSON out
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, watch, writeFileSync } from "node:fs";
@@ -38,7 +41,12 @@ export { OFF_LIMITS_DEFAULT };
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(SCRIPT_DIR, "..");
 const CONSOLE_DIR = join(PLUGIN_ROOT, "policy-console");
-const POLICIES_DIR = join(PLUGIN_ROOT, "config", "policies");
+// Test-only override. Never set in production; the tests point this at a
+// fixture dir so they can exercise malformed YAML without polluting the
+// shipped policy set.
+const POLICIES_DIR = process.env.SDLC_POLICIES_DIR_FOR_TESTS
+  ? resolve(process.env.SDLC_POLICIES_DIR_FOR_TESTS)
+  : join(PLUGIN_ROOT, "config", "policies");
 const DEFAULT_PORT = 3000;
 const PORT_PROBE_MAX = 10;
 const SERVER_READY_TIMEOUT_MS = 30_000;
@@ -46,7 +54,16 @@ const POLICY_SAVE_TIMEOUT_MS = 10 * 60_000; // 10 minutes to save a policy in th
 const POLICY_SAVE_DEBOUNCE_MS = 400;         // let a write settle before diffing
 
 function parseArgs(argv) {
-  const out = { policy: null, noBrowser: false, skipInstall: false, printOnly: false, projectRoot: null };
+  const out = {
+    policy: null,
+    noBrowser: false,
+    skipInstall: false,
+    printOnly: false,
+    projectRoot: null,
+    listJson: false,
+    checkCreds: false,
+    guardActiveRun: false,
+  };
   // Index-based loop so `--policy value` and `--project-root value` (space-separated,
   // two argv tokens) parse the same as the `=` form. Command files historically
   // used the space form; without this, --project-root silently stayed null and
@@ -57,6 +74,9 @@ function parseArgs(argv) {
     if (a === "--no-browser") out.noBrowser = true;
     else if (a === "--skip-install") out.skipInstall = true;
     else if (a === "--print-only") out.printOnly = true;
+    else if (a === "--list-json") out.listJson = true;
+    else if (a === "--check-creds") out.checkCreds = true;
+    else if (a === "--guard-active-run") out.guardActiveRun = true;
     else if (a.startsWith("--policy=")) out.policy = a.slice("--policy=".length);
     else if (a === "--policy") out.policy = argv[++i] ?? null;
     else if (a.startsWith("--project-root=")) out.projectRoot = a.slice("--project-root=".length);
@@ -266,6 +286,148 @@ function waitForPolicySave(before, timeoutMs) {
   });
 }
 
+// ── policy YAML introspection (line-based, avoids a runtime dep) ─────
+//
+// --list-json / --check-creds need three signals per policy:
+//   1. every model's auth.env
+//   2. any model uses adapter: antigravity-worker  → requires_vertex_adc
+//   3. any model uses adapter: claude-cli          → requires_claude_cli
+//
+// Bringing in the `yaml` package would work but the plugin cache doesn't
+// have a top-level node_modules — only plugin/policy-console does, and only
+// after the browser flow runs `npm install` there. Line-scanning stays free
+// of that dependency.
+
+function introspectPolicy(name, path) {
+  let text;
+  try { text = readFileSync(path, "utf8"); }
+  catch (e) { return { name, error: `read failed: ${e?.message ?? e}` }; }
+
+  if (!/^\s*models\s*:/m.test(text) || !/^\s*-?\s*adapter\s*:/m.test(text)) {
+    return { name, error: "not a recognizable policy (missing models: or adapter:)" };
+  }
+
+  const adapters = new Set();
+  for (const m of text.matchAll(/^\s*adapter\s*:\s*([A-Za-z0-9_.:-]+)/gm)) {
+    adapters.add(m[1]);
+  }
+
+  // `auth:` appears in two shapes:
+  //   auth: { env: GEMINI_API_KEY }
+  //   auth:
+  //     env: ANTHROPIC_API_KEY
+  const envVars = new Set();
+  for (const m of text.matchAll(/auth\s*:\s*\{[^}]*\benv\s*:\s*([A-Z0-9_]+)/g)) {
+    envVars.add(m[1]);
+  }
+  for (const m of text.matchAll(/^\s*auth\s*:\s*$\n(?:\s*#.*\n)*\s+env\s*:\s*([A-Z0-9_]+)/gm)) {
+    envVars.add(m[1]);
+  }
+
+  return {
+    name,
+    adapters: [...adapters].sort(),
+    required_env: [...envVars].sort(),
+    requires_vertex_adc: adapters.has("antigravity-worker"),
+    requires_claude_cli: adapters.has("claude-cli"),
+  };
+}
+
+function introspectAllPolicies() {
+  if (!existsSync(POLICIES_DIR)) return [];
+  const files = readdirSync(POLICIES_DIR)
+    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+    .sort();
+  return files.map((f) => introspectPolicy(f.replace(/\.ya?ml$/, ""), join(POLICIES_DIR, f)));
+}
+
+// ── credential probes ────────────────────────────────────────────────
+
+function probeVertexAdc() {
+  try {
+    const r = spawnSync("gcloud", ["auth", "application-default", "print-access-token"], {
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    if (r.error) return { ok: false, reason: r.error.code === "ENOENT" ? "gcloud not installed" : r.error.message };
+    if (r.status !== 0) return { ok: false, reason: (r.stderr || "").trim().split("\n")[0] || `gcloud exit ${r.status}` };
+    if (!(r.stdout || "").trim()) return { ok: false, reason: "gcloud returned empty token" };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e?.message ?? String(e) };
+  }
+}
+
+function probeClaudeCli() {
+  try {
+    const r = spawnSync("claude", ["--version"], { encoding: "utf8", stdio: "pipe" });
+    if (r.error) return { ok: false, reason: r.error.code === "ENOENT" ? "claude binary not found" : r.error.message };
+    if (r.status !== 0) return { ok: false, reason: (r.stderr || "").trim().split("\n")[0] || `claude --version exit ${r.status}` };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e?.message ?? String(e) };
+  }
+}
+
+function envFix(name) {
+  if (name === "ANTHROPIC_API_KEY") return "export ANTHROPIC_API_KEY=sk-ant-...  (get one from console.anthropic.com)";
+  if (name === "GEMINI_API_KEY") return "export GEMINI_API_KEY=...  (get one from aistudio.google.com/apikey)";
+  return `export ${name}=...`;
+}
+
+function checkCredsFor(policyName) {
+  const path = join(POLICIES_DIR, policyName + ".yaml");
+  if (!existsSync(path)) {
+    return { ok: false, missing: [{ kind: "policy", name: policyName, fix: `policy "${policyName}" not found in ${POLICIES_DIR}` }] };
+  }
+  const info = introspectPolicy(policyName, path);
+  if (info.error) {
+    return { ok: false, missing: [{ kind: "policy", name: policyName, fix: info.error }] };
+  }
+  const missing = [];
+  for (const envName of info.required_env) {
+    if (!process.env[envName]) missing.push({ kind: "env", name: envName, fix: envFix(envName) });
+  }
+  if (info.requires_vertex_adc) {
+    const p = probeVertexAdc();
+    if (!p.ok) missing.push({ kind: "vertex_adc", fix: "gcloud auth application-default login", reason: p.reason });
+  }
+  if (info.requires_claude_cli) {
+    const p = probeClaudeCli();
+    if (!p.ok) missing.push({ kind: "claude_cli", fix: "install Claude Code CLI and log in with your Max account", reason: p.reason });
+  }
+  return missing.length === 0 ? { ok: true } : { ok: false, missing };
+}
+
+// ── active-run guard ─────────────────────────────────────────────────
+//
+// A brownfield run mid-flight has a policy pinned into its provenance and
+// task packets already dispatched under it. Changing default_policy
+// underneath would surface as inconsistent telemetry rows and confused
+// resumers, so /mmo:policy change refuses until the run reaches a
+// terminal state. session-hydrate.mjs treats `complete`/`aborted` as
+// terminal; we accept `completed` and `failed` as well since callers may
+// spell it either way.
+
+const TERMINAL_RUN_STATUSES = new Set(["complete", "completed", "aborted", "failed"]);
+
+function checkActiveRun(projectRoot) {
+  const path = join(projectRoot, ".sdlc", "local", "state.json");
+  if (!existsSync(path)) return { active: false };
+  let parsed;
+  try { parsed = JSON.parse(readFileSync(path, "utf8")); }
+  catch { return { active: false }; }
+  if (!parsed || typeof parsed !== "object") return { active: false };
+  const status = parsed.status;
+  if (!status || TERMINAL_RUN_STATUSES.has(status)) return { active: false };
+  return {
+    active: true,
+    run_id: parsed.run_id ?? null,
+    phase: parsed.phase ?? null,
+    status,
+  };
+}
+
 // ── main flows ───────────────────────────────────────────────────────
 
 async function scriptedFlow(policyName, resolved) {
@@ -401,6 +563,19 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const resolved = resolveProjectRoot(args.projectRoot);
 
+  if (args.listJson) {
+    process.stdout.write(JSON.stringify(introspectAllPolicies(), null, 2) + "\n");
+    return;
+  }
+  if (args.guardActiveRun) {
+    process.stdout.write(JSON.stringify(checkActiveRun(resolved.root)) + "\n");
+    return;
+  }
+  if (args.checkCreds) {
+    if (!args.policy) fail("--check-creds requires --policy=<name>");
+    process.stdout.write(JSON.stringify(checkCredsFor(args.policy)) + "\n");
+    return;
+  }
   if (args.printOnly) return printOnlyFlow(resolved);
   if (args.policy) return scriptedFlow(args.policy, resolved);
   return interactiveFlow(resolved, args);

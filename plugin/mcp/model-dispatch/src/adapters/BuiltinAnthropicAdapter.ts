@@ -223,14 +223,14 @@ const STABLE_INPUT_BASENAMES = new Set([
   "design.md",
   "security_review.md",
 ]);
-function isStableInput(input: { path: string; reason: string }): boolean {
+export function isStableInput(input: { path: string; reason: string }): boolean {
   const basename = input.path.split("/").pop() ?? input.path;
   if (STABLE_INPUT_BASENAMES.has(basename)) return true;
   // Explicit orchestrator marking per orchestrator.md rule 6.
   return /\bstable\b/i.test(input.reason);
 }
 
-function splitStableFromDynamic(
+export function splitStableFromDynamic(
   packet: TaskPacket,
   extraCachedSystem: string,
 ): { stableBlock: string; userPrompt: string } {
