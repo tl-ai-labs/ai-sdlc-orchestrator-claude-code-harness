@@ -15,9 +15,25 @@
 
 Open an issue before writing a large PR.
 
+## Branching model
+
+Two long-lived branches, one direction:
+
+- **`main`** — release / stable. This is what the Claude Code plugin marketplace pulls when a user runs `/plugin marketplace update tilicho-ai-labs`. Every commit on `main` is assumed to be a working release. Direct pushes are not allowed. `main` only receives merges from `develop` — one PR per release cut.
+- **`develop`** — integration. Every feature branch lands here first. Point-in-time snapshots may be broken; that is what `develop` is for. When a batch of features is ready to ship, a single `develop → main` PR promotes them.
+
+Feature and fix branches:
+
+- `feat/<short-name>` — new features, new adapters, new policies.
+- `fix/<short-name>` — bug fixes.
+- `docs/<short-name>` — doc-only changes.
+- `chore/<short-name>` — plumbing, tooling, refactors with no user impact.
+
+All of the above open PRs targeting **`develop`**, never `main` directly.
+
 ## How to submit
 
-1. Fork the repo, create a feature branch off `main`.
+1. Fork the repo (or branch directly if you have write access), create a feature branch off `develop`.
 2. Make your change. Keep the diff focused; one topic per PR.
 3. Run `npm test` from the repo root. It runs the tooling suite and then the MCP server's own, and every one of them is offline and free — no credential is read and no API call is made, so there is no reason not to run it.
 4. Run `node tools/setup.mjs` on a clean clone to verify it still passes.
