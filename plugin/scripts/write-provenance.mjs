@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Provenance writer for `/sdlc:revert` (ticket §14.6).
+ * Provenance writer for `/mmo:revert` (ticket §14.6).
  *
  * The orchestrator calls this around every Write/Edit in a brownfield run so the
  * revert command can restore the pre-run state. Schema matches the reader in
@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative, resolve } from "node:path";
+import { log as mmoLog } from "./lib/log.mjs";
 
 function parseArgs(argv) {
   const out = { mode: null, runId: null, path: null, packetId: null, intent: null };
@@ -52,6 +53,12 @@ function parseArgs(argv) {
 function warn(msg) { process.stderr.write(`write-provenance: ${msg}\n`); }
 function log(msg) { process.stderr.write(`write-provenance: ${msg}\n`); }
 function failOpen(msg) { warn(msg); process.exit(0); }
+
+/** First 16 hex chars of the digest, stripped of the "sha256:" label. */
+function sha16Of(sha) {
+  if (!sha) return undefined;
+  return sha.replace(/^sha256:/, "").slice(0, 16);
+}
 
 /**
  * Where does per-run bookkeeping (`.sdlc/runs/<run-id>/provenance.json`) go?
@@ -157,6 +164,7 @@ function main() {
     prov.commits = commitsBetween(root, prov.git_head_before, prov.git_head_after);
     writeProv(provPath, prov);
     log(`finalize: ${prov.commits.length} commit(s) recorded`);
+    mmoLog("debug", "provenance.finalize", { run_id: args.runId, path: provPath });
     return;
   }
 
@@ -178,10 +186,11 @@ function main() {
       catch (e) { warn(`backup failed for ${relPath}: ${e.message}`); backupPath = null; }
     }
 
+    const shaBefore = existed ? sha256Of(absPath) : null;
     prov.files_touched.push({
       path: relPath,
       existed_before: existed,
-      sha_before: existed ? sha256Of(absPath) : null,
+      sha_before: shaBefore,
       sha_after: null,
       tracked_in_git: tracked,
       backup_path: backupPath ? relative(root, backupPath) : null,
@@ -190,6 +199,13 @@ function main() {
     });
     writeProv(provPath, prov);
     log(`before ${relPath} (backup=${backupPath ? "yes" : "no"})`);
+    mmoLog("debug", "provenance.before", {
+      run_id: args.runId,
+      path: relPath,
+      tracked_in_git: tracked,
+      backup_path: backupPath ? relative(root, backupPath) : undefined,
+      sha16: sha16Of(shaBefore),
+    });
     return;
   }
 
@@ -201,6 +217,13 @@ function main() {
         rec.written_at = new Date().toISOString();
         writeProv(provPath, prov);
         log(`after  ${relPath}`);
+        mmoLog("debug", "provenance.after", {
+          run_id: args.runId,
+          path: relPath,
+          tracked_in_git: rec.tracked_in_git,
+          backup_path: rec.backup_path,
+          sha16: sha16Of(rec.sha_after),
+        });
         return;
       }
     }

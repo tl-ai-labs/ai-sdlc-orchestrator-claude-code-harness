@@ -27,6 +27,7 @@ import { existsSync, statSync, readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve, dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { log } from "./lib/log.mjs";
 
 // ─── helpers ─────────────────────────────────────────────────────────
 
@@ -429,7 +430,7 @@ function scanAntigravity(gcpAuthDetected) {
     found,
     sources,
     note:
-      "Antigravity is opt-in. Only checked when the policy uses flash-agsdk-worker or SDLC_SELECT names it. " +
+      "Antigravity is opt-in. Only checked when the policy uses flash-agsdk-worker or MMO_SELECT names it. " +
       "This scan is informational; the real reachability check runs at preflight_dispatch.",
   };
 }
@@ -467,6 +468,17 @@ function main() {
   const providers = [];
   if (enabled.has("anthropic")) providers.push(scanAnthropic(envKeys, codeRefs));
   if (enabled.has("gemini")) providers.push(scanGemini(envKeys, codeRefs));
+
+  for (const p of providers) {
+    const detectedSource = p.sources.find((s) => s.kind !== "fallback" && s.detected);
+    const keyEnvMatch = detectedSource?.location?.match(/^env:(.+)$/);
+    log("debug", "credential.discover", {
+      provider: p.name,
+      source: detectedSource?.kind ?? "none",
+      key_env_name: keyEnvMatch?.[1],
+      found: p.found,
+    });
+  }
 
   // Antigravity depends on gemini's GCP auth detection
   if (enabled.has("antigravity")) {

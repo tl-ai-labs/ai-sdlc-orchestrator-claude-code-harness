@@ -40,34 +40,34 @@ const idsOf = (state) => state.problems.map((p) => p.id);
 
 test("the agent path is off unless something says otherwise", () => {
   assert.equal(selectsAgentWorker({}), false);
-  assert.equal(selectsAgentWorker({ SDLC_SELECT: "" }), false);
-  assert.equal(selectsAgentWorker({ SDLC_SELECT: "   " }), false);
+  assert.equal(selectsAgentWorker({ MMO_SELECT: "" }), false);
+  assert.equal(selectsAgentWorker({ MMO_SELECT: "   " }), false);
   // The unexpanded-placeholder case is the realistic one: plugin.json declares
-  // SDLC_SELECT as a pass-through, and a host that never set it hands the
+  // MMO_SELECT as a pass-through, and a host that never set it hands the
   // literal through. Reading that as a selection would demand a virtualenv of
   // every single plugin user.
-  assert.equal(selectsAgentWorker({ SDLC_SELECT: "${SDLC_SELECT}" }), false);
+  assert.equal(selectsAgentWorker({ MMO_SELECT: "${MMO_SELECT}" }), false);
 });
 
 test("the agent path is on only when a slot actually resolves to the worker", () => {
-  assert.equal(selectsAgentWorker({ SDLC_SELECT: `gemini-flash=${AGENT_WORKER_MODEL_ID}` }), true);
+  assert.equal(selectsAgentWorker({ MMO_SELECT: `gemini-flash=${AGENT_WORKER_MODEL_ID}` }), true);
   // One pair among several, in either position.
   assert.equal(
-    selectsAgentWorker({ SDLC_SELECT: `other=x, gemini-flash=${AGENT_WORKER_MODEL_ID}` }),
+    selectsAgentWorker({ MMO_SELECT: `other=x, gemini-flash=${AGENT_WORKER_MODEL_ID}` }),
     true,
   );
 
   // Selecting the completion leaf is not selecting the agent.
-  assert.equal(selectsAgentWorker({ SDLC_SELECT: "gemini-flash=flash-completion" }), false);
+  assert.equal(selectsAgentWorker({ MMO_SELECT: "gemini-flash=flash-completion" }), false);
   // A slot NAMED after the worker is not a selection OF it. A substring test
   // would get this backwards and demand Python from someone who explicitly
   // chose the other leaf.
   assert.equal(
-    selectsAgentWorker({ SDLC_SELECT: `${AGENT_WORKER_MODEL_ID}=flash-completion` }),
+    selectsAgentWorker({ MMO_SELECT: `${AGENT_WORKER_MODEL_ID}=flash-completion` }),
     false,
   );
   // Near-misses are near-misses, not matches.
-  assert.equal(selectsAgentWorker({ SDLC_SELECT: `gemini-flash=${AGENT_WORKER_MODEL_ID}-v2` }), false);
+  assert.equal(selectsAgentWorker({ MMO_SELECT: `gemini-flash=${AGENT_WORKER_MODEL_ID}-v2` }), false);
 });
 
 // ─── the decision table, agent half ───────────────────────────────────
@@ -97,7 +97,7 @@ test("a missing worker environment blocks, and says how to leave the agent path"
   // tools/ directory, so a repair named only in clone terms is a dead end for
   // half the audience. This assertion is what keeps that from regressing.
   assert.match(problem.fix, /--fix/);
-  assert.match(problem.fix, /SDLC_SELECT/);
+  assert.match(problem.fix, /MMO_SELECT/);
 });
 
 test("an environment that exists but cannot import the SDK blocks, quoting the error", () => {
@@ -189,7 +189,7 @@ test("the venv this script builds is the one the adapter looks for", () => {
   const pluginRoot = join(ROOT, "plugin");
   const { venvPython } = workerPaths(pluginRoot);
   const source = readFileSync(
-    join(pluginRoot, "mcp", "gemini-flash-server", "src", "delegation", "workerProcess.ts"),
+    join(pluginRoot, "mcp", "model-dispatch", "src", "delegation", "workerProcess.ts"),
     "utf8",
   );
   const match = source.match(/return join\(workerDir, ([^)]*)\);/);
@@ -197,7 +197,7 @@ test("the venv this script builds is the one the adapter looks for", () => {
   const segments = match[1].split(",").map((s) => s.trim().replace(/^"|"$/g, ""));
   assert.equal(
     venvPython,
-    join(pluginRoot, "mcp", "gemini-flash-server", "worker", ...segments),
+    join(pluginRoot, "mcp", "model-dispatch", "worker", ...segments),
     "verify-setup.mjs and workerProcess.ts disagree about where the worker's Python lives",
   );
 });
@@ -207,7 +207,7 @@ test("the interpreter override the worker honours is a declared pass-through", (
   // does — through plugin.json's env block. Left off that list it is invisible
   // to a plugin-route install, and the override silently does nothing.
   const source = readFileSync(
-    join(ROOT, "plugin", "mcp", "gemini-flash-server", "src", "delegation", "workerProcess.ts"),
+    join(ROOT, "plugin", "mcp", "model-dispatch", "src", "delegation", "workerProcess.ts"),
     "utf8",
   );
   const declared = source.match(/WORKER_PYTHON_ENV\s*=\s*"([^"]+)"/);
@@ -223,8 +223,8 @@ test("the selection string the wizard writes is the one the policy declares", ()
   // and its options. If either is renamed, the file the wizard produces routes
   // to nothing and the failure surfaces at the first dispatch.
   const wizard = readFileSync(join(ROOT, "tools", "setup.mjs"), "utf8");
-  const written = wizard.match(/SDLC_SELECT:\s*"([^"]+)"/);
-  assert.ok(written, "setup.mjs no longer writes SDLC_SELECT as a literal");
+  const written = wizard.match(/MMO_SELECT:\s*"([^"]+)"/);
+  assert.ok(written, "setup.mjs no longer writes MMO_SELECT as a literal");
 
   const [slot, option] = written[1].split("=");
   const policy = readFileSync(

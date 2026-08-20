@@ -1,5 +1,9 @@
 # Ping Service — the agent path
 
+> **2026-08-18:** the plugin was renamed `sdlc` → `mmo` after this run was recorded. This is a
+> shipped evidence record — commands, paths, and manifest data below are shown as they were at
+> the time, not rewritten.
+
 The same brief, the same policy, the same machine — with the mechanical tier
 switched to Gemini **as an agent** through Google's Antigravity SDK. Gemini was
 handed the working directory: it listed and read files itself, ran commands, and

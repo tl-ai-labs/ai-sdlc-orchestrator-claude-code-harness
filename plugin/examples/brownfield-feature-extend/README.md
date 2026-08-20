@@ -19,7 +19,7 @@ src/
 cd plugin/examples/brownfield-feature-extend
 npm install && npm test
 # In Claude Code:
-/sdlc:brownfield
+/mmo:brownfield
 # Pick intent: feature-extend
 ```
 

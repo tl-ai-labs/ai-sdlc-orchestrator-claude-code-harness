@@ -30,18 +30,18 @@ If `examples/<study-id>/passes/<run-id>/` already exists, its contents will be o
 **Requirements before starting:**
 - Gemini credentials must be present when the policy uses any Gemini model — either Google Cloud credentials for Gemini Enterprise Agent Platform, formerly Vertex AI (`gcloud auth application-default login`, no key), or `GEMINI_API_KEY` for AI Studio. If neither is available, abort with a clear message naming both.
 - `ANTHROPIC_API_KEY` env var must be set when `--auth=vendor`. If signed in to a Claude Code subscription under `--auth=estimated`, Claude Code provides direct-tier auth and the variable does not need to be exported. It IS required for `claude --print` (headless) invocations under `--auth=vendor`.
-- The MCP server `gemini-flash-server` must be registered (it is, via the plugin manifest).
+- The MCP server `model-dispatch` must be registered (it is, via the plugin manifest).
 
 **HITL gates active:** Gate 1 (requirements), Gate 2 (design), Gate 3 (security review), Gate 4 (final acceptance).
 
-When invoked headlessly (e.g. via `claude --print "/sdlc:pass ..." --output-format stream-json --verbose`), all four HITL gates auto-approve so the session can complete end-to-end without prompts.
+When invoked headlessly (e.g. via `claude --print "/mmo:pass ..." --output-format stream-json --verbose`), all four HITL gates auto-approve so the session can complete end-to-end without prompts.
 
 ---
 
 ## Brownfield-mode flags (added in v1)
 
 When `--mode=brownfield` is set, the pipeline uses the brownfield entry (equivalent to
-`/sdlc:brownfield` but flag-driven for scripted / CI use). Additional required + optional
+`/mmo:brownfield` but flag-driven for scripted / CI use). Additional required + optional
 flags:
 
 | Flag | Purpose |

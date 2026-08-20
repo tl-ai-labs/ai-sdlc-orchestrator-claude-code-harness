@@ -17,7 +17,7 @@ import {
 /** The two models of the shipped opus-plus-flash policy, in policy-file order. */
 const MODELS = [
   { id: "opus", model_name: "claude-opus-4-7", adapter: "builtin-anthropic" },
-  { id: "gemini-flash", model_name: "gemini-3.5-flash", adapter: "mcp:gemini-flash-server" },
+  { id: "gemini-flash", model_name: "gemini-3.5-flash", adapter: "mcp:model-dispatch" },
 ];
 
 /** An adapter factory where the named model ids throw and every other id succeeds. */
@@ -47,12 +47,12 @@ test("parseAuthMode throws on anything else, using the message operating rule 6 
 
 test("vendor mode dispatches every model through this server", () => {
   assert.equal(requiresServerDispatch(IN_SESSION_ADAPTER, "vendor"), true);
-  assert.equal(requiresServerDispatch("mcp:gemini-flash-server", "vendor"), true);
+  assert.equal(requiresServerDispatch("mcp:model-dispatch", "vendor"), true);
 });
 
 test("estimated mode dispatches everything except the in-session adapter", () => {
   assert.equal(requiresServerDispatch(IN_SESSION_ADAPTER, "estimated"), false);
-  assert.equal(requiresServerDispatch("mcp:gemini-flash-server", "estimated"), true);
+  assert.equal(requiresServerDispatch("mcp:model-dispatch", "estimated"), true);
   // An unknown adapter is dispatched, and so must work. Defaulting the other way
   // would let a typo'd adapter name skip the check entirely.
   assert.equal(requiresServerDispatch("mcp:some-future-server", "estimated"), true);

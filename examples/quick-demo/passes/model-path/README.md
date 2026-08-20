@@ -1,5 +1,9 @@
 # Ping Service — the model path
 
+> **2026-08-18:** the plugin was renamed `sdlc` → `mmo` after this run was recorded. This is a
+> shipped evidence record — commands, paths, and manifest data below are shown as they were at
+> the time, not rewritten.
+
 A complete run of the Ping Service brief with `opus-plus-flash`, mechanical
 phases going to Gemini **as a model**: Claude reads the files, sends the text,
 Gemini sends text back, Claude writes the result to disk. This is what an

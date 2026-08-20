@@ -63,13 +63,13 @@ Setup this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchest
 Then, in a new session:
 
 ```
-/sdlc:run
+/mmo:greenfield
 ```
 
 Pick Ping Service. It exercises every phase in minutes and costs roughly $0.84 on the model path. To reproduce the agent-path row, enable the agent before running:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
 ```
 
 Verify it took effect with `probe-agent-worker.mjs` (~2¢).

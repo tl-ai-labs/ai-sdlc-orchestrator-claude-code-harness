@@ -20,7 +20,7 @@
  *   6. Report              — this script (writes .sdlc/pre-check-status.json
  *                            when --report or --run is complete).
  *
- * The status file is cached — subsequent /sdlc:brownfield invocations
+ * The status file is cached — subsequent /mmo:brownfield invocations
  * check it and skip smoke steps whose inputs haven't changed (staleness
  * = baseline changed, plugin version changed, or --recheck flag passed).
  *
@@ -47,7 +47,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, statSyn
 import { spawnSync } from "node:child_process";
 import { resolve, dirname, join } from "node:path";
 
-const SDLC_REL = ".sdlc";
+const MMO_REL = ".sdlc";
 const STATUS_REL = "pre-check-status.json";
 const PRE_CHECK_DIR = "pre-check";
 const PROBE_FILE = "hello.txt";
@@ -57,7 +57,7 @@ const PROBE_FILE = "hello.txt";
 function findSdlcRoot(start = process.cwd()) {
   let dir = resolve(start);
   for (let i = 0; i < 40; i++) {
-    if (existsSync(join(dir, SDLC_REL))) return join(dir, SDLC_REL);
+    if (existsSync(join(dir, MMO_REL))) return join(dir, MMO_REL);
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -233,7 +233,7 @@ function ensureSdlc(argSdlc) {
   const sdlc = argSdlc ? resolve(argSdlc) : findSdlcRoot();
   if (sdlc) return sdlc;
   // Create it in cwd — pre-check needs somewhere to put state.
-  const cwdSdlc = resolve(process.cwd(), SDLC_REL);
+  const cwdSdlc = resolve(process.cwd(), MMO_REL);
   mkdirSync(cwdSdlc, { recursive: true });
   return cwdSdlc;
 }

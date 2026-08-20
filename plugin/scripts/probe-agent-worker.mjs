@@ -130,7 +130,7 @@ export function classifyFailure(errorText) {
         "requires — the plain model path can work on a project where this one does not.",
       fix:
         "Request the entitlement for this project, or run the mechanical tier as a model " +
-        "instead of an agent (unset SDLC_SELECT, or set gemini-flash=flash-completion).",
+        "instead of an agent (unset MMO_SELECT, or set gemini-flash=flash-completion).",
     };
   }
   if (has("404", "NOT_FOUND", "was not found", "is not supported", "not available in")) {
@@ -208,7 +208,7 @@ export function readFlag(argv, name) {
  * and a raw ERR_MODULE_NOT_FOUND stack says nothing about the fix.
  */
 async function loadServerModules(pluginRoot) {
-  const serverDir = join(pluginRoot, "mcp", "gemini-flash-server");
+  const serverDir = join(pluginRoot, "mcp", "model-dispatch");
   const distPolicy = join(serverDir, "dist", "policy.js");
   const distAdapters = join(serverDir, "dist", "adapters", "index.js");
   if (!existsSync(distPolicy) || !existsSync(distAdapters)) {

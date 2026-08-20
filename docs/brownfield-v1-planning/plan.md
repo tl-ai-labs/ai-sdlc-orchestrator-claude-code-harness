@@ -1,3 +1,8 @@
+> **2026-08-18:** the plugin was renamed `sdlc` → `mmo` after this plan was written (see
+> `docs/mmo-v1-planning/MMO-V1-TICKET.md`). Commands, the MCP server, and env vars below are
+> named as they were at the time — `/sdlc:*`, `gemini-flash-server`, `SDLC_SELECT` — a historical
+> record, not current usage.
+
 # Brownfield Mode for the AI-SDLC Orchestrator Plugin
 
 ## TL;DR

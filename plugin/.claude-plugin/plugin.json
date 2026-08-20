@@ -1,17 +1,17 @@
 {
-  "name": "sdlc",
-  "version": "0.5.0",
-  "description": "Multi-model SDLC orchestration plugin for Claude Code. Reads a project brief and routes SDLC phases to configured models per policy.",
+  "name": "mmo",
+  "version": "0.6.0",
+  "description": "Multi-Model Orchestrator plugin for Claude Code. Reads a project brief and routes SDLC phases to configured models per policy.",
   "author": { "name": "Tilicho Labs" },
   "license": "MIT",
   "homepage": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness",
-  "keywords": ["sdlc", "orchestration", "multi-model", "gemini", "opus", "antigravity"],
+  "keywords": ["mmo", "orchestration", "multi-model", "gemini", "opus", "antigravity"],
   "commands": "./commands",
   "skills": "./skills",
   "mcpServers": {
-    "gemini-flash-server": {
+    "model-dispatch": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/gemini-flash-server/dist/server.js"],
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/model-dispatch/dist/server.js"],
       "env": {
         "GEMINI_API_KEY": "${GEMINI_API_KEY}",
         "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
@@ -19,8 +19,12 @@
         "GOOGLE_CLOUD_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
         "GOOGLE_CLOUD_LOCATION": "${GOOGLE_CLOUD_LOCATION}",
         "GEMINI_BACKEND": "${GEMINI_BACKEND}",
+        "MMO_SELECT": "${MMO_SELECT}",
         "SDLC_SELECT": "${SDLC_SELECT}",
-        "GEMINI_WORKER_PYTHON": "${GEMINI_WORKER_PYTHON}"
+        "GEMINI_WORKER_PYTHON": "${GEMINI_WORKER_PYTHON}",
+        "MMO_LOG_LEVEL": "${MMO_LOG_LEVEL}",
+        "MMO_VERBOSE": "${MMO_VERBOSE}",
+        "MMO_LOG_PREFIX": "${MMO_LOG_PREFIX}"
       }
     }
   }

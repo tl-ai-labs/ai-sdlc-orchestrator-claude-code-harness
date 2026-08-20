@@ -1,11 +1,11 @@
 ---
-name: run-ai-sdlc
+name: pipeline
 description: The end-to-end AI-SDLC workflow definition consumed by the orchestrator subagent. Defines the state machine, TaskPacket schema, HITL gates, telemetry contract, and the prompts/templates for each phase. The orchestrator reads this skill to know exactly what to do at each step.
 ---
 
 # AI-SDLC Workflow — Orchestrator Playbook
 
-This skill is the source of truth for the orchestrator. When invoked under `/sdlc:pass`, the orchestrator follows the state machine below.
+This skill is the source of truth for the orchestrator. When invoked under `/mmo:pass`, the orchestrator follows the state machine below.
 
 ---
 
@@ -129,7 +129,7 @@ When the app uses a validating `ConfigModule` (or Joi / Zod / envalid equivalent
 
 ### Brownfield-mode task types (v1)
 
-The table above is greenfield-Nest-centric. In brownfield mode (`mode: brownfield`), packets use a **stack-agnostic** base set of primitives plus an optional `subtype` hint that the loaded stack adapter (`plugin/skills/run-ai-sdlc/stacks/*.md`) resolves to concrete codegen guidance.
+The table above is greenfield-Nest-centric. In brownfield mode (`mode: brownfield`), packets use a **stack-agnostic** base set of primitives plus an optional `subtype` hint that the loaded stack adapter (`plugin/skills/pipeline/stacks/*.md`) resolves to concrete codegen guidance.
 
 | task_type | Purpose | Common `subtype` values |
 |---|---|---|
@@ -154,6 +154,15 @@ if the wiring edit fails, roll back the new-file packet within the same pair.
 **Every brownfield packet MUST set `artifact_path`** (§7.1) so the write-contract validator can
 reject off-limits paths at dispatch time. Missing `artifact_path` is a planner bug.
 
+**`doc_addition` vs `doc_update` — read from the brief, don't infer.** When `intent_brief.md`
+carries a "## Task type" heading (only present when the chosen intent declares `task_types` in
+`intents.json` — currently just `docs`), every packet you plan for this run uses that exact
+`task_type` value. Do not infer `doc_addition` vs `doc_update` from file existence or context —
+the user already chose it at brief-collection time (`brownfield-guide/SKILL.md` step 4b), and a
+per-project policy may route the two differently (an update is a smaller edit than fresh
+authoring, and might reasonably go to a cheaper model). When the heading is absent — every
+non-docs intent, and `docs` runs from before this existed — infer as before.
+
 ### TaskPacket initial output-ceiling budgets
 
 Set `budget.maxOutputTokens` per phase type. The adapter automatically doubles this ceiling on any attempt that terminates with the vendor's max-tokens stop reason (Anthropic `stop_reason: "max_tokens"`, Gemini `finishReason: "MAX_TOKENS"`), up to 3 doublings or the model's absolute output limit declared in the policy YAML (`max_output_tokens_absolute`), whichever comes first. Cached input keeps retry cost low.
@@ -166,6 +175,11 @@ Set `budget.maxOutputTokens` per phase type. The adapter automatically doubles t
 Every attempt emits its own TelemetryEvent with `attempt_number`, `ceiling_used`, and (on retries) `retry_reason: "output_cap"` — all sharing the packet's `task_id`. The report collapses them into one row per packet.
 
 ### Phase 5 — execute_packets
+
+Emit `phase.start` before the first packet and `phase.end` after the last — see "Run logging" in
+orchestrator.md. This is the phase with the most silence between pre-flight and Gate 1 otherwise:
+every dispatch inside the loop below already logs itself via the MCP server (`route.decide`,
+`dispatch.start`/`.end`), but nothing marks the loop's own boundaries without this call.
 
 For each packet, in dependency order:
 
@@ -219,7 +233,7 @@ Invoke `security-reviewer` subagent. Writes `<output_dir>/security_review.md`.
 
 ### Phase 9 — generate_final_report
 
-Read all events in `<telemetry_path>`. Build rollup manifest using the `buildManifest` shape (see `plugin/mcp/gemini-flash-server/src/telemetry.ts`). Write `<output_dir>/manifest.json`. Also write a brief `<output_dir>/SUMMARY.md` with: total cost, breakdown, links to key artifacts.
+Read all events in `<telemetry_path>`. Build rollup manifest using the `buildManifest` shape (see `plugin/mcp/model-dispatch/src/telemetry.ts`). Write `<output_dir>/manifest.json`. Also write a brief `<output_dir>/SUMMARY.md` with: total cost, breakdown, links to key artifacts.
 
 ---
 
@@ -237,15 +251,24 @@ Read all events in `<telemetry_path>`. Build rollup manifest using the `buildMan
   acceptance: ["<testable bullet>", ...],
   budget: { maxInputTokens: 4000, maxOutputTokens: 3000 },  // codegen initial; adapter doubles on max_tokens truncation up to 3× (see below)
   retry_count: 0,
-  pass_id: "pass1" | "pass2"
+  pass_id: "pass1" | "pass2",
+  intent: "docs" | "bugfix" | "feature-extend" | "feature-new" | "refactor" | "test" | "deps"  // brownfield only — omit entirely on greenfield packets
 }
 ```
+
+**Set `intent` on every brownfield packet, from the confirmed value in `intent_brief.md`.** A
+policy may route the same `phase` differently per intent (e.g. `refactor`'s Tests phase to a
+different model than `docs`'s) via a rule matching on both `phase` and `intent` — the router
+falls back to the phase's blanket rule when no intent-specific one exists. Omitting `intent`
+silently drops the packet out of every intent-scoped rule and back onto the blanket rule, which
+is exactly greenfield's existing behavior — so this is safe to skip on greenfield packets, but
+never skip it on brownfield.
 
 ---
 
 ## Intent matrix — brownfield only
 
-**Applies only when `mode: brownfield`.** Greenfield (`/sdlc:run`) runs the full pipeline
+**Applies only when `mode: brownfield`.** Greenfield (`/mmo:greenfield`) runs the full pipeline
 described above with no matrix-based branching.
 
 In brownfield, one state machine handles seven intents. Which phases fire — and what shape their
@@ -291,7 +314,7 @@ main-loop Claude Code session displays verbatim and waits for user input on. The
 comes back to the subagent as a `{ gate_response: "approved" | "revise: <text>" | "abort" }`
 argument on the next invocation. **Persist the gate-pending state to `.sdlc/local/state.json`
 before emitting the message** — if the session dies mid-gate, session-hydrate detects a
-non-terminal state and re-prompts on next `/sdlc:brownfield` invocation. No new command needed.
+non-terminal state and re-prompts on next `/mmo:brownfield` invocation. No new command needed.
 
 ### Gate 0 — Brownfield only, before Gate 1
 
@@ -307,7 +330,7 @@ non-terminal state and re-prompts on next `/sdlc:brownfield` invocation. No new 
 >   — this is the one command that opens a browser; every other setup step is terminal-only).
 > - **Existing AI setup:** `<verbatim list from Tier 1 group 6>` — is any of this
 >   authoritative and off-limits? **(default: OFF-LIMITS, do not touch)**
-> - **Intent:** `<intent picked in step 4a of /sdlc:brownfield>`
+> - **Intent:** `<intent picked in step 4a of /mmo:brownfield>`
 > - **File scope:**
 >   - allowlist: `<paths proposed by the intent brief>` — accept / edit
 >   - off-limits: **project defaults from `.sdlc/project.json.off_limits_default`** apply

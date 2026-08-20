@@ -9,9 +9,9 @@
 
 ## 1. Problem Statement
 
-Today `/sdlc:run` routes every phase using whichever policy YAML is on disk
+Today `/mmo:greenfield` routes every phase using whichever policy YAML is on disk
 (`opus-plus-flash` by default, or `opus-only` as a fallback) and the
-[run.md](../../plugin/commands/run.md) command says so explicitly: *"This first
+[run.md](../../plugin/commands/greenfield.md) command says so explicitly: *"This first
 version runs the default policy. It is not configurable from this command; a user who needs
 different routing edits the policy file directly."* Changing routing means hand-editing YAML —
 finding the right file, knowing the schema (`models`, `select`, `rules`), and understanding phase
@@ -20,7 +20,7 @@ names — before a run can even start.
 Two things compound this:
 
 1. **Model-per-phase routing is the only lever.** Extended-thinking capacity
-   (`ReasoningConfig` in [types.ts](../../plugin/mcp/gemini-flash-server/src/types.ts)) is
+   (`ReasoningConfig` in [types.ts](../../plugin/mcp/model-dispatch/src/types.ts)) is
    currently attached to a *model*, not a *phase*. A judgment phase (requirements) and a
    mechanical phase (codegen) routed to the same model are stuck with the same thinking
    effort, even though they have very different reasoning needs.
@@ -29,7 +29,7 @@ Two things compound this:
    hand, edit it correctly, and remember to point the run at it — with no validation until the
    run fails mid-phase.
 
-The people affected are anyone running `/sdlc:run` who wants routing or thinking-effort
+The people affected are anyone running `/mmo:greenfield` who wants routing or thinking-effort
 different from the two shipped presets — which, since this is the pipeline's main cost lever, is
 most repeat users. Left unsolved, users either overpay (staying on `opus-only` to avoid YAML
 surgery) or risk a misconfigured policy failing partway through a paid run.
@@ -40,7 +40,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
    hand-editing YAML.
 2. A user can set extended-thinking effort **per SDLC phase** (not just per model), for the
    first time — today this axis does not exist at all.
-3. Configuration happens **in-flow**: the page opens automatically as part of `/sdlc:run`,
+3. Configuration happens **in-flow**: the page opens automatically as part of `/mmo:greenfield`,
    before spend starts, and the CLI session resumes with the user's choice — no separate app to
    remember to launch.
 4. A saved custom policy is a real, inspectable YAML file the user can find, re-run, hand-edit,
@@ -71,7 +71,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
 
 ## 4. User Stories
 
-1. As a user running `/sdlc:run`, I want a web page to open automatically before the run starts
+1. As a user running `/mmo:greenfield`, I want a web page to open automatically before the run starts
    so I can review and adjust routing without leaving my terminal flow or hand-editing files.
 2. As a user, I want to pick from the existing named policies (`opus-only`, `opus-plus-flash`,
    any others later added) as a starting point, so I'm not building routing from scratch.
@@ -98,7 +98,7 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
 ## 5. User Flow
 
 **Where it slots in:** between the existing step 4 ("Show what will run") and step 5 ("Choose
-telemetry mode") of [run.md](../../plugin/commands/run.md).
+telemetry mode") of [run.md](../../plugin/commands/greenfield.md).
 
 1. `verify-setup.mjs` passes (existing step 1).
 2. Brief is found/confirmed (existing step 2), output paths confirmed (existing step 3).
@@ -125,7 +125,7 @@ telemetry mode") of [run.md](../../plugin/commands/run.md).
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant CLI as /sdlc:run (Claude Code)
+    participant CLI as /mmo:greenfield (Claude Code)
     participant Srv as Local config server
     participant Pg as Browser page
 
@@ -239,7 +239,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   a page-submitted policy *before* writing it to disk, so a custom policy can never reach disk in
   a state the run-start loader would reject. Concretely, at minimum:
   - every `rules[].use` target resolves to a declared `models[].id` or `select` slot (mirrors
-    existing `validateSelectOverrides` logic in [routing.ts](../../plugin/mcp/gemini-flash-server/src/routing.ts))
+    existing `validateSelectOverrides` logic in [routing.ts](../../plugin/mcp/model-dispatch/src/routing.ts))
   - every model referenced has its required `auth.env` credential present in the environment (so
     the page can warn *before* save, not fail at first dispatch)
   - policy `name:` field matches the filename
@@ -253,7 +253,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
 ## 9. Requirements
 
 ### Must-Have (P0)
-- [ ] Config page auto-opens during `/sdlc:run`, before step 5 (telemetry mode / spend
+- [ ] Config page auto-opens during `/mmo:greenfield`, before step 5 (telemetry mode / spend
       confirmation).
 - [ ] User can select any existing policy in `plugin/config/policies/` as a starting point.
 - [ ] User can change per-phase model routing for all nine phases plus `codegen`'s task-type
@@ -286,7 +286,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
 
 ## 10. Acceptance Criteria
 
-- Given the user runs `/sdlc:run` with no prior custom policies, when step 3 (existing) finishes,
+- Given the user runs `/mmo:greenfield` with no prior custom policies, when step 3 (existing) finishes,
   then a browser opens to the config page showing `opus-plus-flash` (today's default) pre-loaded
   as the base policy.
 - Given the user changes `codegen`'s routing from `gemini-flash` to `opus` and sets
@@ -296,7 +296,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   shows `codegen` routed to `opus` at Opus's rates.
 - Given the user clicks **Use as-is** without editing anything, when the run proceeds, then no
   new file is written to `plugin/config/policies/` and behavior is identical to today's
-  (pre-feature) `/sdlc:run`.
+  (pre-feature) `/mmo:greenfield`.
 - Given the user tries to save a policy named `opus-only` (an existing filename), then the page
   blocks submission with an inline "name already in use" error and no file is overwritten.
 - Given the user routes a phase to a model whose `auth.env` credential is unset in the
@@ -305,7 +305,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
 - Given the page has been open and idle past the timeout, when the timeout elapses, then the CLI
   proceeds automatically on the previously-resolved default policy and states in the transcript
   that it did so.
-- Given a prior run saved `strict-review.yaml`, when `/sdlc:run` is invoked again, then
+- Given a prior run saved `strict-review.yaml`, when `/mmo:greenfield` is invoked again, then
   `strict-review` appears as a selectable base policy alongside `opus-only` and
   `opus-plus-flash`.
 - Given the session has no way to open a browser (headless), when flow step 3 runs, then the CLI
@@ -318,9 +318,9 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   [plugin/policy-console/](../../plugin/policy-console/) (`npm run dev`), reading and writing
   `plugin/config/policies/*.yaml` directly through Node's `fs` in server components / a server
   action. Self-contained (its own `package.json`), not a dependency of the MCP server.
-- **OQ-2 (engineering) — still open:** How the page hands its result back to a `/sdlc:run` session
+- **OQ-2 (engineering) — still open:** How the page hands its result back to a `/mmo:greenfield` session
   mid-flow (flow step 3 in §5) isn't wired yet — the console today is a standalone tool a user runs
-  and reads from manually. Auto-launch from `/sdlc:run` and reporting the resolved policy back into
+  and reads from manually. Auto-launch from `/mmo:greenfield` and reporting the resolved policy back into
   that same CLI session remains future work.
 - **OQ-3 (product, requester):** Are custom policies saved under `plugin/config/policies/`
   intended to be **committed to git** (shareable across a team working in the same checked-out

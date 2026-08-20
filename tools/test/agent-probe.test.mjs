@@ -32,7 +32,7 @@ const twoDoorPolicy = {
   name: "test-policy",
   models: [
     { id: "opus", adapter: "builtin-anthropic", model_name: "claude-opus-4-7" },
-    { id: "flash-completion", adapter: "mcp:gemini-flash-server", model_name: "gemini-3.5-flash" },
+    { id: "flash-completion", adapter: "mcp:model-dispatch", model_name: "gemini-3.5-flash" },
     { id: "flash-agsdk-worker", adapter: AGENT_ADAPTER, model_name: "gemini-3.5-flash" },
   ],
 };
@@ -227,7 +227,7 @@ test("readFlag reads a value and tolerates its absence", () => {
 
 // ─── the bridge from the offline check to this one ───────────────────────────
 
-const AGENT_SELECTED = { SDLC_SELECT: "gemini-flash=flash-agsdk-worker" };
+const AGENT_SELECTED = { MMO_SELECT: "gemini-flash=flash-agsdk-worker" };
 
 test("a green offline check on the agent path points at the live probe", () => {
   const hint = agentProbeHint("/plug", AGENT_SELECTED, true);
@@ -243,7 +243,7 @@ test("the model path is never told to run a paid probe", () => {
   // The commonest install. A probe suggestion here would be an invitation to
   // spend money proving a path this install does not use.
   assert.equal(agentProbeHint("/plug", {}, true), null);
-  assert.equal(agentProbeHint("/plug", { SDLC_SELECT: "gemini-flash=flash-completion" }, true), null);
+  assert.equal(agentProbeHint("/plug", { MMO_SELECT: "gemini-flash=flash-completion" }, true), null);
 });
 
 test("a broken install is not sent to the probe", () => {

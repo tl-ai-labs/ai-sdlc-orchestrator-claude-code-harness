@@ -50,8 +50,12 @@ export const DECLARED_ENV = [
   "GOOGLE_CLOUD_PROJECT",
   "GOOGLE_CLOUD_LOCATION",
   "GEMINI_BACKEND",
-  "SDLC_SELECT",
+  "MMO_SELECT",
+  "SDLC_SELECT", // MMO-D8 compat shim — pre-rename installs still export this
   "GEMINI_WORKER_PYTHON",
+  "MMO_LOG_LEVEL",
+  "MMO_VERBOSE",
+  "MMO_LOG_PREFIX",
 ];
 
 /** `${NAME}` and nothing else. Anchored so a real value with `$` survives. */
@@ -199,7 +203,7 @@ export function hasGeminiCredentials({ env = {}, vertex = null } = {}) {
 
 /** The three paths that decide whether the MCP dispatch path is real. */
 export function mcpPaths(pluginRoot) {
-  const serverDir = join(pluginRoot, "mcp", "gemini-flash-server");
+  const serverDir = join(pluginRoot, "mcp", "model-dispatch");
   return {
     serverDir,
     distEntry: join(serverDir, "dist", "server.js"),
@@ -245,7 +249,7 @@ export function parseSelectSpec(spec) {
  * constraint). If they disagree, that one is authoritative.
  */
 export function workerPaths(pluginRoot) {
-  const workerDir = join(pluginRoot, "mcp", "gemini-flash-server", "worker");
+  const workerDir = join(pluginRoot, "mcp", "model-dispatch", "worker");
   return {
     workerDir,
     venvPython: join(workerDir, ".venv", "bin", "python"),
@@ -260,13 +264,13 @@ export function workerPaths(pluginRoot) {
  * selection OF it.
  */
 export function selectsAgentWorker(env = {}) {
-  const { pairs } = parseSelectSpec(usableEnv(env).SDLC_SELECT);
+  const { pairs } = parseSelectSpec(usableEnv(env).MMO_SELECT);
   return Object.values(pairs).includes(AGENT_WORKER_MODEL_ID);
 }
 
 /** Blocking finding for a spec the server will refuse to parse. */
 export function selectSpecProblem(env = {}) {
-  const spec = usableEnv(env).SDLC_SELECT;
+  const spec = usableEnv(env).MMO_SELECT;
   const { invalid } = parseSelectSpec(spec);
   if (invalid.length === 0) return null;
 
@@ -277,7 +281,7 @@ export function selectSpecProblem(env = {}) {
     id: "select-spec",
     severity: "blocking",
     message:
-      `SDLC_SELECT is set to '${spec}', which is not a valid selection. ` +
+      `MMO_SELECT is set to '${spec}', which is not a valid selection. ` +
       `Each entry must be spelled 'slot=option'; ${invalid
         .map((p) => `'${p}'`)
         .join(", ")} ${invalid.length === 1 ? "is" : "are"} not.` +
@@ -466,7 +470,7 @@ export function evaluate({
       id: unproven ? "agent-worker-credentials-unproven" : "agent-worker-credentials",
       severity: unproven ? "warning" : "blocking",
       message:
-        `SDLC_SELECT routes the mechanical tier to '${AGENT_WORKER_MODEL_ID}', which reaches Gemini ` +
+        `MMO_SELECT routes the mechanical tier to '${AGENT_WORKER_MODEL_ID}', which reaches Gemini ` +
         "through Gemini Enterprise Agent Platform (formerly Vertex AI) and application default " +
         "credentials only. " +
         (unproven
@@ -495,7 +499,7 @@ export function evaluate({
         id: "agent-worker-python",
         severity: "blocking",
         message:
-          `SDLC_SELECT routes the mechanical tier to '${AGENT_WORKER_MODEL_ID}', which runs a Python ` +
+          `MMO_SELECT routes the mechanical tier to '${AGENT_WORKER_MODEL_ID}', which runs a Python ` +
           "agent worker, but the worker has no Python environment. Every mechanical task would fail.",
         // --fix first: it works on both install routes. `node tools/setup.mjs`
         // exists only in a clone.
@@ -503,7 +507,7 @@ export function evaluate({
           "Re-run this check with --fix, which builds the environment. On a clone, " +
           "`node tools/setup.mjs` does the same and asks first. Or set GEMINI_WORKER_PYTHON " +
           "to a Python >= 3.10 that already has google-antigravity installed. " +
-          "To go back to the model path instead, remove SDLC_SELECT.",
+          "To go back to the model path instead, remove MMO_SELECT.",
       });
     } else if (!agentWorker.sdkImportable) {
       problems.push({
@@ -679,7 +683,7 @@ export function agentProbeHint(pluginRoot, env = {}, ok = true) {
  * End-of-successful-setup hand-off. Names the four task commands the user can
  * run in a new session and, when the project already has one set, the current
  * policy. Suppressed on any check failure — a failing install shouldn't tell
- * you to "try /sdlc:run next."
+ * you to "try /mmo:greenfield next."
  */
 export function nextStepsBanner(cwd = process.cwd(), ok = true) {
   if (!ok) return null;
@@ -690,16 +694,16 @@ export function nextStepsBanner(cwd = process.cwd(), ok = true) {
   } catch { /* no project.json yet — banner still worth printing */ }
 
   const policyLine = currentPolicy
-    ? `\n  Current policy: ${currentPolicy}   (change: /sdlc:policy change)`
-    : `\n  No policy set yet — run /sdlc:policy change to pick one, or /sdlc:setup --policy=<name>.`;
+    ? `\n  Current policy: ${currentPolicy}   (change: /mmo:policy change)`
+    : `\n  No policy set yet — run /mmo:policy change to pick one, or /mmo:setup --policy=<name>.`;
 
   return (
     `\n✓ Setup complete for this project.\n\n` +
     `  Try one of these in a NEW session in the same folder:\n\n` +
-    `    /sdlc:run          — generate a new app from a brief (empty folder)\n` +
-    `    /sdlc:brownfield   — work on this existing repo (docs, bugfix, feature, refactor, …)\n` +
-    `    /sdlc:policy       — show / change this project's model policy\n` +
-    `    /sdlc:pass         — headless/scripted run (for CI or replays)\n` +
+    `    /mmo:greenfield  — generate a new app from a brief (empty folder)\n` +
+    `    /mmo:brownfield  — work on this existing repo (docs, bugfix, feature, refactor, …)\n` +
+    `    /mmo:policy      — show / change this project's model policy\n` +
+    `    /mmo:pass        — headless/scripted run (for CI or replays)\n` +
     policyLine + `\n\n` +
     `  A NEW session is required: Claude Code builds the slash-command list and\n` +
     `  starts plugin MCP servers at session boot. In this session the setup\n` +
@@ -741,13 +745,13 @@ export function settingsPathFor(scope, cwd, home = homedir()) {
 /**
  * Pure merge. Preserves every other key and env variable (the file is the
  * user's; often holds their API keys). Disabling removes only our slot;
- * removes SDLC_SELECT entirely when nothing is left (empty and absent must
+ * removes MMO_SELECT entirely when nothing is left (empty and absent must
  * behave identically). Malformed existing spec is discarded, not merged.
  */
 export function withAgentSelection(settings, enabled) {
   const next = { ...(settings ?? {}) };
   const env = { ...(next.env ?? {}) };
-  const { pairs } = parseSelectSpec(env.SDLC_SELECT);
+  const { pairs } = parseSelectSpec(env.MMO_SELECT);
 
   if (enabled) pairs[AGENT_WORKER_SLOT] = AGENT_WORKER_MODEL_ID;
   else if (pairs[AGENT_WORKER_SLOT] === AGENT_WORKER_MODEL_ID) delete pairs[AGENT_WORKER_SLOT];
@@ -756,8 +760,8 @@ export function withAgentSelection(settings, enabled) {
     .map(([slot, option]) => `${slot}=${option}`)
     .join(",");
 
-  if (spec) env.SDLC_SELECT = spec;
-  else delete env.SDLC_SELECT;
+  if (spec) env.MMO_SELECT = spec;
+  else delete env.MMO_SELECT;
 
   if (Object.keys(env).length > 0) next.env = env;
   else delete next.env;
@@ -770,7 +774,7 @@ export function withAgentSelection(settings, enabled) {
  */
 export function isBundledServerEntry(server) {
   const argv = Array.isArray(server?.args) ? server.args.join(" ") : "";
-  return argv.includes(join("gemini-flash-server", "dist", "server.js"));
+  return argv.includes(join("model-dispatch", "dist", "server.js"));
 }
 
 /**
@@ -860,7 +864,7 @@ export function enableAgentPath({ scope = "project", cwd = process.cwd(), enable
     }
   }
 
-  return { ok: true, path, mcpPath, spec: next.env?.SDLC_SELECT ?? null, detail: null };
+  return { ok: true, path, mcpPath, spec: next.env?.MMO_SELECT ?? null, detail: null };
 }
 
 function report({ ok, problems }, log) {
@@ -931,7 +935,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const brownfieldCheck = process.argv.includes("--brownfield-check");
   const headless = process.argv.includes("--headless");
   // --project-root=<abs-path> or --project-root <abs-path> overrides
-  // process.cwd() when the caller (a /sdlc:* command file) has already resolved
+  // process.cwd() when the caller (a /mmo:* command file) has already resolved
   // which project this run is against — see setup.md, policy.md. Passing it
   // forward closes the cwd-drift hole between the command layer and any
   // subsequent settings write. Accept BOTH forms — command files write the
@@ -960,12 +964,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       process.exit(1);
     }
     env = { ...process.env };
-    if (written.spec) env.SDLC_SELECT = written.spec;
-    else delete env.SDLC_SELECT;
+    if (written.spec) env.MMO_SELECT = written.spec;
+    else delete env.MMO_SELECT;
 
     log(
       enableAgent
-        ? `  ✓ Mechanical tier set to the Antigravity SDK agent path (SDLC_SELECT=${written.spec}) in ${written.path}.`
+        ? `  ✓ Mechanical tier set to the Antigravity SDK agent path (MMO_SELECT=${written.spec}) in ${written.path}.`
         : `  ✓ Mechanical tier set back to the model path in ${written.path}.`
     );
     log(

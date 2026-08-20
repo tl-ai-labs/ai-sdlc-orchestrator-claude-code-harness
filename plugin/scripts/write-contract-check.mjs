@@ -4,8 +4,8 @@
  *
  * Refuses Write/Edit against paths outside the confirmed allowlist when
  * brownfield mode is active. Silent no-op when no active contract file
- * exists — that keeps greenfield /sdlc-run and non-plugin editing behaviour
- * unchanged.
+ * exists — that keeps greenfield /mmo:greenfield and non-plugin editing
+ * behaviour unchanged.
  *
  * Contract file: <repo-root>/.sdlc/local/write-contract.json
  *   { schema_version, active, mode, run_id, strict, allowlist, off_limits }
@@ -27,6 +27,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve, relative, sep, dirname, isAbsolute } from "node:path";
 import { HARDCODED_OFF_LIMITS } from "./lib/off-limits.mjs";
+import { log } from "./lib/log.mjs";
 
 const CONTRACT_REL_PATH = ".sdlc/local/write-contract.json";
 
@@ -138,15 +139,22 @@ function readContractSafe(path) {
   }
 }
 
-function allow(msg) {
-  if (msg && process.env.SDLC_DEBUG === "1") {
-    console.error(`[sdlc-brownfield write-contract] ALLOW: ${msg}`);
+function allow(msg, ctx = {}) {
+  if (msg && process.env.MMO_DEBUG === "1") {
+    console.error(`[mmo-brownfield write-contract] ALLOW: ${msg}`);
   }
+  log("debug", "write.allow", { run_id: ctx.runId, path: ctx.path, matched_rule: ctx.matchedRule });
   process.exit(0);
 }
 
-function deny(msg) {
-  console.error(`[sdlc-brownfield write-contract] DENY: ${msg}`);
+function deny(msg, ctx = {}) {
+  console.error(`[mmo-brownfield write-contract] DENY: ${msg}`);
+  log("warn", "write.deny", {
+    run_id: ctx.runId,
+    path: ctx.path,
+    matched_off_limits_rule: ctx.matchedRule,
+    strict: ctx.strict,
+  });
   process.exit(1);
 }
 
@@ -211,7 +219,7 @@ async function main() {
       deny(
         `${target} matches always-off-limits pattern "${preHit}" (no active brownfield contract; ` +
         `this is the pre-contract safety net for credentials, MCP config, other-AI-tool state, ` +
-        `and plugin bookkeeping). If this write is legitimate, run /sdlc:setup or /sdlc:brownfield ` +
+        `and plugin bookkeeping). If this write is legitimate, run /mmo:setup or /mmo:brownfield ` +
         `first to establish an explicit contract, then re-issue.`
       );
     }
@@ -250,37 +258,39 @@ async function main() {
   if (offHit) {
     if (contract.strict === false) {
       console.error(
-        `[sdlc-brownfield write-contract] WARN: ${rel} matches off-limits pattern "${offHit}". Allowed because contract.strict = false.`
+        `[mmo-brownfield write-contract] WARN: ${rel} matches off-limits pattern "${offHit}". Allowed because contract.strict = false.`
       );
-      allow("off-limits hit, but strict=false");
+      allow("off-limits hit, but strict=false", { runId: contract.run_id, path: rel, matchedRule: offHit });
     }
     deny(
       `${rel} matches off-limits pattern "${offHit}" (run ${contract.run_id ?? "?"}). ` +
       `Re-open Gate 0 to move this path out of off-limits, or set contract.strict = false ` +
-      `(equivalent to --strict-write=off) to bypass.`
+      `(equivalent to --strict-write=off) to bypass.`,
+      { runId: contract.run_id, path: rel, matchedRule: offHit, strict: contract.strict }
     );
   }
 
   // Allowlist check.
   const allowHit = firstMatch(rel, contract.allowlist);
-  if (allowHit) allow(`${rel} matches allowlist pattern "${allowHit}"`);
+  if (allowHit) allow(`${rel} matches allowlist pattern "${allowHit}"`, { runId: contract.run_id, path: rel, matchedRule: allowHit });
 
   // Not in allowlist, not off-limits → deny by default (allowlist-based safety).
   if (contract.strict === false) {
     console.error(
-      `[sdlc-brownfield write-contract] WARN: ${rel} is not in the confirmed allowlist. Allowed because contract.strict = false.`
+      `[mmo-brownfield write-contract] WARN: ${rel} is not in the confirmed allowlist. Allowed because contract.strict = false.`
     );
-    allow("not in allowlist, but strict=false");
+    allow("not in allowlist, but strict=false", { runId: contract.run_id, path: rel });
   }
   deny(
     `${rel} is not in the confirmed allowlist for run ${contract.run_id ?? "?"}. ` +
     `Re-open Gate 0 to expand scope to include this path, or set contract.strict = false ` +
-    `(equivalent to --strict-write=off) to bypass.`
+    `(equivalent to --strict-write=off) to bypass.`,
+    { runId: contract.run_id, path: rel, strict: contract.strict }
   );
 }
 
 main().catch((e) => {
   // Unhandled error — fail-open. Better to permit a write than to wedge the user.
-  if (process.env.SDLC_DEBUG === "1") console.error(`[sdlc-brownfield write-contract] unhandled: ${e?.message ?? e}`);
+  if (process.env.MMO_DEBUG === "1") console.error(`[mmo-brownfield write-contract] unhandled: ${e?.message ?? e}`);
   process.exit(0);
 });

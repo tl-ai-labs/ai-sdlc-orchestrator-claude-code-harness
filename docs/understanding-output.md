@@ -2,10 +2,11 @@
 
 > **For:** reading `telemetry.jsonl`, `manifest.json`, `provenance.json`, and the cost report. **Also see:** [methodology.md](methodology.md) · [running.md](running.md).
 
-After a pass finishes, three things live under the run's output directory — `examples/<study-id>/passes/<run-id>/` for greenfield (`/sdlc:pass`, `/sdlc:run`), `.sdlc/runs/<YYYYMMDD-HHMMSS>-<intent>-<slug>/` for brownfield (`/sdlc:brownfield`, `/sdlc:pass --mode=brownfield`):
+After a pass finishes, three things live under the run's output directory — `examples/<study-id>/passes/<run-id>/` for greenfield (`/mmo:pass`, `/mmo:greenfield`), `.sdlc/runs/<YYYYMMDD-HHMMSS>-<intent>-<slug>/` for brownfield (`/mmo:brownfield`, `/mmo:pass --mode=brownfield`):
 
 - `telemetry.jsonl` — one JSON object per line, one line per LLM call. The raw data.
 - `manifest.json` — a rollup of the telemetry into totals, per-phase breakdown, and metadata.
+- `orchestrator.log` — the `MMO:`-prefixed event trace: phase and gate boundaries, subagent hand-offs, routing decisions, dispatch summaries. Not cost data — see [logging.md](logging.md) and [methodology.md](methodology.md#the-mmo-log-stream-is-not-telemetry) for how it differs from `telemetry.jsonl`.
 - Generated source under `app/` (greenfield) or the files named at Gate 0 (brownfield) — the actual code the run produced.
 
 A fourth appears only on runs that delegated to the agent worker — installs that chose the agent path, via `--enable-agent` on the verify script or the wizard's question ([setup.md](setup.md#gemini-as-an-agent--antigravity-sdk)):
@@ -14,7 +15,7 @@ A fourth appears only on runs that delegated to the agent worker — installs th
 
 Brownfield runs add three more under `.sdlc/runs/<run-id>/`:
 
-- `provenance.json` — every file this run created or modified, keyed by path. `/sdlc:revert` reads this to undo the run.
+- `provenance.json` — every file this run created or modified, keyed by path. `/mmo:revert` reads this to undo the run.
 - `intent_brief.md`, `discovery.md`, `change_plan.md`, `senior-review.md`, `security-review.md`, `final_report.md` — the per-phase artifacts.
 - `packets.jsonl` — the TaskPacket stream the orchestrator dispatched, one per line.
 

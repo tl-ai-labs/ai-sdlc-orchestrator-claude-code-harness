@@ -63,8 +63,8 @@ The mechanical tier can be reached either as a model (one completion call per pa
 
 | Variable | Type | Default | Required when | Description |
 |---|---|---|---|---|
-| `SDLC_SELECT` | `slot=option,...` | unset (→ `flash-completion`, the model path) | selecting the agent | Written by `verify-setup.mjs --enable-agent` as `gemini-flash=flash-agsdk-worker`. Do not set by hand — writing just the option (`flash-agsdk-worker`) passes offline checks and throws at policy load, after premium phases are billed. |
-| `GEMINI_WORKER_PYTHON` | path | plugin-built venv at `plugin/mcp/gemini-flash-server/worker/.venv/bin/python` | using your own interpreter | Python ≥ 3.10 with `google-antigravity` installed. Skips the built-in venv. |
+| `MMO_SELECT` | `slot=option,...` | unset (→ `flash-completion`, the model path) | selecting the agent | Written by `verify-setup.mjs --enable-agent` as `gemini-flash=flash-agsdk-worker`. Do not set by hand — writing just the option (`flash-agsdk-worker`) passes offline checks and throws at policy load, after premium phases are billed. |
+| `GEMINI_WORKER_PYTHON` | path | plugin-built venv at `plugin/mcp/model-dispatch/worker/.venv/bin/python` | using your own interpreter | Python ≥ 3.10 with `google-antigravity` installed. Skips the built-in venv. |
 
 **Constraints.**
 
@@ -79,7 +79,7 @@ On the plugin route, [SETUP.md](../SETUP.md) puts the question to you as step 5 
 You can run the flag yourself at any time, on either route:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
 ```
 
 Or, from a clone:
@@ -108,19 +108,19 @@ node plugin/scripts/probe-agent-worker.mjs
 Or on the plugin route:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/probe-agent-worker.mjs | tail -1)"
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/probe-agent-worker.mjs | tail -1)"
 ```
 
 Cost: about two cents (~12k input, ~150 output — almost entirely the SDK preamble). `verify-setup.mjs` prints this command at the end of its own output when the install selects the agent path and every offline check passes.
 
 ### Every credential combination
 
-The setup check reads five things — `GEMINI_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, the gcloud ADC file, `GOOGLE_CLOUD_PROJECT`, and `SDLC_SELECT` — and the combinations they form are enumerated below. Rows 5, 6 and 8 are the ones worth knowing by name: each looks like a working install to a naive check and each fails at the first Gemini call rather than at setup, so each is flagged explicitly.
+The setup check reads five things — `GEMINI_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, the gcloud ADC file, `GOOGLE_CLOUD_PROJECT`, and `MMO_SELECT` — and the combinations they form are enumerated below. Rows 5, 6 and 8 are the ones worth knowing by name: each looks like a working install to a naive check and each fails at the first Gemini call rather than at setup, so each is flagged explicitly.
 
 To walk a row, set what its second column names and run:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)"
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)"
 ```
 
 | # | What is set | Finding | Runs? |
@@ -132,7 +132,7 @@ node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setu
 | 5 | `GOOGLE_CLOUD_PROJECT` only | `gemini-credentials` (warning) | A project ID says where to bill, not who is asking. Inside Google Cloud the credential arrives from the metadata server and this works; on a laptop it does not. Not offline-resolvable — hence a warning. |
 | 6 | `GOOGLE_APPLICATION_CREDENTIALS` → a file that is missing, truncated, or not a credential | `gemini-credentials-broken` (blocking) | Nothing. `GOOGLE_APPLICATION_CREDENTIALS` outranks the gcloud ADC file, so a broken one hides a working login. |
 | 7 | `GEMINI_API_KEY` **and** Google Cloud credentials | — | Model path through AI Studio — the key wins. `GEMINI_BACKEND` overrides. The agent path is still available. |
-| 8 | `SDLC_SELECT=gemini-flash=flash-agsdk-worker` with only `GEMINI_API_KEY` | `agent-worker-credentials` (blocking) | Nothing. The run is routed to the agent path and the key cannot reach it — the wrong door, not a partial credential. |
+| 8 | `MMO_SELECT=gemini-flash=flash-agsdk-worker` with only `GEMINI_API_KEY` | `agent-worker-credentials` (blocking) | Nothing. The run is routed to the agent path and the key cannot reach it — the wrong door, not a partial credential. |
 
 Two combinations are absent because they are not credential states. A variable that arrived as the literal `${NAME}` is reported separately as `env-placeholders` and treated as unset. Row 8 with a named project but no credential downgrades to `agent-worker-credentials-unproven` (warning), for the same reason row 5 does.
 
@@ -140,7 +140,7 @@ What none of these rows tells you is whether a well-formed credential is still l
 
 ## Per-project policy pick
 
-The one and only step in the whole flow that opens a browser. Every run in this folder — `/sdlc:run`, `/sdlc:brownfield`, `/sdlc:pass` without `--policy` — uses the policy picked here, unless the flag overrides it for one run.
+The one and only step in the whole flow that opens a browser. Every run in this folder — `/mmo:greenfield`, `/mmo:brownfield`, `/mmo:pass` without `--policy` — uses the policy picked here, unless the flag overrides it for one run.
 
 Written to `.sdlc/project.json.default_policy` in the current repo. Per-project, so a compliance-sensitive repo can pin Opus everywhere while a side project runs on Flash.
 
@@ -151,17 +151,17 @@ On the plugin route, [SETUP.md](../SETUP.md) §5b puts the choice to you. Four o
 | **Open the browser to author or customize a policy** | Starts `plugin/policy-console/` (a single HTML page served by a tiny Node http server) on the first free port from 3000, opens the browser, watches `plugin/config/policies/` via `fs.watch`. Clicking Save writes a new YAML and the script auto-detects the write. | Any non-preset policy — different thinking budgets per phase, custom model per task-type, a policy that pins a region. |
 | **`opus-plus-flash`** (recommended) | Silent set. Claude Opus for judgment phases, Gemini 3.5 Flash for mechanical (codegen, tests, docs). | The cost-efficient default. |
 | **`opus-only`** | Silent set. Claude Opus for every phase. | Single-model baseline, or when Gemini access is unavailable. |
-| **Skip** | Leaves `default_policy` unset. `/sdlc:run` and `/sdlc:brownfield` refuse to start until a policy is picked. | Almost never. Prefer picking `opus-plus-flash` and changing later. |
+| **Skip** | Leaves `default_policy` unset. `/mmo:greenfield` and `/mmo:brownfield` refuse to start until a policy is picked. | Almost never. Prefer picking `opus-plus-flash` and changing later. |
 
 Change the choice at any time from a running session:
 
 ```
-/sdlc:policy           # show the current policy and when it was set
-/sdlc:policy change    # opens the browser console again
-/sdlc:policy --policy=opus-only    # silent set to a shipped preset
+/mmo:policy           # show the current policy and when it was set
+/mmo:policy change    # opens the browser console again
+/mmo:policy --policy=opus-only    # silent set to a shipped preset
 ```
 
-Prior runs' `provenance.json` records the policy that was in effect at run time; those are not rewritten when the default changes. Overriding a single run without touching the default: type a different policy name at Gate 0 in `/sdlc:brownfield`, or pass `--policy <name>` to `/sdlc:pass`.
+Prior runs' `provenance.json` records the policy that was in effect at run time; those are not rewritten when the default changes. Overriding a single run without touching the default: type a different policy name at Gate 0 in `/mmo:brownfield`, or pass `--policy <name>` to `/mmo:pass`.
 
 ## Install dependencies (clone route)
 
@@ -171,6 +171,6 @@ From the repo root:
 node tools/setup.mjs
 ```
 
-The wizard verifies each prerequisite, installs and builds the bundled MCP server, and copies the slash command + subagents into `./.claude/` so Claude Code finds them in interactive and headless modes. Nothing is written outside this repo except the newly built `plugin/mcp/gemini-flash-server/node_modules/` and `dist/`.
+The wizard verifies each prerequisite, installs and builds the bundled MCP server, and copies the slash command + subagents into `./.claude/` so Claude Code finds them in interactive and headless modes. Nothing is written outside this repo except the newly built `plugin/mcp/model-dispatch/node_modules/` and `dist/`.
 
 The plugin route runs the same checks through [SETUP.md](../SETUP.md).

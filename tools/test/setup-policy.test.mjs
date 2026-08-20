@@ -128,7 +128,7 @@ test("--list-json on the shipped policies dir returns correctly-shaped JSON entr
     assert.ok(Array.isArray(opusPlusFlash.required_env), "required_env array");
     assert.equal(typeof opusPlusFlash.requires_vertex_adc, "boolean");
     assert.equal(typeof opusPlusFlash.requires_claude_cli, "boolean");
-    // opus-plus-flash uses builtin-anthropic + mcp:gemini-flash-server + antigravity-worker
+    // opus-plus-flash uses builtin-anthropic + mcp:model-dispatch + antigravity-worker
     assert.ok(opusPlusFlash.required_env.includes("ANTHROPIC_API_KEY"));
     assert.ok(opusPlusFlash.required_env.includes("GEMINI_API_KEY"));
     assert.equal(opusPlusFlash.requires_vertex_adc, true, "antigravity-worker → vertex ADC");

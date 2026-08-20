@@ -4,9 +4,31 @@
 
 How the tokens and costs on the report are derived, in plain terms.
 
+## The `MMO:` log stream is not telemetry
+
+`telemetry.jsonl` and the `MMO:`-prefixed log stream ([docs/logging.md](logging.md)) record
+different things and neither replaces the other.
+
+`telemetry.jsonl` is cost accounting: one `TelemetryEvent` per dispatch attempt, written once
+that attempt completes, carrying exactly the fields the report ([understanding-output.md](understanding-output.md))
+sums into dollars and tokens — `input_tokens`, `output_tokens`, `cost_usd`, `provenance`, and so
+on. It says nothing about whether a call was *attempted*, which model routing chose and why, or
+what an Antigravity SDK worker did while it held the working directory.
+
+The log stream is an event trace: every phase and gate boundary, every subagent hand-off, every
+model dispatch's routing decision, every vendor API request/response, every AG SDK worker spawn
+and exit — `MMO: <timestamp> <LEVEL> <event> key=value…`, one line per event, to stderr and to
+`<output_dir>/orchestrator.log`. It carries no dollar figures and is not summed into anything; it
+exists to answer "what did this run actually do," which a cost ledger cannot.
+
+The two are written independently and can diverge in count: a dispatch that fails before a vendor
+call completes emits `dispatch.error` on the log stream but no `TelemetryEvent` (nothing to bill).
+Cross-referencing the two by `run_id` (log) and `pass` (telemetry) reconstructs the full picture —
+what ran, in what order, and what it cost.
+
 ## The mode determines everything
 
-Every telemetry event carries a `provenance` field: `"vendor"` or `"estimated"`. The report labels the whole run according to what's on those events. The mode is chosen per run via the required `--auth=vendor|estimated` flag on `/sdlc:pass`. The orchestrator reads the flag at startup and follows that path for every event; if the flag is missing the run aborts. Mode is not inferred from `ANTHROPIC_API_KEY` presence — the flag is the sole source of truth, so identical commands produce identical modes regardless of the shell's env-var state.
+Every telemetry event carries a `provenance` field: `"vendor"` or `"estimated"`. The report labels the whole run according to what's on those events. The mode is chosen per run via the required `--auth=vendor|estimated` flag on `/mmo:pass`. The orchestrator reads the flag at startup and follows that path for every event; if the flag is missing the run aborts. Mode is not inferred from `ANTHROPIC_API_KEY` presence — the flag is the sole source of truth, so identical commands produce identical modes regardless of the shell's env-var state.
 
 ### Vendor-authoritative mode — `--auth=vendor`
 

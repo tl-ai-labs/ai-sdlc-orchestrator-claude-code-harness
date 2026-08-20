@@ -18,7 +18,7 @@ brownfield:
 | **Test execution** — running your test command | local | Bash on your machine, no model call |
 
 Only which phases FIRE changes per intent (per the intent matrix in
-`plugin/skills/run-ai-sdlc/SKILL.md`). Tier assignment stays stable.
+`plugin/skills/pipeline/SKILL.md`). Tier assignment stays stable.
 
 ## Per intent — which phases fire, at which tier
 
@@ -70,11 +70,11 @@ Five ways to change routing:
 
 1. **Do nothing** — `opus-plus-flash` loads out of the box on install. Requires an Anthropic
    API key + a Gemini API key (or GCP auth for the Gemini Enterprise Agent Platform path).
-2. **`/sdlc:policy change`** — the everyday way. Opens the browser console, pick or author a
+2. **`/mmo:policy change`** — the everyday way. Opens the browser console, pick or author a
    policy, saved to `.sdlc/project.json.default_policy`. Every subsequent run in this folder
    uses it until changed again.
-3. **Pick a different shipped policy for one run** — pass `--policy <name>` to `/sdlc:pass`,
-   or type it at Gate 0 in `/sdlc:brownfield`. Alternatives include `opus-only` (no Gemini
+3. **Pick a different shipped policy for one run** — pass `--policy <name>` to `/mmo:pass`,
+   or type it at Gate 0 in `/mmo:brownfield`. Alternatives include `opus-only` (no Gemini
    needed, ~10× more per run). v1.5 will ship `ci-strict` (blocks writes unless
    `--allow-write`), `bedrock-claude-only`, `vertex-mixed`, and `self-hosted-only`.
 4. **Author a custom policy in the browser console** — the recommended path for new

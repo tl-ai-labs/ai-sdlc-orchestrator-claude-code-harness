@@ -22,7 +22,7 @@ npm install
 npm audit           # reports the CVE
 npm test            # 1 test passes
 
-# /sdlc:brownfield  →  deps
+# /mmo:brownfield  →  deps
 ```
 
 ## Expected outputs

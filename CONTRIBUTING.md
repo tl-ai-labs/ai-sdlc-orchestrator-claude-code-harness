@@ -36,9 +36,9 @@ The tooling scripts under `tools/` (`setup.mjs`, `report.mjs`, `logfmt.mjs`, and
 
 The same goes for `plugin/scripts/` (`verify-setup.mjs`, `probe-agent-worker.mjs`), and there the reason is stronger than preference: those two have to run on a machine that installed the plugin with `/plugin install` and therefore has no `tools/` directory, no `node_modules/`, and no build output. Anything they import has to be either a Node builtin or something they can find inside the plugin. Their tests still live in `tools/test/`, where `npm test` picks them up — a test file may import from `plugin/scripts/`, but not the other way round.
 
-The MCP server (`plugin/mcp/gemini-flash-server/`) is TypeScript with a build step. Follow the existing conventions in that directory.
+The MCP server (`plugin/mcp/model-dispatch/`) is TypeScript with a build step. Follow the existing conventions in that directory.
 
-There is one Python file, `plugin/mcp/gemini-flash-server/worker/gemini_worker.py`, because the Antigravity SDK it drives is a Python package and there is no other way to reach it. It is deliberately the only one, and it is only ever installed on machines that opted into the agent path — a plugin that quietly required Python of everyone would be a worse trade than the feature is worth. Keep it that way: new work belongs in TypeScript unless it, too, can only be done from Python.
+There is one Python file, `plugin/mcp/model-dispatch/worker/gemini_worker.py`, because the Antigravity SDK it drives is a Python package and there is no other way to reach it. It is deliberately the only one, and it is only ever installed on machines that opted into the agent path — a plugin that quietly required Python of everyone would be a worse trade than the feature is worth. Keep it that way: new work belongs in TypeScript unless it, too, can only be done from Python.
 
 ## Writing style
 

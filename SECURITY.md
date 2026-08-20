@@ -16,7 +16,7 @@ We will acknowledge the report within 3 business days and coordinate a fix and d
 Security-relevant issues include, but are not limited to:
 
 - API keys, tokens, or other secrets accidentally committed to the repo.
-- Vulnerabilities in the bundled MCP server (`plugin/mcp/gemini-flash-server/`).
+- Vulnerabilities in the bundled MCP server (`plugin/mcp/model-dispatch/`).
 - Vulnerabilities in the setup or report tooling.
 - Any code path that could exfiltrate user data or credentials.
 

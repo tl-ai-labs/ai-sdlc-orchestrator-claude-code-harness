@@ -20,7 +20,7 @@ models:
 
   # Gemini 3.7 Flash as a MODEL. One completion call per packet.
   - id: flash-completion
-    adapter: mcp:gemini-flash-server
+    adapter: mcp:model-dispatch
     model_name: gemini-3.7-flash
     display_name: gemini-3.7-flash
     # Flat global/AI-Studio rates. Vertex adds +10% on every token class for

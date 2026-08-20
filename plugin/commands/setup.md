@@ -20,7 +20,7 @@ pause only when a human decision is genuinely required.
 
 This is the RE-VERIFY / RE-CONFIGURE command. First-time install (marketplace add + `/plugin
 install`) still lives in [SETUP.md](../../SETUP.md) — the plugin has to exist before its slash
-commands do. `/sdlc:setup` covers everything from step 3 of SETUP.md onward: MCP server build,
+commands do. `/mmo:setup` covers everything from step 3 of SETUP.md onward: MCP server build,
 environment check, credential probe, Gemini door, policy pick, and the hand-over banner.
 
 Every step below auto-runs unless it hits a genuine decision. Print one line per completed step,
@@ -54,7 +54,7 @@ The script reports three kinds of finding:
 
 Write supplied credentials to the `env` block of `~/.claude/settings.json` (or use
 `gcloud auth application-default login` for the Google Cloud path — no env var involved). Never
-write `SDLC_SELECT` by hand; step 3 handles it.
+write `MMO_SELECT` by hand; step 3 handles it.
 
 # 3. Gemini door — auto-pick if only one works, ask only if both are available
 
@@ -81,7 +81,7 @@ When switching to Antigravity:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-setup.mjs" --enable-agent --project-root "$(pwd)"
 ```
 
-Add `--user` if the caller passed `--user`. This writes `SDLC_SELECT=gemini-flash=flash-agsdk-worker`
+Add `--user` if the caller passed `--user`. This writes `MMO_SELECT=gemini-flash=flash-agsdk-worker`
 to the settings file and builds the Python environment the agent path needs.
 
 # 4. Policy pick
@@ -96,7 +96,7 @@ If `--policy=<name>` was supplied, honor it silently — no prompt, no browser:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --policy=<name> --project-root "$(pwd)"
 ```
 
-**Otherwise, use the same terminal picker as `/sdlc:policy change` Shape 2.** Skip the mid-run
+**Otherwise, use the same terminal picker as `/mmo:policy change` Shape 2.** Skip the mid-run
 guard here (no brownfield run has started yet in setup); everything else applies:
 
 1. Enumerate policies:
@@ -133,12 +133,12 @@ did not (e.g. the run stopped short earlier), print it explicitly:
 
 Try one of these in a NEW session in the same folder:
 
-  /sdlc:run          — generate a new app from a brief (empty folder)
-  /sdlc:brownfield   — work on this existing repo (docs, bugfix, feature, refactor, …)
-  /sdlc:policy       — change this project's model policy
-  /sdlc:pass         — headless/scripted run (for CI or replays)
+  /mmo:greenfield          — generate a new app from a brief (empty folder)
+  /mmo:brownfield   — work on this existing repo (docs, bugfix, feature, refactor, …)
+  /mmo:policy       — change this project's model policy
+  /mmo:pass         — headless/scripted run (for CI or replays)
 
-Current policy: <policyName>   (change: /sdlc:policy change)
+Current policy: <policyName>   (change: /mmo:policy change)
 ```
 
 Say plainly why a NEW session is required: Claude Code builds the slash-command list and starts
@@ -152,5 +152,5 @@ Every step is safe to re-run:
 - The Gemini-door flip is a plain settings write.
 - The policy pick reads `.sdlc/project.json` first and skips the browser if a policy is already set.
 
-Re-run `/sdlc:setup` after `/plugin update` (the update wipes `dist/`; `--fix` restores it), or
+Re-run `/mmo:setup` after `/plugin update` (the update wipes `dist/`; `--fix` restores it), or
 whenever a credential changes.

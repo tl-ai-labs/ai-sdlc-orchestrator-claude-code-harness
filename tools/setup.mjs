@@ -87,7 +87,7 @@ if (which("claude")) {
   if (!proceed) { rl.close(); process.exit(1); }
 }
 
-// Auth mode is per-run via /sdlc:pass --auth=. This just reports.
+// Auth mode is per-run via /mmo:pass --auth=. This just reports.
 step("API keys — availability");
 if (process.env.ANTHROPIC_API_KEY) {
   ok("ANTHROPIC_API_KEY is set — --auth=vendor is available.");
@@ -169,7 +169,7 @@ if (!hasVertex) {
 }
 
 step("Bundled MCP server dependencies");
-const mcpDir = join(ROOT, "plugin", "mcp", "gemini-flash-server");
+const mcpDir = join(ROOT, "plugin", "mcp", "model-dispatch");
 const nodeMods = join(mcpDir, "node_modules");
 if (existsSync(nodeMods) && existsSync(join(mcpDir, "dist", "server.js"))) {
   ok("MCP server already built.");
@@ -181,7 +181,7 @@ if (existsSync(nodeMods) && existsSync(join(mcpDir, "dist", "server.js"))) {
     ok("MCP server built successfully.");
   } catch {
     fail("MCP server build failed. See the output above.");
-    hint("You can retry with: cd plugin/mcp/gemini-flash-server && npm install && npm run build");
+    hint("You can retry with: cd plugin/mcp/model-dispatch && npm install && npm run build");
     rl.close();
     process.exit(1);
   }
@@ -205,7 +205,7 @@ if (geminiAsAgent) {
       for (const line of built.detail.split("\n").slice(1)) hint(line);
       if (built.reason === "no-python") hint("  brew install python@3.12   # then: npm run setup");
       warn("Continuing on the model path — nothing else in this wizard needs Python.");
-      // Load-bearing: also gates the SDLC_SELECT write below.
+      // Load-bearing: also gates the MMO_SELECT write below.
       geminiAsAgent = false;
     }
   }
@@ -229,16 +229,16 @@ for (const a of ["orchestrator", "architect", "senior-reviewer", "security-revie
 }
 ok("Slash command + all subagents installed under ./.claude/");
 
-// Bare `gemini-flash-server` key: clone-route servers keep their key
-// verbatim (mcp__gemini-flash-server__*). Plugin route namespaces to
-// mcp__plugin_sdlc_gemini-flash-server__*. The
+// Bare `model-dispatch` key: clone-route servers keep their key
+// verbatim (mcp__model-dispatch__*). Plugin route namespaces to
+// mcp__plugin_mmo_model-dispatch__*. The
 // orchestrator's frontmatter grants both spellings.
 const mcpJsonPath = join(ROOT, ".mcp.json");
 const mcpEntry = {
   mcpServers: {
-    "gemini-flash-server": {
+    "model-dispatch": {
       command: "node",
-      args: [join(ROOT, "plugin", "mcp", "gemini-flash-server", "dist", "server.js")],
+      args: [join(ROOT, "plugin", "mcp", "model-dispatch", "dist", "server.js")],
       // Stdio MCP servers inherit nothing — every variable the server reads
       // must be forwarded explicitly.
       env: {
@@ -250,8 +250,12 @@ const mcpEntry = {
             "GOOGLE_CLOUD_PROJECT",
             "GOOGLE_CLOUD_LOCATION",
             "GEMINI_BACKEND",
-            "SDLC_SELECT",
+            "MMO_SELECT",
+            "SDLC_SELECT", // MMO-D8 compat shim — pre-rename installs still export this
             "GEMINI_WORKER_PYTHON",
+            "MMO_LOG_LEVEL",
+            "MMO_VERBOSE",
+            "MMO_LOG_PREFIX",
           ]
             .filter((name) => process.env[name])
             .map((name) => [name, process.env[name]]),
@@ -259,8 +263,8 @@ const mcpEntry = {
         // Answer to the agent-path question, persisted for the future Claude
         // Code session. Written only when agent selected, so model-path
         // .mcp.json is unchanged from before this question existed. Spread
-        // order: this wins over an inherited SDLC_SELECT (more recent intent).
-        ...(geminiAsAgent ? { SDLC_SELECT: "gemini-flash=flash-agsdk-worker" } : {}),
+        // order: this wins over an inherited MMO_SELECT (more recent intent).
+        ...(geminiAsAgent ? { MMO_SELECT: "gemini-flash=flash-agsdk-worker" } : {}),
       },
     },
   },
@@ -268,32 +272,32 @@ const mcpEntry = {
 writeFileSync(mcpJsonPath, JSON.stringify(mcpEntry, null, 2) + "\n");
 ok(".mcp.json written — plain `claude` will discover the MCP server.");
 if (geminiAsAgent) {
-  ok("Mechanical tier set to the agent path (SDLC_SELECT=gemini-flash=flash-agsdk-worker).");
+  ok("Mechanical tier set to the agent path (MMO_SELECT=gemini-flash=flash-agsdk-worker).");
   hint("  To go back to the model path: npm run verify -- --disable-agent");
 }
 
 step("Ready");
 console.log(`
-  ${c.bold}Setup complete.${c.reset} Pick an auth mode per run via --auth on /sdlc:pass.
+  ${c.bold}Setup complete.${c.reset} Pick an auth mode per run via --auth on /mmo:pass.
 
   ${c.bold}Interactive${c.reset} (recommended for first run — you see HITL gates):
     ${c.dim}# --permission-mode acceptEdits auto-approves file reads/writes${c.reset}
     ${c.dim}# inside this repo so the run only stops at the four HITL gates.${c.reset}
     claude --permission-mode acceptEdits
     ${c.dim}# then at the prompt (vendor mode — needs ANTHROPIC_API_KEY):${c.reset}
-    > /sdlc:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
+    > /mmo:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md
     ${c.dim}# or estimator mode (subscription auth, no API key required):${c.reset}
-    > /sdlc:pass --auth=estimated --run-id=pass1 examples/workforce-ops/brief.md
+    > /mmo:pass --auth=estimated --run-id=pass1 examples/workforce-ops/brief.md
 
   ${c.bold}Headless${c.reset} (unattended, captured to a log file):
     ${c.dim}# opus-only baseline under vendor mode${c.reset}
-    claude --print "/sdlc:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md" \\
+    claude --print "/mmo:pass --auth=vendor --run-id=pass1 examples/workforce-ops/brief.md" \\
       --permission-mode acceptEdits \\
       --output-format stream-json --verbose \\
       > examples/workforce-ops/passes/pass1/live-run.log
 
     ${c.dim}# opus + Gemini Flash multi-model under vendor mode${c.reset}
-    claude --print "/sdlc:pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md" \\
+    claude --print "/mmo:pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md" \\
       --permission-mode acceptEdits \\
       --output-format stream-json --verbose \\
       > examples/workforce-ops/passes/pass2/live-run.log
@@ -305,7 +309,7 @@ console.log(`
 
   To run the pipeline against a brief other than the shipped one, copy
   docs/brief-template.md, fill it in, and invoke:
-    /sdlc:pass --auth=vendor --study=<your-project> --run-id=pass1 path/to/your-brief.md
+    /mmo:pass --auth=vendor --study=<your-project> --run-id=pass1 path/to/your-brief.md
 
   Full docs are in docs/. Start with docs/running.md.
 `);

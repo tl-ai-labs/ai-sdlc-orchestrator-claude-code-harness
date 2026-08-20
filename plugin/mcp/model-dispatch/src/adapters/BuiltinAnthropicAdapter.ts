@@ -9,6 +9,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { AttemptRecord, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
 import { computeCostUsd, estimateTokens } from "../pricing.js";
 import type { ModelAdapter } from "./ModelAdapter.js";
+import { log } from "../log.js";
 
 // Fallback when the policy YAML omits max_output_tokens_absolute. 32000 is
 // the current Opus 4.7 output ceiling.
@@ -62,6 +63,15 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
         messages: [{ role: "user", content: userPrompt }],
       };
 
+      log("debug", "api.anthropic.request", {
+        packet_id: packet.id,
+        model_name: this.modelConfig.model_name,
+        max_tokens: ceiling,
+        system_bytes: stableBlock ? Buffer.byteLength(stableBlock) : 0,
+        messages_bytes: Buffer.byteLength(userPrompt),
+        cache_control: stableBlock ? "ephemeral" : undefined,
+      });
+
       let resp: any;
       let vendorError: string | undefined;
       try {
@@ -77,8 +87,20 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
           if (!rejectsTemperature) throw e;
           resp = await this.client.messages.create(baseReq);
         }
+        log("debug", "api.anthropic.response", {
+          packet_id: packet.id,
+          model_name: this.modelConfig.model_name,
+          stop_reason: resp.stop_reason,
+          usage: JSON.stringify(resp.usage ?? {}),
+          http_status: 200,
+        });
       } catch (err: any) {
         vendorError = err?.message ?? String(err);
+        log("debug", "api.anthropic.response", {
+          packet_id: packet.id,
+          model_name: this.modelConfig.model_name,
+          http_status: err?.status ?? err?.response?.status,
+        });
         const failTokens = { input: estimateTokens(userPrompt), input_cached: 0, output: 0 };
         const attempt: AttemptRecord = {
           attempt_number: attemptNumber,

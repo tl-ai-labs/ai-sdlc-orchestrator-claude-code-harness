@@ -41,7 +41,7 @@ harmless when the cache is already current.
 ## 2. Install the plugin
 
 ```
-/plugin install sdlc@tilicho-ai-labs
+/plugin install mmo@tilicho-ai-labs
 ```
 
 Check the version it reports against `.claude-plugin/marketplace.json` on the repo's default
@@ -70,7 +70,7 @@ configured server path does not exist.
 Locate the installed plugin and run its setup script:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --fix
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)" --fix
 ```
 
 `--fix` installs the server's dependencies and builds it. The script re-checks afterwards and
@@ -149,7 +149,7 @@ here.
 On **Antigravity SDK**, run the same script from step 3 with `--enable-agent` instead of `--fix`:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
 ```
 
 That flag writes the selection into `.claude/settings.local.json` in the current folder — this
@@ -157,7 +157,7 @@ folder only; add `--user` to set it for every folder on the machine — and then
 `--fix` does, including building the Python environment the agent path needs. `--disable-agent`
 reverses it.
 
-**Do not write `SDLC_SELECT` into a settings file by hand, and do not have the user do it.** The
+**Do not write `MMO_SELECT` into a settings file by hand, and do not have the user do it.** The
 value is a `slot=option` pair, `gemini-flash=flash-agsdk-worker`, and the half that gets dropped
 is the slot. A spec missing it looks right, passes the setup check, and then throws when the
 policy loads — after the premium phases of a run have already been billed. The flag exists so that
@@ -173,7 +173,7 @@ about two cents, and it is the only thing here that settles them.
 
 Per-project, not install-wide — a compliance-sensitive repo may want Opus everywhere while a
 side project runs on Flash. The choice is stored in `.sdlc/project.json.default_policy` in the
-current repo and picked up by every subsequent `/sdlc:run` or `/sdlc:brownfield` in that folder.
+current repo and picked up by every subsequent `/mmo:greenfield` or `/mmo:brownfield` in that folder.
 Applies equally to greenfield and brownfield projects.
 
 **Confirm you are in the project directory**, then run the picker. It stays in the terminal for
@@ -182,7 +182,7 @@ every shipped preset; the browser only opens if the user picks `Author a new pol
 1. Enumerate policies:
 
    ```bash
-   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/setup-policy.mjs | tail -1)" --list-json --project-root "$(pwd)"
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/setup-policy.mjs | tail -1)" --list-json --project-root "$(pwd)"
    ```
 
 2. Ask the user via `AskUserQuestion` which policy to use. Options are one per policy from step 1
@@ -191,7 +191,7 @@ every shipped preset; the browser only opens if the user picks `Author a new pol
 3. If the user picks a policy name, run the credential check:
 
    ```bash
-   node ".../scripts/setup-policy.mjs" --check-creds --policy=<chosen> --project-root "$(pwd)"
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/setup-policy.mjs | tail -1)" --check-creds --policy=<chosen> --project-root "$(pwd)"
    ```
 
    - `ok: true` → persist with `--policy=<chosen>`. Done.
@@ -201,7 +201,7 @@ every shipped preset; the browser only opens if the user picks `Author a new pol
 4. If the user picks `Author a new policy (opens browser)`, run the script bare:
 
    ```bash
-   node ".../scripts/setup-policy.mjs" --project-root "$(pwd)"
+   node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/setup-policy.mjs | tail -1)" --project-root "$(pwd)"
    ```
 
    This starts the policy console (`plugin/policy-console/`, a single HTML page served by a tiny
@@ -236,19 +236,19 @@ verbatim so the user sees every command they can now use:
 
   Try one of these in a NEW session in the same folder:
 
-    /sdlc:run          — generate a new app from a brief (empty folder)
-    /sdlc:brownfield   — work on this existing repo (docs, bugfix, feature, refactor, …)
-    /sdlc:policy       — show / change this project's model policy
-    /sdlc:pass         — headless/scripted run (for CI or replays)
-    /sdlc:setup        — re-verify or re-configure this install any time
+    /mmo:greenfield          — generate a new app from a brief (empty folder)
+    /mmo:brownfield   — work on this existing repo (docs, bugfix, feature, refactor, …)
+    /mmo:policy       — show / change this project's model policy
+    /mmo:pass         — headless/scripted run (for CI or replays)
+    /mmo:setup        — re-verify or re-configure this install any time
 ```
 
 Pick the one that matches the folder the user is standing in — the two task commands
-(`/sdlc:run`, `/sdlc:brownfield`) take no arguments and ask for whatever they need.
+(`/mmo:greenfield`, `/mmo:brownfield`) take no arguments and ask for whatever they need.
 
 **Say this in the same breath: the command is not available in this session.** Claude Code builds
 its list of slash commands when a session starts, and nothing written to disk afterwards can add
-one to a session already running. The install is complete and correct; `/sdlc:run` simply arrives
+one to a session already running. The install is complete and correct; `/mmo:greenfield` simply arrives
 one session late. Tell the user to open a new session in the same folder and type it there, where
 it will be in the menu.
 
@@ -272,7 +272,7 @@ the restart it was meant to save.
 The same script, without `--fix`, re-checks an existing install and changes nothing:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)"
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)"
 ```
 
 Run it after `/plugin update`. An update re-copies the plugin from source, which removes the
@@ -300,12 +300,12 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 
 ## Brownfield addendum
 
-If the user's intent is to use `/sdlc:brownfield` (extend an existing repo — not generate a new
+If the user's intent is to use `/mmo:brownfield` (extend an existing repo — not generate a new
 project from scratch), the plugin runs **additional prerequisite checks** after step 3's
 `--fix`. Same script, extra flag:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --brownfield-check
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)" --brownfield-check
 ```
 
 `--brownfield-check` runs the greenfield checks in step 3–4 AND then appends:
@@ -336,7 +336,7 @@ The shepherd behavior contract for prompt 1 in brownfield mode (documented in pl
   Every call passes `--project-root "$(pwd)"` so the state file lands in the project the user
   is standing in, not in whichever git worktree an earlier `cd` may have drifted into.
   `session-hydrate.mjs` reads this file on every subsequent command; if a session dies
-  mid-setup, the next `/sdlc:brownfield` picks up from the first pending section — no user
+  mid-setup, the next `/mmo:brownfield` picks up from the first pending section — no user
   intervention needed, no new command required.
 - **Final summary always.** Line-by-line status of what was done, what the user did, what was
   skipped (with consequences noted).

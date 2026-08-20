@@ -8,12 +8,12 @@ Symptom → cause → fix. If the fix is a command, it is copy-paste-runnable.
 
 | Command | What it tells you |
 |---|---|
-| `/sdlc:setup` (inside Claude Code) | Re-verify and re-configure this project. Rebuilds the MCP server, re-checks credentials, prints one line per completed step, pauses only on missing credentials or when a decision is needed. The first command to reach for. |
-| `/sdlc:policy` | Which policy this project uses and when it was set. `/sdlc:policy change` opens the browser to change it. |
+| `/mmo:setup` (inside Claude Code) | Re-verify and re-configure this project. Rebuilds the MCP server, re-checks credentials, prints one line per completed step, pauses only on missing credentials or when a decision is needed. The first command to reach for. |
+| `/mmo:policy` | Which policy this project uses and when it was set. `/mmo:policy change` opens the browser to change it. |
 | `/plugin` | Which plugins are installed and enabled. |
 | `claude --debug` | Prints the plugin's env pass-through, MCP handshake, and tool invocations. |
-| `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs \| tail -1)"` | Full offline check. Reports blocking (`✗`) and warning (`!`) findings, plus fix commands. `/sdlc:setup` wraps this. |
-| `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/probe-agent-worker.mjs \| tail -1)"` | One real Antigravity delegation, ~2¢. Only cheap way to confirm entitlement, region, and credential liveness. |
+| `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs \| tail -1)"` | Full offline check. Reports blocking (`✗`) and warning (`!`) findings, plus fix commands. `/mmo:setup` wraps this. |
+| `node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/probe-agent-worker.mjs \| tail -1)"` | One real Antigravity delegation, ~2¢. Only cheap way to confirm entitlement, region, and credential liveness. |
 
 From a clone:
 
@@ -29,14 +29,14 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 | `Node <n> — this repo needs Node 20 or newer` | Older Node on `PATH`. | `nvm install --lts`, or install from [nodejs.org](https://nodejs.org). |
 | `verify-setup.mjs`: `mcp-dependencies` or `mcp-build` (blocking) | `dist/` and `node_modules/` are not tracked in git; a fresh install carries source only. | Re-run with `--fix` — runs `npm ci` then `npm run build` in the server directory. |
 | `/plugin marketplace add` reports the marketplace already exists | Cached from an earlier session. `add` is a no-op that leaves the cache stale. | `/plugin marketplace update tilicho-ai-labs`, then install again. |
-| `/sdlc:run` isn't in the slash-command menu | Commands register at session start; the install session doesn't have it. | Open a new session in the same folder. |
+| `/mmo:greenfield` isn't in the slash-command menu | Commands register at session start; the install session doesn't have it. | Open a new session in the same folder. |
 | `/reload-plugins` returns "isn't available in this environment" | The command does not exist in the desktop app. | Open a new session instead. |
 
 ## Auth mode
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `this run requires auth_mode=vendor\|estimated` | `/sdlc:pass` invoked without `--auth`. | Add `--auth=vendor` (needs `ANTHROPIC_API_KEY`) or `--auth=estimated` (needs a Claude Code subscription sign-in). |
+| `this run requires auth_mode=vendor\|estimated` | `/mmo:pass` invoked without `--auth`. | Add `--auth=vendor` (needs `ANTHROPIC_API_KEY`) or `--auth=estimated` (needs a Claude Code subscription sign-in). |
 | Report labels a run "Mixed" | `--auth=estimated` and the policy also dispatched Gemini. Direct-tier events are estimated, Gemini events are vendor-reported. | Expected. `E` next to a phase marks the estimated ones. |
 | Report totals don't match the Anthropic dashboard exactly | The run was `--auth=estimated`. | Re-run with `--auth=vendor` for numbers that reconcile to the console. |
 
@@ -46,7 +46,7 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 |---|---|---|
 | Halts before phase 1 with `halt_reason` naming models | An adapter this run's auth mode requires cannot be constructed — usually a missing credential. | Fix each named credential and restart. Constructions run offline; nothing was billed. |
 | Prints a `warnings` entry but the run starts | The failed adapter belongs to a model this run's auth mode never dispatches to (typically `builtin-anthropic` under `--auth=estimated`). | Expected. Only a model this run actually dispatches to halts. |
-| Lists a model under `not_selected` | The policy offers more than one way to reach a tier (a `select:` slot), and this run picked the other option. Prerequisites for the losing option are not checked. | Expected. Switch `SDLC_SELECT` if you meant the other one. |
+| Lists a model under `not_selected` | The policy offers more than one way to reach a tier (a `select:` slot), and this run picked the other option. Prerequisites for the losing option are not checked. | Expected. Switch `MMO_SELECT` if you meant the other one. |
 
 ## Anthropic
 
@@ -71,15 +71,15 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `select-spec` (blocking) | `SDLC_SELECT` is malformed. Commonest case: written as `flash-agsdk-worker` alone; the correct spelling is `gemini-flash=flash-agsdk-worker`. | Re-run `verify-setup.mjs --enable-agent` (writes it correctly) or `--disable-agent` (clears it). Do not edit by hand. |
-| `agent-worker-credentials` (blocking) | `SDLC_SELECT` selects the agent, but no Google Cloud credential is present. The Antigravity SDK is ADC-only; `GEMINI_API_KEY` cannot reach it. | `gcloud auth application-default login`. Or `verify-setup.mjs --disable-agent` to go back to the model path, which works with an AI Studio key. |
+| `select-spec` (blocking) | `MMO_SELECT` is malformed. Commonest case: written as `flash-agsdk-worker` alone; the correct spelling is `gemini-flash=flash-agsdk-worker`. | Re-run `verify-setup.mjs --enable-agent` (writes it correctly) or `--disable-agent` (clears it). Do not edit by hand. |
+| `agent-worker-credentials` (blocking) | `MMO_SELECT` selects the agent, but no Google Cloud credential is present. The Antigravity SDK is ADC-only; `GEMINI_API_KEY` cannot reach it. | `gcloud auth application-default login`. Or `verify-setup.mjs --disable-agent` to go back to the model path, which works with an AI Studio key. |
 | `agent-worker-credentials-unproven` (warning) | Agent selected; only `GOOGLE_CLOUD_PROJECT` is set. Works inside Google Cloud, fails on a laptop. This state cannot be resolved offline. | Settle with `probe-agent-worker.mjs`. If it fails to authenticate, `gcloud auth application-default login`. |
 | `agent-worker-python` (blocking) | Agent selected; no Python environment found. | Re-run `verify-setup.mjs --enable-agent` (or `--fix`, which builds the venv). Or set `GEMINI_WORKER_PYTHON` to a Python ≥3.10 with `google-antigravity` installed. Or `--disable-agent` to go back to the model path. |
 | `agent-worker-sdk` (blocking) | Python environment exists but cannot import `google.antigravity`. Usually: the interpreter it was built against was upgraded or removed. | Re-run `verify-setup.mjs --fix` — it rebuilds with `venv --clear`, replacing the broken environment. |
 | Delegated packet dies with a 403 | Billing project lacks the Antigravity / Model Garden entitlement. Not offline-checkable. | Request the entitlement in Google Cloud Console for the project. Verify with `probe-agent-worker.mjs`. |
 | Delegated packet dies with a 404 | Resolved region doesn't serve `gemini-3.5-flash-lite`. | Unset `GOOGLE_CLOUD_LOCATION` to hit `global`, or pin a region that serves the model. |
 | Delegated packet dies with a 401 | ADC file exists but the credential expired or was revoked. Not offline-checkable. | `gcloud auth application-default login`. |
-| Report has no "Delegated to an agent worker" section on a run that should have delegated | The run did not go through the agent path. `SDLC_SELECT` was missing, malformed, or applied only to a later session. | `verify-setup.mjs` should say why. Settings-file writes reach Claude Code only on the next session start. |
+| Report has no "Delegated to an agent worker" section on a run that should have delegated | The run did not go through the agent path. `MMO_SELECT` was missing, malformed, or applied only to a later session. | `verify-setup.mjs` should say why. Settings-file writes reach Claude Code only on the next session start. |
 
 ## Two Gemini doors — trade
 
@@ -98,37 +98,37 @@ Recorded on the same brief: model path 43k / 34k tokens for $0.84 wall-clock 28 
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Generated app fails to boot in tests with `Config validation error: "X" is required` | `.env.test` is missing keys the codegen's own `ConfigModule` demands. | Do not patch `.env` by hand — build a debug packet routed to `codegen` to add the keys with schema-valid values. See [plugin/skills/run-ai-sdlc/SKILL.md](../plugin/skills/run-ai-sdlc/SKILL.md). |
+| Generated app fails to boot in tests with `Config validation error: "X" is required` | `.env.test` is missing keys the codegen's own `ConfigModule` demands. | Do not patch `.env` by hand — build a debug packet routed to `codegen` to add the keys with schema-valid values. See [plugin/skills/pipeline/SKILL.md](../plugin/skills/pipeline/SKILL.md). |
 | Tests fail at load time on env vars, but `.env.test` looks complete | `.env.test` exists and `.env` does not — the orchestrator copies one to the other before `npm test`. If `.env` already existed it is not overwritten. | Delete a stale `.env`, or update it to match `.env.test`. |
 
 ## Policy
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `/sdlc:run` or `/sdlc:brownfield` refuses to start with "no default policy set" | `.sdlc/project.json` has no `default_policy` — either Skip was chosen at setup time, or the file has not been written yet. | `/sdlc:policy change` (opens the browser console) or `/sdlc:policy --policy=opus-plus-flash` (silent set). |
-| `/sdlc:policy` prints nothing / an empty line | Same as above — no policy set. | Same fix. |
-| A one-off run needs a different policy | The setup-time default applies until changed. | Pass `--policy <name>` to `/sdlc:pass`, or type a different policy at Gate 0 in `/sdlc:brownfield`. Neither writes to `.sdlc/project.json`. |
-| The browser opens but nothing happens after Save | The console watches `plugin/config/policies/` via `fs.watch`. If the save didn't land in that directory (older console versions), the script eventually times out at 10 minutes idle. | Update the plugin (`/plugin update` then `/sdlc:setup`) and re-run `/sdlc:policy change`. |
+| `/mmo:greenfield` or `/mmo:brownfield` refuses to start with "no default policy set" | `.sdlc/project.json` has no `default_policy` — either Skip was chosen at setup time, or the file has not been written yet. | `/mmo:policy change` (opens the browser console) or `/mmo:policy --policy=opus-plus-flash` (silent set). |
+| `/mmo:policy` prints nothing / an empty line | Same as above — no policy set. | Same fix. |
+| A one-off run needs a different policy | The setup-time default applies until changed. | Pass `--policy <name>` to `/mmo:pass`, or type a different policy at Gate 0 in `/mmo:brownfield`. Neither writes to `.sdlc/project.json`. |
+| The browser opens but nothing happens after Save | The console watches `plugin/config/policies/` via `fs.watch`. If the save didn't land in that directory (older console versions), the script eventually times out at 10 minutes idle. | Update the plugin (`/plugin update` then `/mmo:setup`) and re-run `/mmo:policy change`. |
 
 ## Brownfield-specific
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `/sdlc:brownfield` refuses on a non-git folder | Brownfield requires a git repo — the write-contract and revert both need commit-level state. | `git init` first, or use `/sdlc:run` on an empty folder for greenfield. |
+| `/mmo:brownfield` refuses on a non-git folder | Brownfield requires a git repo — the write-contract and revert both need commit-level state. | `git init` first, or use `/mmo:greenfield` on an empty folder for greenfield. |
 | Gate 0 shows constant off-limits paths you did not add | Setup wrote `off_limits_default` (`.env*`, `.mcp.json`, `node_modules/**`, etc.) to `.sdlc/project.json`. Gate 0 merges them with per-run additions before showing you the full list. | Expected. Edit `.sdlc/project.json.off_limits_default` if the project-wide default itself is wrong. |
 | A write-contract PreToolUse hook blocked an expected write | A path outside the allowlist, or a path in off-limits. Hook is HARD-BLOCK by default. | Add the path at Gate 0's File-scope question, or re-run with `--strict-write=off` to downgrade to WARN (defeats the safety guarantee). |
-| Want to undo the last brownfield run | Every brownfield run writes `provenance.json` under `.sdlc/runs/<run-id>/`. | `/sdlc:revert` (interactive picker) or `/sdlc:revert <run-id>`. |
+| Want to undo the last brownfield run | Every brownfield run writes `provenance.json` under `.sdlc/runs/<run-id>/`. | `/mmo:revert` (interactive picker) or `/mmo:revert <run-id>`. |
 
 ## Repair after `/plugin update`
 
 An update re-copies the plugin from source, which removes the `dist/` and `node_modules/` produced by `--fix`. Re-run:
 
 ```
-/sdlc:setup
+/mmo:setup
 ```
 
 Or, from a script:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/scripts/verify-setup.mjs | tail -1)" --fix
+node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)" --fix
 ```

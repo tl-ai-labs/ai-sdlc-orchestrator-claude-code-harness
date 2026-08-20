@@ -38,7 +38,7 @@ const V024_OPUS = {
   pricing: { input: 5.0, input_cached: 0.5, output: 25.0 },
 };
 const V024_FLASH = {
-  adapter: "mcp:gemini-flash-server",
+  adapter: "mcp:model-dispatch",
   model_name: "gemini-3.5-flash",
   pricing: { input: 1.5, input_cached: 0.15, output: 9.0 },
 };

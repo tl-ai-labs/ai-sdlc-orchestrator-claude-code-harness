@@ -36,6 +36,7 @@ import {
   resolveGcpLocation,
 } from "./adapters/geminiTransports.js";
 import type { TaskPacket, TelemetryEvent, Policy, SelectOverrides } from "./types.js";
+import { log, setLevel, configureSinks, type Level } from "./log.js";
 
 /**
  * Cheap up-front schema validation for TaskPacket inputs to execute_with_model.
@@ -55,18 +56,24 @@ function validateTaskPacket(raw: unknown): TaskPacket {
   ];
   const missing = required.filter((k) => packet[k] === undefined);
   if (missing.length > 0) {
+    log("warn", "packet.validate.fail", {
+      packet_id: typeof packet.id === "string" ? packet.id : undefined,
+      missing_fields: missing.join(","),
+    });
     throw new Error(
       `execute_with_model: TaskPacket is missing required field${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}. ` +
-      `See plugin/mcp/gemini-flash-server/src/types.ts for the schema (or plugin/agents/orchestrator.md for the required-fields table).`,
+      `See plugin/mcp/model-dispatch/src/types.ts for the schema (or plugin/agents/orchestrator.md for the required-fields table).`,
     );
   }
   if (!Array.isArray(packet.inputs)) {
+    log("warn", "packet.validate.fail", { packet_id: packet.id as string, missing_fields: "inputs" });
     throw new Error(
       `execute_with_model: TaskPacket.inputs must be a FileSlice[] array — pass [] for packets that read no files. Got: ${typeof packet.inputs}`,
     );
   }
   const budget = packet.budget as { maxOutputTokens?: unknown; maxInputTokens?: unknown } | undefined;
   if (!budget || typeof budget.maxOutputTokens !== "number" || typeof budget.maxInputTokens !== "number") {
+    log("warn", "packet.validate.fail", { packet_id: packet.id as string, missing_fields: "budget" });
     throw new Error(
       `execute_with_model: TaskPacket.budget must be { maxInputTokens: number, maxOutputTokens: number }.`,
     );
@@ -74,7 +81,7 @@ function validateTaskPacket(raw: unknown): TaskPacket {
   return packet as unknown as TaskPacket;
 }
 
-const SERVER_NAME = "gemini-flash-server";
+const SERVER_NAME = "model-dispatch";
 const SERVER_VERSION = "0.1.0";
 
 // Runtime state: loaded policies cached by name, adapters cached by model id.
@@ -83,7 +90,10 @@ let activePolicy: Policy | null = null;
 let activePolicyKey = "";
 
 /** Slot choices, spelled `slot=option[,slot=option...]`. Property of the install. */
-const SELECT_ENV = "SDLC_SELECT";
+const SELECT_ENV = "MMO_SELECT";
+/** MMO-D8 compat shim: pre-rename installs still export this. Warn once, keep working. */
+const LEGACY_SELECT_ENV = "SDLC_SELECT";
+let legacySelectWarned = false;
 
 function ensurePolicy(policyName?: string, projectRoot?: string, policyPath?: string): Policy {
   const key = `${policyName ?? "opus-only"}|${projectRoot ?? ""}|${policyPath ?? ""}`;
@@ -96,19 +106,44 @@ function ensurePolicy(policyName?: string, projectRoot?: string, policyPath?: st
   validateSelectOverrides(policy, selectOverrides());
   activePolicy = policy;
   activePolicyKey = key;
+  log("info", "policy.load", {
+    policy_name: policy.name,
+    resolved_path: policyPath,
+    source: policyPath ? "path" : "name",
+    version: policy.version,
+    model_count: policy.models.length,
+    rule_count: policy.rules.length,
+  });
   return activePolicy;
 }
 
 /** Re-read on every call — a test can set the variable without restarting. */
 function selectOverrides(): SelectOverrides {
-  return parseSelectOverrides(process.env[SELECT_ENV]);
+  const value = process.env[SELECT_ENV] ?? legacySelectValue();
+  return parseSelectOverrides(value);
+}
+
+function legacySelectValue(): string | undefined {
+  const value = process.env[LEGACY_SELECT_ENV];
+  if (value === undefined) return undefined;
+  if (!legacySelectWarned) {
+    legacySelectWarned = true;
+    log("warn", "env.legacy_name", { names: LEGACY_SELECT_ENV, canonical: SELECT_ENV });
+  }
+  return value;
 }
 
 function adapterFor(policy: Policy, modelId: string) {
-  if (adapterCache.has(modelId)) return adapterCache.get(modelId)!;
+  const cacheHit = adapterCache.has(modelId);
+  if (cacheHit) {
+    const cached = adapterCache.get(modelId)!;
+    log("debug", "adapter.construct", { model_id: modelId, adapter: getModel(policy, modelId).adapter, cache_hit: true });
+    return cached;
+  }
   const model = getModel(policy, modelId);
   const adapter = createAdapter(model);
   adapterCache.set(modelId, adapter);
+  log("debug", "adapter.construct", { model_id: modelId, adapter: model.adapter, cache_hit: false });
   return adapter;
 }
 
@@ -140,8 +175,9 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
   let gemini: Record<string, unknown>;
   try {
     const keyEnvName =
-      policy.models.find((m) => m.adapter === "mcp:gemini-flash-server")?.auth?.env ??
-      "GEMINI_API_KEY";
+      policy.models.find(
+        (m) => m.adapter === "mcp:model-dispatch" || m.adapter === "mcp:gemini-flash-server"
+      )?.auth?.env ?? "GEMINI_API_KEY";
     const choice = selectGeminiBackend({ env: process.env, keyEnvName, adcFileExists });
     gemini = {
       backend: choice.backend,
@@ -157,6 +193,27 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
   } catch (err: any) {
     gemini = { backend: null, error: err?.message ?? String(err), adc_file: adcFileExists ? adcPath : null };
   }
+
+  for (const m of assessment.models) {
+    log("info", "preflight.model", {
+      model_id: m.id,
+      adapter: m.adapter,
+      ok: m.ok,
+      error_class: m.ok ? undefined : "PreflightFailed",
+      classification: m.ok ? undefined : (m.severity ?? "warning"),
+    });
+  }
+  for (const id of notSelected) {
+    log("info", "preflight.model", { model_id: id, ok: true, classification: "not_selected" });
+  }
+  log("info", "preflight.result", {
+    ok: assessment.ok,
+    halt_reason: assessment.halt_reason,
+    warnings_n: assessment.warnings.length,
+    backend: (gemini as any).backend,
+    project: (gemini as any).project,
+    location: (gemini as any).location,
+  });
 
   return {
     ok: assessment.ok,
@@ -204,6 +261,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           cache_context: { type: "string", description: "Key for explicit context cache (e.g. 'pass2:workforce-ops')" },
           telemetry_path: { type: "string", description: "JSONL file to append telemetry to" },
+          log_level: {
+            type: "string",
+            enum: ["error", "warn", "info", "debug", "trace"],
+            description: "Per-call MMO: log verbosity override — the only way a --verbose on one run reaches a server process that started when the session did.",
+          },
+          verbose: { type: "boolean", description: "Shorthand for log_level: debug." },
         },
         required: ["packet"],
       },
@@ -254,6 +317,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           policy_name: { type: "string" },
           project_root: { type: "string" },
           policy_path: { type: "string" },
+          log_level: {
+            type: "string",
+            enum: ["error", "warn", "info", "debug", "trace"],
+            description: "Per-call MMO: log verbosity override.",
+          },
+          verbose: { type: "boolean", description: "Shorthand for log_level: debug." },
         },
         required: ["auth_mode"],
       },
@@ -275,6 +344,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
+  const a0 = args as any;
+
+  // Per-call override outranks every env var — the only way a --verbose on
+  // one run reaches a server process that started when the session did.
+  if (a0?.log_level) setLevel(a0.log_level as Level);
+  else if (a0?.verbose) setLevel("debug");
+
+  if (a0?.telemetry_path) configureSinks({ telemetryPath: a0.telemetry_path });
+  else if (a0?.project_root) configureSinks({ projectRoot: a0.project_root });
+
+  const toolStarted = Date.now();
+  let toolCallErrorClass: string | undefined;
+  log("debug", "tool.call.start", { tool: name, arg_keys: Object.keys(a0 ?? {}).join(",") });
 
   try {
     switch (name) {
@@ -288,17 +370,71 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             task_type: packet.task_type,
             module: packet.module,
             retry_count: packet.retry_count ?? 0,
+            intent: packet.intent,
           },
           policy,
           selectOverrides()
         );
+        log("info", "route.decide", {
+          packet_id: packet.id,
+          phase: packet.phase,
+          intent: packet.intent,
+          task_type: packet.task_type,
+          module: packet.module,
+          rule_index: decision.ruleIndex,
+          rule_reason: decision.reason,
+          model_id: decision.modelId,
+          select_slot: decision.selection?.slot,
+          select_chosen: decision.selection?.chosen,
+          select_overridden: decision.selection?.overridden,
+        });
+
         const adapter = adapterFor(policy, decision.modelId);
+        const dispatchStarted = Date.now();
+        log("info", "dispatch.start", {
+          packet_id: packet.id,
+          model_id: decision.modelId,
+          max_out: packet.budget?.maxOutputTokens,
+          max_in: packet.budget?.maxInputTokens,
+          cache_context: a.cache_context,
+          work_dir: a.work_dir ?? a.project_root,
+        });
         // Passed on every dispatch; completion adapters ignore it.
         const result = await adapter.execute(packet, a.cache_context, {
           project_root: a.project_root,
           work_dir: a.work_dir ?? a.project_root,
           telemetry_path: a.telemetry_path,
         });
+        for (const att of result.attempts ?? []) {
+          log("debug", "dispatch.attempt", {
+            packet_id: packet.id,
+            attempt_number: att.attempt_number,
+            ceiling_used: att.ceiling_used,
+            hit_output_cap: att.hit_output_cap,
+            stop_reason: att.stop_reason,
+          });
+        }
+        if (result.success) {
+          log("info", "dispatch.end", {
+            packet_id: packet.id,
+            model_id: decision.modelId,
+            ok: true,
+            terminal_reason: result.terminal_reason,
+            tokens_in: result.tokens.input,
+            tokens_out: result.tokens.output,
+            tokens_cached: result.tokens.input_cached,
+            cost_usd: result.cost_usd,
+            latency_ms: Date.now() - dispatchStarted,
+            attempts: result.attempts?.length ?? 1,
+          });
+        } else {
+          log("error", "dispatch.error", {
+            packet_id: packet.id,
+            model_id: decision.modelId,
+            error_class: "DispatchFailed",
+            message: result.error,
+          });
+        }
 
         // One TelemetryEvent per attempt, all sharing the packet's task_id.
         const attempts = result.attempts ?? [
@@ -355,7 +491,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           retry_reason: att.attempt_number > 1 ? "output_cap" : undefined,
           error: att.error,
         }));
-        if (a.telemetry_path) for (const ev of events) appendEvent(a.telemetry_path, ev);
+        if (a.telemetry_path) {
+          for (const ev of events) appendEvent(a.telemetry_path, ev);
+          log("debug", "telemetry.append", { telemetry_path: a.telemetry_path, events_written: events.length });
+        }
         return {
           content: [
             {
@@ -381,6 +520,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // Direct-tier caller is a model with no clock — normalize overwrites
         // its `ts` and nulls `latency_ms`.
         appendEvent(a.telemetry_path, normalizeDirectTierEvent(a.event as TelemetryEvent));
+        log("debug", "telemetry.append", { telemetry_path: a.telemetry_path, events_written: 1 });
         return { content: [{ type: "text", text: "ok" }] };
       }
       case "preflight_dispatch": {
@@ -400,10 +540,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
   } catch (err: any) {
+    toolCallErrorClass = err?.name ?? "Error";
     return {
       content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }],
       isError: true,
     };
+  } finally {
+    log("debug", "tool.call.end", {
+      tool: name,
+      duration_ms: Date.now() - toolStarted,
+      ok: toolCallErrorClass === undefined,
+      error_class: toolCallErrorClass,
+    });
   }
 });
 

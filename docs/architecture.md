@@ -12,27 +12,30 @@ Claude Code loads the plugin from `plugin/.claude-plugin/plugin.json`. The manif
 |---|---|---|
 | `commands` | `./commands` | Slash commands the plugin registers when a session starts. |
 | `skills` | `./skills` | Skill files invocable via the `Skill` tool. |
-| `mcpServers.gemini-flash-server` | stdio server at `${CLAUDE_PLUGIN_ROOT}/mcp/gemini-flash-server/dist/server.js` | Owns every dispatch, credential probe, and telemetry write. |
-| `mcpServers.gemini-flash-server.env` | 8 pass-through vars | Values arrive as `${NAME}` placeholders when the host never set them. See §2. |
+| `mcpServers.model-dispatch` | stdio server at `${CLAUDE_PLUGIN_ROOT}/mcp/model-dispatch/dist/server.js` | Owns every dispatch, credential probe, and telemetry write. |
+| `mcpServers.model-dispatch.env` | 9 pass-through vars, incl. the deprecated `SDLC_SELECT` (MMO-D8 compat shim) | Values arrive as `${NAME}` placeholders when the host never set them. See §2. |
 
 Additional plugin content:
 
 | Path | Contents |
 |---|---|
 | [plugin/agents/](../plugin/agents/) | Subagents: `orchestrator`, `architect`, `senior-reviewer`, `security-reviewer`, `discovery` (brownfield only). |
-| [plugin/commands/run.md](../plugin/commands/run.md) | Greenfield two-prompt-flow entry point. Takes no arguments; asks for what it needs. |
+| [plugin/commands/greenfield.md](../plugin/commands/greenfield.md) | Greenfield two-prompt-flow entry point. Takes no arguments; asks for what it needs. |
 | [plugin/commands/pass.md](../plugin/commands/pass.md) | Every setting as a flag; the form used for scripting and repeat runs. Covers both greenfield and brownfield via `--mode=`. |
-| [plugin/commands/brownfield.md](../plugin/commands/brownfield.md) | Brownfield two-prompt-flow entry point. Picks an intent, adds Gate 0. |
+| [plugin/commands/brownfield.md](../plugin/commands/brownfield.md) | Brownfield two-prompt-flow entry point. Picks an intent, adds Gate 0. Thin caller into `brownfield-guide/SKILL.md` with no handover set. |
+| [plugin/commands/{bugfix,docs,feature-extend,feature-new,refactor,test,deps}.md](../plugin/commands/) | Seven aliases into brownfield with the job type pre-selected via the handover — see `plugin/config/intents.json` and `intent-commands.test.mjs`. |
 | [plugin/commands/revert.md](../plugin/commands/revert.md) | Reverts a brownfield run using `.sdlc/runs/<run-id>/provenance.json`. |
 | [plugin/commands/setup.md](../plugin/commands/setup.md) | Re-verify or re-configure the plugin for this project. Wraps `verify-setup.mjs` and `setup-policy.mjs`. |
 | [plugin/commands/policy.md](../plugin/commands/policy.md) | Show the active policy; `change` opens the browser console. |
-| [plugin/skills/run-ai-sdlc/](../plugin/skills/run-ai-sdlc/) | Skill body loaded by the orchestrator. |
+| [plugin/config/intents.json](../plugin/config/intents.json) | The seven-intent registry — id, title, example, argument hint, summary, interview questions. Single source for the job commands, the interview, and this table's own accuracy. |
+| [plugin/skills/pipeline/](../plugin/skills/pipeline/) | Skill body loaded by the orchestrator. |
+| [plugin/skills/brownfield-guide/](../plugin/skills/brownfield-guide/) | The shared seven-step brownfield manual. Every brownfield entry point (`brownfield.md` and the seven job commands) points here; step 4 branches on the `intent` / `seed_description` handover. |
 | [plugin/hooks/hooks.json](../plugin/hooks/hooks.json) | `PostToolUse` hook matching the MCP tool name under both install routes. |
 | [plugin/config/policies/](../plugin/config/policies/) | Shipped policy YAMLs (`opus-only`, `opus-plus-flash`). |
 | [plugin/policy-console/](../plugin/policy-console/) | Single-page HTML console + tiny http server, used at setup to pick or author the per-project policy. |
 | `.sdlc/project.json` | Per-project state file. Fields: `default_policy` (name of the policy every run in this folder uses when `--policy` is not passed), `off_limits_default` (constant paths never touched by brownfield writes — merged with Gate 0 additions), `last_updated_at`, `schema_version: 2`. Written by `setup-policy.mjs` and consumed by every task command. |
 
-The hook matcher is a regex because the plugin route namespaces MCP tools with the plugin name (`mcp__plugin_sdlc_gemini-flash-server__execute_with_model`) while the clone route registers them bare (`mcp__gemini-flash-server__execute_with_model`). Both forms match.
+The hook matcher is a regex because the plugin route namespaces MCP tools with the plugin name (`mcp__plugin_mmo_model-dispatch__execute_with_model`) while the clone route registers them bare (`mcp__model-dispatch__execute_with_model`). Both forms match.
 
 ## 2. MCP server
 
@@ -49,9 +52,9 @@ Two files run before anything else:
 
 | File | Role |
 |---|---|
-| [envBootstrap.ts](../plugin/mcp/gemini-flash-server/src/envBootstrap.ts) | Side-effect import. Must be first — deletes `PLUGIN_DECLARED_ENV` entries whose value is the literal `${NAME}` placeholder. ES module evaluation order is the only ordering guarantee that keeps this before third-party SDKs read `process.env`. |
-| [env.ts](../plugin/mcp/gemini-flash-server/src/env.ts) | Pure helpers behind the bootstrap. Importable from tests without mutating the test runner's environment. |
-| [preflight.ts](../plugin/mcp/gemini-flash-server/src/preflight.ts) | Auth-mode-aware reachability check. Under `vendor` every model is required; under `estimated` the in-session adapter (`builtin-anthropic`) is skipped. |
+| [envBootstrap.ts](../plugin/mcp/model-dispatch/src/envBootstrap.ts) | Side-effect import. Must be first — deletes `PLUGIN_DECLARED_ENV` entries whose value is the literal `${NAME}` placeholder. ES module evaluation order is the only ordering guarantee that keeps this before third-party SDKs read `process.env`. |
+| [env.ts](../plugin/mcp/model-dispatch/src/env.ts) | Pure helpers behind the bootstrap. Importable from tests without mutating the test runner's environment. |
+| [preflight.ts](../plugin/mcp/model-dispatch/src/preflight.ts) | Auth-mode-aware reachability check. Under `vendor` every model is required; under `estimated` the in-session adapter (`builtin-anthropic`) is skipped. |
 
 `preflight_dispatch` reports `not_selected` for policy leaves that lost a `select:` slot decision — their prerequisites (a Python venv, a worker script) are not this run's problem, and halting on them would be a false positive.
 
@@ -61,18 +64,20 @@ Policies live under [plugin/config/policies/](../plugin/config/policies/) as YAM
 
 | Field | Shape | Notes |
 |---|---|---|
-| `models[].id` | string | Referenced by rules and by `SDLC_SELECT`. |
-| `models[].adapter` | `builtin-anthropic` \| `mcp:gemini-flash-server` \| `antigravity-worker` | Selects the adapter class. |
+| `models[].id` | string | Referenced by rules and by `MMO_SELECT`. |
+| `models[].adapter` | `builtin-anthropic` \| `mcp:model-dispatch` \| `antigravity-worker` | Selects the adapter class. |
 | `models[].pricing` | `{input, input_cached, output}` USD per 1M | Flat global/AI-Studio rates. Vertex regional surcharge is applied at dispatch, not written in the file. |
 | `models[].pricing_source`, `pricing_last_verified` | URL, ISO date | Vendor page and last verify date. |
 | `models[].max_output_tokens_absolute` | number | Doubling-loop clamp for completion adapters. Absent on `antigravity-worker`. |
-| `select.<slot>.default` | model id | Used when no `SDLC_SELECT` names this slot. |
+| `select.<slot>.default` | model id | Used when no `MMO_SELECT` names this slot. |
 | `select.<slot>.options` | model id[] | The vetted set the run may pick from. |
 | `rules[].when` | `{phase, task_type?, module?, retry_count?}` | Ordered matcher. First match wins. |
 | `rules[].use` | model id **or** slot name | A slot resolves through `select` at routing time, not policy-load time. |
 | `rules[].default` | model id or slot | Fell-through terminal rule. |
 
-`SDLC_SELECT` is spelled `slot=option[,slot=option...]`. Parsing lives in [routing.ts](../plugin/mcp/gemini-flash-server/src/routing.ts) (`parseSelectOverrides`) and is duplicated in [verify-setup.mjs](../plugin/scripts/verify-setup.mjs) (`parseSelectSpec`), which cannot import TypeScript. Both refuse malformed specs. `unreachableModelIds` excludes losing options from pre-flight without dropping ones a rule names directly.
+`MMO_SELECT` is spelled `slot=option[,slot=option...]`. Parsing lives in [routing.ts](../plugin/mcp/model-dispatch/src/routing.ts) (`parseSelectOverrides`) and is duplicated in [verify-setup.mjs](../plugin/scripts/verify-setup.mjs) (`parseSelectSpec`), which cannot import TypeScript. Both refuse malformed specs. `unreachableModelIds` excludes losing options from pre-flight without dropping ones a rule names directly.
+
+Two pre-rename spellings still work, each warning once to stderr instead of failing (MMO-D8): the env var `SDLC_SELECT` (read when `MMO_SELECT` is unset) and the adapter id `mcp:gemini-flash-server` (accepted anywhere `mcp:model-dispatch` is).
 
 `simulate_policy` replays events against a different policy using the current run's slot choices, so a what-if on a slotted policy prices the tier this install would actually dispatch to.
 
@@ -82,18 +87,18 @@ One interface, three implementations, plus a factory.
 
 | File | Adapter class | Model tier |
 |---|---|---|
-| [ModelAdapter.ts](../plugin/mcp/gemini-flash-server/src/adapters/ModelAdapter.ts) | interface | — |
-| [BuiltinAnthropicAdapter.ts](../plugin/mcp/gemini-flash-server/src/adapters/BuiltinAnthropicAdapter.ts) | `BuiltinAnthropicAdapter` | Anthropic direct SDK. Under `vendor`, dispatched here; under `estimated`, never constructed. |
-| [GeminiFlashAdapter.ts](../plugin/mcp/gemini-flash-server/src/adapters/GeminiFlashAdapter.ts) | `GeminiFlashAdapter` | Gemini as a model, via `@google/genai`. Delegates transport to §5. |
-| [AntigravityWorkerAdapter.ts](../plugin/mcp/gemini-flash-server/src/adapters/AntigravityWorkerAdapter.ts) | `AntigravityWorkerAdapter` | Gemini as an agent. Launches the Python worker. See §6. |
-| [index.ts](../plugin/mcp/gemini-flash-server/src/adapters/index.ts) | `createAdapter(model)` | Factory keyed on `model.adapter`. |
-| [pricing.ts](../plugin/mcp/gemini-flash-server/src/pricing.ts) | — | `computeCostUsd(tokens, pricing)` on disjoint cached/fresh counts. |
+| [ModelAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/ModelAdapter.ts) | interface | — |
+| [BuiltinAnthropicAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/BuiltinAnthropicAdapter.ts) | `BuiltinAnthropicAdapter` | Anthropic direct SDK. Under `vendor`, dispatched here; under `estimated`, never constructed. |
+| [GeminiFlashAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/GeminiFlashAdapter.ts) | `GeminiFlashAdapter` | Gemini as a model, via `@google/genai`. Delegates transport to §5. |
+| [AntigravityWorkerAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/AntigravityWorkerAdapter.ts) | `AntigravityWorkerAdapter` | Gemini as an agent. Launches the Python worker. See §6. |
+| [index.ts](../plugin/mcp/model-dispatch/src/adapters/index.ts) | `createAdapter(model)` | Factory keyed on `model.adapter`. |
+| [pricing.ts](../plugin/mcp/model-dispatch/src/pricing.ts) | — | `computeCostUsd(tokens, pricing)` on disjoint cached/fresh counts. |
 
 The two completion adapters share an **output-cap doubling loop**: on a vendor `max_tokens` signal, retry with `2×` the previous ceiling, up to 3 doublings or `max_output_tokens_absolute`. Every attempt emits its own TelemetryEvent with `attempt_number` and `ceiling_used`, all sharing the packet's `task_id`. The agent adapter has no such loop — an agent session sets its own per-turn limits and a retry would be a fresh, fully-billed session.
 
 ## 5. The two Gemini doors
 
-Both live in [geminiTransports.ts](../plugin/mcp/gemini-flash-server/src/adapters/geminiTransports.ts) and run on `@google/genai`. They differ only in how a request is signed and which endpoint receives it.
+Both live in [geminiTransports.ts](../plugin/mcp/model-dispatch/src/adapters/geminiTransports.ts) and run on `@google/genai`. They differ only in how a request is signed and which endpoint receives it.
 
 | Door | Backend name | Auth | Env-var trigger |
 |---|---|---|---|
@@ -117,12 +122,12 @@ Selecting this path routes the mechanical tier to `flash-agsdk-worker`.
 
 | Piece | File / detail |
 |---|---|
-| Adapter | [AntigravityWorkerAdapter.ts](../plugin/mcp/gemini-flash-server/src/adapters/AntigravityWorkerAdapter.ts) |
-| Worker | [worker/gemini_worker.py](../plugin/mcp/gemini-flash-server/worker/gemini_worker.py) — Python 3.10+, `google-antigravity` |
+| Adapter | [AntigravityWorkerAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/AntigravityWorkerAdapter.ts) |
+| Worker | [worker/gemini_worker.py](../plugin/mcp/model-dispatch/worker/gemini_worker.py) — Python 3.10+, `google-antigravity` |
 | Auth | Application Default Credentials only. No API-key branch. |
 | Timeout | `worker_timeout_sec: 540` in the policy YAML — 9 minutes, then the process group is killed. |
-| Interpreter resolution | `resolveWorkerPython`: `GEMINI_WORKER_PYTHON` override, else the plugin-built venv at `plugin/mcp/gemini-flash-server/worker/.venv/bin/python`. |
-| Delegation records | [evidence.ts](../plugin/mcp/gemini-flash-server/src/delegation/evidence.ts) — three files per packet (task brief, worker usage sidecar, receipt). |
+| Interpreter resolution | `resolveWorkerPython`: `GEMINI_WORKER_PYTHON` override, else the plugin-built venv at `plugin/mcp/model-dispatch/worker/.venv/bin/python`. |
+| Delegation records | [evidence.ts](../plugin/mcp/model-dispatch/src/delegation/evidence.ts) — three files per packet (task brief, worker usage sidecar, receipt). |
 
 For each delegated packet the server takes an inventory of the working directory before and after the worker runs. The diff (added / modified / removed) lands on the receipt; it establishes what changed while the worker held the directory, not who wrote each byte.
 
@@ -149,7 +154,7 @@ One JSON object per LLM call, appended to `<pass-dir>/telemetry.jsonl`. `manifes
 
 ## 8. Auth modes
 
-Chosen per run. `/sdlc:run` asks; `/sdlc:pass --auth=<mode>` requires the flag.
+Chosen per run. `/mmo:greenfield` asks; `/mmo:pass --auth=<mode>` requires the flag.
 
 | Mode | Billed to | Every event | Direct-tier tokens | Mechanical-tier tokens |
 |---|---|---|---|---|
@@ -166,9 +171,9 @@ Two ways in. Both end up running the same MCP server.
 
 | Route | Entry | What arrives |
 |---|---|---|
-| Plugin (default) | Two-prompt flow → [SETUP.md](../SETUP.md) → `/plugin install` → `verify-setup.mjs --fix` | `plugin/` under `~/.claude/plugins/cache/tilicho-ai-labs/sdlc/*/`. The MCP server's `dist/` and `node_modules/` are not tracked in git; `--fix` builds them. |
+| Plugin (default) | Two-prompt flow → [SETUP.md](../SETUP.md) → `/plugin install` → `verify-setup.mjs --fix` | `plugin/` under `~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/`. The MCP server's `dist/` and `node_modules/` are not tracked in git; `--fix` builds them. |
 | Clone | `git clone` → [tools/setup.mjs](../tools/setup.mjs) | The full repo, plus a project-level `.mcp.json` that registers the built server directly. |
 
-`.mcp.json` on the clone route holds an exhaustive `env` block, because a stdio MCP server inherits nothing from its parent. `verify-setup.mjs --enable-agent` writes the `SDLC_SELECT` selection into both `.claude/settings.local.json` (read by Claude Code) and `.mcp.json` (read by the server); a settings-only write would be dropped at the server boundary.
+`.mcp.json` on the clone route holds an exhaustive `env` block, because a stdio MCP server inherits nothing from its parent. `verify-setup.mjs --enable-agent` writes the `MMO_SELECT` selection into both `.claude/settings.local.json` (read by Claude Code) and `.mcp.json` (read by the server); a settings-only write would be dropped at the server boundary.
 
 `plugin/examples/` duplicates `examples/` so the shipped briefs are reachable from an installed plugin, which has no repo checkout beside it.

@@ -12,6 +12,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const POLICIES_DIR = resolve(SCRIPT_DIR, "..", "config", "policies");
 const INDEX_HTML = resolve(SCRIPT_DIR, "index.html");
+const INTENTS_PATH = resolve(SCRIPT_DIR, "..", "config", "intents.json");
 
 // ── schema (mirrors plugin/policy-console/lib/policySchema.ts post-cherry-pick) ─
 
@@ -27,16 +28,51 @@ const PHASES = [
   { id: "debug", label: "Debug", note: "escalates to opus at retry ≥ 2" },
 ];
 
+/**
+ * Brownfield intents, read from the same registry the job commands use —
+ * one source, so the console's tabs can never list an intent that doesn't
+ * exist (or miss one that does).
+ */
+const INTENTS = JSON.parse(readFileSync(INTENTS_PATH, "utf-8")).intents.map((i) => ({
+  id: i.id,
+  title: i.title,
+}));
+
+/**
+ * Which phases the Intent matrix (plugin/skills/pipeline/SKILL.md, "Intent
+ * matrix — brownfield only") marks SKIP for a given intent. Hand-synced with
+ * that table — there is no machine-readable source for it yet, same
+ * constraint as codegenTaskTypes' hand-sync with the policy YAML. A phase
+ * missing from an intent's list here is never skipped for that intent.
+ *
+ * bugfix's architecture_design is conditional in the matrix ("SKIP unless
+ * design-affecting"), not a flat skip — still listed here so the console
+ * shows it disabled by default, with a note explaining the condition rather
+ * than presenting it identically to docs/test's unconditional skip.
+ */
+const INTENT_SKIPPED_PHASES = {
+  docs: ["architecture_design"],
+  bugfix: ["architecture_design"],
+  "feature-extend": [],
+  "feature-new": [],
+  refactor: [],
+  test: ["architecture_design"],
+  deps: [],
+};
+const CONDITIONAL_SKIP_NOTE = {
+  "bugfix:architecture_design": "Skipped unless the fix is design-affecting",
+};
+
 const KNOWN_ADAPTERS = [
   "builtin-anthropic",
   "claude-cli",
-  "mcp:gemini-flash-server",
+  "mcp:model-dispatch",
   "antigravity-worker",
 ];
 const ADAPTER_LABEL = {
   "builtin-anthropic": "Anthropic (Claude)",
   "claude-cli": "Anthropic (Claude Code CLI, Max subscription)",
-  "mcp:gemini-flash-server": "Gemini — completion call",
+  "mcp:model-dispatch": "Gemini — completion call",
   "antigravity-worker": "Gemini — Antigravity agent (SDK worker)",
 };
 
@@ -46,7 +82,7 @@ const SHIPPED_PRESETS = ["opus-only", "opus-plus-flash"];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function thinkingSupport(model) {
-  if (model.adapter === "mcp:gemini-flash-server" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
+  if (model.adapter === "mcp:model-dispatch" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
   if (model.adapter === "builtin-anthropic" || model.adapter === "claude-cli") return ANTHROPIC_EFFORT_TIERS;
   return [];
 }
@@ -125,6 +161,37 @@ function codegenTaskTypes(policy) {
   return undefined;
 }
 
+
+/**
+ * Per-intent routing overrides — `{when: {phase, intent}}` rules layered on
+ * top of the blanket per-phase rule. Returns `{ [intentId]: { [phaseId]:
+ * modelId | null } }`; `null` means "no override, use the phase default."
+ * Skipped phases (INTENT_SKIPPED_PHASES) are left `null` regardless of
+ * anything in the YAML — an override on a phase that never runs for that
+ * intent is dead configuration, not a state the UI should offer.
+ */
+function intentPhaseOverrides(policy) {
+  const overrides = {};
+  for (const intent of INTENTS) {
+    overrides[intent.id] = {};
+    for (const phase of PHASES) overrides[intent.id][phase.id] = null;
+  }
+  for (const rule of policy.rules) {
+    if (!hasWhen(rule) || !rule.when.intent) continue;
+    const phases = Array.isArray(rule.when.phase) ? rule.when.phase : rule.when.phase ? [rule.when.phase] : [];
+    const intents = Array.isArray(rule.when.intent) ? rule.when.intent : [rule.when.intent];
+    for (const intentId of intents) {
+      if (!overrides[intentId]) continue; // an intent this console doesn't know about — ignore
+      for (const phaseId of phases) {
+        if (!(phaseId in overrides[intentId])) continue; // phase outside the visible PHASES list
+        if (INTENT_SKIPPED_PHASES[intentId]?.includes(phaseId)) continue; // dead rule — never reached
+        overrides[intentId][phaseId] = resolveSlot(policy, rule.use);
+      }
+    }
+  }
+  return overrides;
+}
+
 function debugEscalationRule(policy) {
   return policy.rules.find(
     (r) =>
@@ -175,6 +242,7 @@ function summarizePolicy(id, policy, headerComment) {
     select: policy.select,
     routing,
     thinking,
+    intentOverrides: intentPhaseOverrides(policy),
     structural: {
       codegenTaskTypes: codegenTaskTypes(policy),
       debugEscalation: debugEscalationRule(policy),
@@ -199,8 +267,32 @@ function buildCustomPolicy(base, input) {
   const { models } = input;
   const rules = [];
 
+  const intentOverrides = input.intentOverrides ?? {};
+
   for (const phase of PHASES) {
     if (phase.id === "debug" && structural.debugEscalation) rules.push(structural.debugEscalation);
+
+    // Intent-specific overrides for this phase, most specific first — these
+    // MUST precede the blanket phase rule below, since pickModel() returns
+    // on the first matching rule. A packet with no `intent` (greenfield, or
+    // an intent this policy doesn't override) falls through to the blanket
+    // rule untouched. Skipped phases (INTENT_SKIPPED_PHASES) never get here
+    // with a real override — intentPhaseOverrides() keeps them null.
+    for (const intent of INTENTS) {
+      const modelId = intentOverrides[intent.id]?.[phase.id];
+      if (!modelId) continue;
+      const rule = { when: { phase: phase.id, intent: intent.id }, use: modelId };
+      // Inherits the phase's own thinking tier rather than exposing a
+      // separate picker per intent — one more independent axis (7 intents ×
+      // 9 phases × thinking tier) was more surface than this UI could stay
+      // readable at. Revisit if a real policy needs it.
+      const tier = input.thinking[phase.id];
+      if (tier && tier !== "off") {
+        const model = models.find((m) => m.id === modelId);
+        rule.reasoning = model && thinkingField(model) === "effort" ? { effort: tier } : { tier };
+      }
+      rules.push(rule);
+    }
 
     const rule = {
       when:
@@ -283,6 +375,17 @@ function validateSaveInput(input) {
     const chosen = input.routing?.[phase.id];
     if (!chosen || !modelIds.has(chosen)) {
       errors.push(`Phase "${phase.id}" is routed to "${chosen}", which isn't in this policy's model list.`);
+    }
+  }
+  for (const intent of INTENTS) {
+    for (const phase of PHASES) {
+      const chosen = input.intentOverrides?.[intent.id]?.[phase.id];
+      if (!chosen) continue; // null/undefined = no override, valid
+      if (INTENT_SKIPPED_PHASES[intent.id]?.includes(phase.id)) {
+        errors.push(`"${intent.id}" skips "${phase.id}" — an override here can never fire. Clear it.`);
+      } else if (!modelIds.has(chosen)) {
+        errors.push(`"${intent.id}" overrides "${phase.id}" to "${chosen}", which isn't in this policy's model list.`);
+      }
     }
   }
   if (errors.length) return { errors };
@@ -391,7 +494,15 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/policies") {
-      sendJson(res, 200, { policies: loadAllPolicySummaries(), phases: PHASES, adapters: KNOWN_ADAPTERS, adapterLabel: ADAPTER_LABEL });
+      sendJson(res, 200, {
+        policies: loadAllPolicySummaries(),
+        phases: PHASES,
+        adapters: KNOWN_ADAPTERS,
+        adapterLabel: ADAPTER_LABEL,
+        intents: INTENTS,
+        intentSkippedPhases: INTENT_SKIPPED_PHASES,
+        conditionalSkipNote: CONDITIONAL_SKIP_NOTE,
+      });
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/save") {
