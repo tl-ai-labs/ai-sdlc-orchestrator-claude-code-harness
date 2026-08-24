@@ -43,8 +43,8 @@ surgery) or risk a misconfigured policy failing partway through a paid run.
 3. Configuration happens **in-flow**: the page opens automatically as part of `/mmo:greenfield`,
    before spend starts, and the CLI session resumes with the user's choice — no separate app to
    remember to launch.
-4. A saved custom policy is a real, inspectable YAML file the user can find, re-run, hand-edit,
-   or delete afterward — the web page is a generator for the same artifact a user would have
+4. A saved custom policy is a real, inspectable YAML file you can find, re-run, hand-edit,
+   or delete afterward — the web page is a generator for the same artifact you would have
    written by hand, not a hidden or opaque state store.
 5. Misconfiguration is caught before the run starts (schema/model/auth validation), not after a
    phase has already been billed.
@@ -106,7 +106,7 @@ telemetry mode") of [run.md](../../plugin/commands/greenfield.md).
    prints the URL as a fallback (for headless/remote sessions — see US10). The CLI blocks,
    polling for the page to report a result.
 4. The page shows the current default policy's routing and thinking settings as a live-editable
-   table (see §6). The user either:
+   table (see §6). You either:
    - clicks **Use as-is** (no changes) → server reports "no changes," CLI proceeds with the
      existing default policy, nothing new written to disk; or
    - edits routing/thinking, gives the result a new policy name, clicks **Save & continue** →
@@ -117,7 +117,7 @@ telemetry mode") of [run.md](../../plugin/commands/greenfield.md).
      user who wandered off doesn't leave the session hung indefinitely.
 5. The server shuts down once it has reported a result (or the CLI's poll times out).
 6. Existing step 4 reporting ("which model handles which phase, at what rates") re-runs against
-   the *resolved* policy — custom or default — so the user sees the real routing before step 5's
+   the *resolved* policy — custom or default — so you see the real routing before step 5's
    spend confirmation, unchanged from today's behavior otherwise.
 7. Existing steps 5–7 (telemetry mode, confirm, run, report) proceed unchanged, with `policy` in
    step 6 now pointing at whichever policy name resulted from step 4 above.
@@ -246,7 +246,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   - no filename collision with an existing policy
 - **`verify-setup.mjs`** — confirm it doesn't hardcode the two shipped filenames anywhere; if it
   does, it needs to glob instead so a saved custom policy passes setup checks on a later run.
-- **Headless/no-browser environments** — flow step 3 must degrade gracefully: print the URL,
+- **Headless/no-browser environments** — flow step 3 must degrade cleanly: print the URL,
   don't fail the run if a browser can't be launched, and time out to the default policy per
   US10.
 
@@ -286,21 +286,21 @@ policy in the next (user story 9) — no separate index file to keep in sync.
 
 ## 10. Acceptance Criteria
 
-- Given the user runs `/mmo:greenfield` with no prior custom policies, when step 3 (existing) finishes,
+- Given you run `/mmo:greenfield` with no prior custom policies, when step 3 (existing) finishes,
   then a browser opens to the config page showing `opus-plus-flash` (today's default) pre-loaded
   as the base policy.
-- Given the user changes `codegen`'s routing from `gemini-flash` to `opus` and sets
-  `security_review`'s thinking effort to `max`, when they name it `strict-review` and click
+- Given you change `codegen`'s routing from `gemini-flash` to `opus` and set
+  `security_review`'s thinking effort to `max`, when you name it `strict-review` and click
   **Save & continue**, then `plugin/config/policies/strict-review.yaml` exists on disk with those
   two changes and is otherwise identical to `opus-plus-flash.yaml`, and the CLI's step 4 report
   shows `codegen` routed to `opus` at Opus's rates.
-- Given the user clicks **Use as-is** without editing anything, when the run proceeds, then no
+- Given you click **Use as-is** without editing anything, when the run proceeds, then no
   new file is written to `plugin/config/policies/` and behavior is identical to today's
   (pre-feature) `/mmo:greenfield`.
-- Given the user tries to save a policy named `opus-only` (an existing filename), then the page
+- Given you try to save a policy named `opus-only` (an existing filename), then the page
   blocks submission with an inline "name already in use" error and no file is overwritten.
-- Given the user routes a phase to a model whose `auth.env` credential is unset in the
-  environment, when they attempt to save, then the page blocks submission and states which
+- Given you route a phase to a model whose `auth.env` credential is unset in the
+  environment, when you attempt to save, then the page blocks submission and states which
   credential is missing, before any spend has occurred.
 - Given the page has been open and idle past the timeout, when the timeout elapses, then the CLI
   proceeds automatically on the previously-resolved default policy and states in the transcript
@@ -309,7 +309,7 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   `strict-review` appears as a selectable base policy alongside `opus-only` and
   `opus-plus-flash`.
 - Given the session has no way to open a browser (headless), when flow step 3 runs, then the CLI
-  prints the config URL and either the user opens it from another device or the timeout carries
+  prints the config URL and either you open it from another device or the timeout carries
   the run forward on the default policy — the run is never blocked indefinitely.
 
 ## 11. Open Questions

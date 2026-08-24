@@ -20,11 +20,11 @@ Workforce Ops case that ships with the repo.
 Related: [running.md](running.md#bring-your-own-brief) for the full workflow,
 [methodology.md](methodology.md) for what the pipeline records.
 
-This page is for people working in a clone. `/mmo:greenfield` runs from wherever the
-user is standing — usually an empty folder — and `docs/` is not copied on
-install, so the wizard carries the same section set inline in
-`plugin/commands/greenfield.md`. **A heading changed here must be changed there
-too**; `tools/test/command.test.mjs` compares the two and fails if they drift.
+`/mmo:greenfield` runs from wherever you are — usually an empty folder — and
+`docs/` is not copied on install, so the wizard carries the same section set
+inline in `plugin/commands/greenfield.md`. **A heading changed here must be
+changed there too**; `tools/test/command.test.mjs` compares the two and fails
+if they drift.
 
 ---
 

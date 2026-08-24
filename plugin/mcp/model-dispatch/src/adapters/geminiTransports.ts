@@ -48,10 +48,7 @@ export interface BackendChoice {
 export function selectGeminiBackend(input: BackendSelectionInput): BackendChoice {
   const { env, keyEnvName, adcFileExists } = input;
   const choice = resolveGeminiBackend(input);
-  // "Once per run" per the taxonomy is aspirational for a pure function
-  // called from both preflight and dispatch — logged on every call instead
-  // of tracking run-scoped dedup state a pure function has no business
-  // holding. Harmless: identical INFO lines, not a volume problem.
+  // Logged on every call; this is a pure function, so no run-scoped dedup state.
   log("info", "api.gemini.backend", {
     backend: choice.backend,
     reason: choice.reason,
