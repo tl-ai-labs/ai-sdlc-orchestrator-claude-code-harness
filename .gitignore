@@ -52,5 +52,10 @@ Thumbs.db
 # Hook heartbeat log written by plugin/hooks/telemetry.sh
 .hook-logs/
 
-# Claude Code project state (project-installed commands + agents)
-.claude/
+# Claude Code project state (project-installed commands + agents).
+# Ignore contents (not the directory itself) so the exception below can
+# re-include the maintainer-only skills subtree for contributors. Skills
+# under .claude/ are not shipped in the mmo plugin — the marketplace
+# source is ./plugin only.
+.claude/*
+!.claude/skills/
