@@ -20,7 +20,7 @@
 
 ## 1. Summary
 
-Extend the existing `sdlc@tilicho-ai-labs` plugin from "generates a new app from a brief in an empty folder" to "installs onto any existing repo and does one of seven kinds of work (docs / bugfix / feature-extend / feature-new / refactor / test / deps) safely, across many sessions, without touching anything the user hasn't approved."
+Extend the existing `sdlc@tilicho-ai-labs` plugin from "generates a new app from a brief in an empty folder" to "installs onto any existing repo and does one of seven kinds of work (docs / bugfix / feature-extend / feature-new / refactor / test / deps) safely, across many sessions, without touching anything you haven't approved."
 
 Ship as a new command `/sdlc:brownfield` (plus supporting `/sdlc:revert`), all setup folded into two prompts, with a non-destructive write contract enforced at three layers and multi-session machinery (baseline, ledger, provenance, rollback) that makes the second and Nth session on the same real project safe and coherent.
 
@@ -46,7 +46,7 @@ The plugin today assumes an empty folder:
 - **Seven intents** covering ~80% of production brownfield work.
 - **Multi-session machinery** (`.sdlc/`) — committed team-shared state (runs, ledger, project fingerprint) + gitignored personal state (local run state, budget, cache).
 - **Adaptive stack profile** — learns conventions from actual repo files when the detected stack has no pre-authored adapter.
-- **Setup shepherd** — sequential prompt-1 flow that auto-does what it can, pauses and guides the user for what it can't (with re-verification after every "done").
+- **Setup shepherd** — sequential prompt-1 flow that auto-does what it can, pauses and guides you through what it can't (with re-verification after every "done").
 
 ---
 
@@ -70,7 +70,7 @@ Seven architectural decisions have been locked. Each has a corresponding plan se
 - Discovery model: tiered (Tier 1 always / Tier 2 at Gate 0 / Tier 2b adaptive profile / Tier 3 on-demand)
 - Safety defaults: write-contract PreToolUse hook **HARD-BLOCK by default** (escape hatch `--strict-write=off`); git-dirty **blocks when `commit_strategy != none`** (escape hatch `--allow-dirty`)
 - Stack adapters shipped: **generic + nest + python** (Django + FastAPI)
-- Graceful mid-setup recovery (setup-status.json persisted per section; next `/sdlc:brownfield` auto-resumes shepherd)
+- Resumable mid-setup recovery (setup-status.json persisted per section; next `/sdlc:brownfield` auto-resumes shepherd)
 
 ---
 
@@ -145,7 +145,7 @@ One linear state machine with intent-conditional phase execution. `intent` field
 
 - **Credential discovery** (§26) — provider-agnostic scanner walks: shell env → home dir configs (`~/.anthropic/`, `~/.config/gcloud/`, `~/.gemini/`) → shell rc files → repo `.env*` (names only) → repo code references
 - **Setup shepherd** (§25) — sequential, pause-and-guide, verify on every "done." Re-verify with actual check, not trust user. 3 verification failures → offer skip (with consequence) or abort
-- **Graceful mid-setup recovery** — shepherd writes to `.sdlc/local/setup-status.json` per section; next `/sdlc:brownfield` reads it and resumes from where left off
+- **Resumable mid-setup recovery** — shepherd writes to `.sdlc/local/setup-status.json` per section; next `/sdlc:brownfield` reads it and resumes from where left off
 - **Pipeline pre-check** (§22) — 6 smoke steps (discovery, test-command probe, dispatch smoke to each tier, write-contract smoke, rollback smoke, report). Cached to `.sdlc/pre-check-status.json`
 - **Setup-time robustness** (§22) — 17-issue inventory, all handled with detection + clear message (per "handle ≠ solve" principle):
   - Env: Node/git version, MCP dist not built, plugin conflicts, filesystem permissions

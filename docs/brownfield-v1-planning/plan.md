@@ -7,7 +7,7 @@
 
 ## TL;DR
 
-- **What.** Extend this Claude Code plugin from "generates a new app from a brief in an empty folder" to "installs onto any existing repo and does one of seven kinds of work (docs / bugfix / feature-extend / feature-new / refactor / test / deps) safely, across many sessions, without touching anything the user didn't approve."
+- **What.** Extend this Claude Code plugin from "generates a new app from a brief in an empty folder" to "installs onto any existing repo and does one of seven kinds of work (docs / bugfix / feature-extend / feature-new / refactor / test / deps) safely, across many sessions, without touching anything you didn't approve."
 - **Why.** Every install doc today says "open Claude Code in an empty folder." Real users have real repos with real conventions, real AI tools already in place (Cursor / Aider / Copilot / their own MCP servers), real CI, real teammates. The plugin as it stands is a demo, not a product.
 - **How.** A new `/sdlc:brownfield` command runs a tiered discovery (~10 s), presents one Gate 0 confirmation, then routes into an intent-conditional pipeline that reuses most of the existing machinery. A non-destructive write contract enforced at three layers (prompt / packet validator / PreToolUse hook) guarantees off-limits files (theirs and ours) are never touched. Multi-session machinery (ledger, provenance, resume, staleness detection) makes the second and Nth session on the same project safe and coherent.
 - **All decisions locked.** V1 = 7 intents (no separate review command — review deferred to v2 as it's a different product category from safely-changing-code) + all §14 must-haves + **adaptive stack profile** (§21) + **pipeline pre-check with max-scope robustness** (§22) + **two-prompt UX contract** (§23) + **explicit model-per-task routing docs** (§24) + **setup shepherd behavior** (§25) + **credential discovery "check first, ask second"** (§26). Discovery = tiered (Tier 1 / Tier 2 at Gate 0 / Tier 2b adaptive profile / Tier 3 on-demand). Safety: write-contract hook **hard block by default**; git-dirty **blocks when `commit_strategy != none`**. Stack adapters: **generic + nest + python** as baselines, adaptive profile as primary quality mechanism. All 15 setup-time robustness issues handled ("handle ≠ solve" principle). Prompt 1 shepherds interactively (auto-do / pause-and-guide / verify); credentials discovered across shell env, gcloud, home dir configs, shell rc files, and repo scan before ever asking user to set up fresh; headless mode for CI exits with clear log on any guide-needed step.
@@ -18,7 +18,7 @@
 
 **Part I — Foundations**
 - [Context — why brownfield](#context--why-brownfield)
-- [The user journey](#the-user-journey)
+- [The journey](#the-journey)
 - [End-to-end state machine](#end-to-end-state-machine)
 - [V1 scope — locked](#v1-scope--locked)
 
@@ -80,9 +80,9 @@ Intended outcome: a user can drop this plugin into a real repo, run `/sdlc:brown
 
 ---
 
-## The user journey
+## The journey
 
-One command: `/sdlc:brownfield`. The wizard is the product surface; everything downstream is invisible. What the user sees:
+One command: `/sdlc:brownfield`. The wizard is the product surface; everything downstream is invisible. What you see:
 
 1. **Setup check** — same `verify-setup.mjs` as greenfield, plus a git-clean check (brownfield needs a rollback anchor).
 2. **Discovery** (~10 s with the tiered model, §2) — "reading your repo." Produces a one-page `discovery.md`.
@@ -91,7 +91,7 @@ One command: `/sdlc:brownfield`. The wizard is the product surface; everything d
 5. **The pipeline runs** — same gates 1–4 as greenfield, but many phases short-circuit for lighter intents (e.g. docs skips architect; security-review reads only changed files).
 6. **Report** — same shape as today, plus a "files touched vs off-limits" section that proves the write contract held.
 
-The user should be able to try this, hate it, `/plugin uninstall`, delete `.sdlc/`, and leave zero footprint elsewhere.
+You should be able to try this, hate it, `/plugin uninstall`, delete `.sdlc/`, and leave zero footprint elsewhere.
 
 ---
 
@@ -151,7 +151,7 @@ Explicitly out of scope for v1:
 
 **One new `/sdlc:brownfield` command + a shared `mode: greenfield|brownfield` field on the orchestrator's inputs.** Not a `--mode` flag on `/sdlc:run` — the wizards diverge too much (`run.md:31-71` searches for `# Project Brief`-headed files in an empty folder, which is nonsense for a repo with a real README). Not per-intent commands (`/sdlc-doc`, `/sdlc-bugfix`) — the intent belongs *inside* the brownfield flow and duplicating pre-flight+discovery+gates across 4-5 commands is a maintenance trap.
 
-**Mode detection guard on `/sdlc:run`** (A2 fix): the existing `/sdlc:run` command gains an early check — if `./src` exists OR `.git` exists with any tracked files, print *"This looks like an existing repo — did you mean `/sdlc:brownfield`? Pass `--force-greenfield` to proceed anyway (will only work in `./src` after your confirmation at Gate 0)."* and refuse until the user confirms. Prevents accidental greenfield-run on a real repo.
+**Mode detection guard on `/sdlc:run`** (A2 fix): the existing `/sdlc:run` command gains an early check — if `./src` exists OR `.git` exists with any tracked files, print *"This looks like an existing repo — did you mean `/sdlc:brownfield`? Pass `--force-greenfield` to proceed anyway (will only work in `./src` after your confirmation at Gate 0)."* and refuse until you confirm. Prevents accidental greenfield-run on a real repo.
 
 `/sdlc:pass` grows `--mode brownfield --intent <docs|bugfix|feature-extend|feature-new|refactor|test|deps>` for headless / CI use.
 
@@ -184,10 +184,10 @@ The heavy pre-discovery originally sketched was over-engineering. The tiered mod
 - Detect monorepo signals (see §15).
 - Detect git submodules (from `.gitmodules`). Per B2: v1 treats submodules as opaque (never touched); warn at Gate 0.
 
-**Tier 2 — Ask the user at Gate 0 (not scan):**
+**Tier 2 — Ask at Gate 0 (not scan):**
 - Test command — surface what we detected in npm scripts / pyproject / Makefile; ask them to confirm/paste.
 - File scope allowlist — propose based on intent brief + detected layout; let them edit.
-- Off-limits confirmation — show competing AI configs we found (default OFF-LIMITS).
+- Off-limits confirmation — show any competing AI configs detected (default OFF-LIMITS).
 - Intent selection.
 - Layout samples (see §15) — for docs, tests, and new-file placement, show a proposed location per intent-brief item; user confirms or adjusts.
 
@@ -204,7 +204,7 @@ The heavy pre-discovery originally sketched was over-engineering. The tiered mod
 
 **Silent-policy-override risk (critical).** `plugin/mcp/gemini-flash-server/src/policy.ts:26-31` already respects a repo-local `routing-policy.yaml`. Brownfield repos may well have one, and today the plugin would silently honor it. Discovery must surface this at Gate 0: "This repo ships `routing-policy.yaml` at `<path>`; we will honor it. Confirm or override with `--policy <name>`."
 
-**What we lose vs a heavy pre-scan:** the elegant "here's everything we know about your repo" Gate 0 dump. **What we gain:** ~10 s first-run discovery instead of 60–90 s, and much less code to maintain.
+**What we lose vs a heavy pre-scan:** the "here's everything we know about your repo" Gate 0 dump. **What we gain:** ~10 s first-run discovery instead of 60–90 s, and much less code to maintain.
 
 ---
 
@@ -225,13 +225,13 @@ The gate output is the **authoritative source** for the write contract (§4) and
 
 **Non-obvious risk:** default the AI-coexistence answer to "off-limits." A user who hits `approved` without reading must not accidentally authorize us to rewrite their `.cursor/rules` or their custom `routing-policy.yaml`.
 
-**Subagent → main-loop bubble-up (A4 fix).** Orchestrator is a Claude Code subagent; subagents can't run interactive dialogs on their own. The gate rendering pattern is: the orchestrator returns a specifically-shaped message (fenced `⏸ HITL Gate` block, structured as above), the main-loop session displays it verbatim to the user and waits for input, then re-invokes the orchestrator subagent with `{gate_response: "approved" | "revise: <text>" | "abort"}` as an argument. The state machine's checkpoint (§14.6) is written *before* the message is emitted, so if the user quits or the session dies mid-gate, session-hydrate detects the pending gate and re-prompts on next session. Documented in `plugin/skills/run-ai-sdlc/SKILL.md` alongside the gate templates.
+**Subagent → main-loop bubble-up (A4 fix).** Orchestrator is a Claude Code subagent; subagents can't run interactive dialogs on their own. The gate rendering pattern is: the orchestrator returns a specifically-shaped message (fenced `⏸ HITL Gate` block, structured as above), the main-loop session displays it verbatim to you and waits for input, then re-invokes the orchestrator subagent with `{gate_response: "approved" | "revise: <text>" | "abort"}` as an argument. The state machine's checkpoint (§14.6) is written *before* the message is emitted, so if you quit or the session dies mid-gate, session-hydrate detects the pending gate and re-prompts on next session. Documented in `plugin/skills/run-ai-sdlc/SKILL.md` alongside the gate templates.
 
 ---
 
 ## §4 — Non-destructive write contract (the crown jewel)
 
-**Rule:** the orchestrator may not write to any path unless (a) the path is in the confirmed allowlist, OR (b) the path did not exist at discovery time, OR (c) the user re-opened Gate 0 to expand scope. Off-limits paths are hard-rejected before any dispatch.
+**Rule:** the orchestrator may not write to any path unless (a) the path is in the confirmed allowlist, OR (b) the path did not exist at discovery time, OR (c) you re-opened Gate 0 to expand scope. Off-limits paths are hard-rejected before any dispatch.
 
 **Enforcement — three layers, honestly labeled (A6 fix):**
 
@@ -244,7 +244,7 @@ The gate output is the **authoritative source** for the write contract (§4) and
 - `.env` / `.env.example` — append missing keys only; never rewrite existing values; **never `cp .env.test .env` when `.env` exists** (bug in `SKILL.md:161` today).
 - `CLAUDE.md`, `.claude/settings.json`, `.mcp.json` — read → parse → deep-merge → write, with the diff shown at a mini-gate.
 - `routing-policy.yaml` — **never touched** if pre-existing (Gate 0 already surfaces this).
-- `.cursor/rules`, `.aider*`, `.continue/`, `.github/copilot-instructions.md` — default off-limits; only editable if user explicitly moved them into allowlist at Gate 0.
+- `.cursor/rules`, `.aider*`, `.continue/`, `.github/copilot-instructions.md` — default off-limits; only editable if you explicitly moved them into allowlist at Gate 0.
 
 **Diff-preview mini-gate.** Any packet targeting a file that existed at discovery time returns a unified diff; the orchestrator shows it inline and asks approve/revise before writing. This is the concrete answer to "we don't know how they use Gemini" — even if discovery misclassified their config, they see the diff before it lands.
 
@@ -367,13 +367,13 @@ Real Gate 0 for a `feature-extend` intent on a Turborepo monorepo:
 
 ### What "enforcement" means for placement (A7 fix)
 
-Placement is a **codegen quality concern, not a safety concern**. The stack adapter's placement rules guide the packet planner toward good locations; the write contract (§4) then enforces the **allowlist** the user confirmed at Gate 0. **If the packet planner proposes a badly-placed path that's still inside the allowlist, the write contract will accept it** — placement isn't a safety guarantee, only the allowlist is. This split matters: placement failures (wrong folder, wrong naming) are quality regressions, not safety incidents. Users can catch them at Gate 0's placement preview or at the diff-preview mini-gate.
+Placement is a **codegen quality concern, not a safety concern**. The stack adapter's placement rules guide the packet planner toward good locations; the write contract (§4) then enforces the **allowlist** you confirmed at Gate 0. **If the packet planner proposes a badly-placed path that's still inside the allowlist, the write contract will accept it** — placement isn't a safety guarantee, only the allowlist is. This split matters: placement failures (wrong folder, wrong naming) are quality regressions, not safety incidents. Users can catch them at Gate 0's placement preview or at the diff-preview mini-gate.
 
 ### From the three roles
 
 **Claude Code architect:** don't invent a new placement DSL. Stack adapter's `## Placement rules` section is a small prompt fragment codegen reads. Packet planner proposes locations; codegen respects them; write contract enforces the allowlist (which contains those locations after Gate 0).
 
-**Product engineer:** the Gate 0 preview above IS the whole placement UX. If the user says "no, put webhooks in `apps/api/src/webhooks/` instead," the plan uses their answer verbatim. Detect and follow, don't force.
+**Product engineer:** the Gate 0 preview above IS the whole placement UX. If you say "no, put webhooks in `apps/api/src/webhooks/` instead," the plan uses your answer verbatim. Detect and follow, don't force.
 
 **DevOps engineer:** placement decisions must not violate CODEOWNERS, must not write into `.gitignore`d paths, must not touch build/generated dirs, must respect branch protection rules. Every one of these is a Gate 0 or mini-gate concern; safety enforcement lives in the write-contract check (§4), not in placement rules.
 
@@ -597,7 +597,7 @@ Tier 1 discovery finds file presence; Gate 0 defaults them to off-limits. That's
 - **Adjacent (independent)** — user has Cursor rules for editor autocomplete, we handle SDLC. Zero conflict.
 - **Overlapping (competing)** — user has Aider or a custom Claude-powered script that also generates code. Risk: they run in different sessions and produce diverging code.
 - **Layered (nested)** — user's existing Claude Code setup already has MCP servers (e.g. their own Gemini adapter). Namespacing prevents tool-name collision (from the earlier platform research), but the user's routing policy might silently override ours (per the `policy.ts:26-31` precedence).
-- **Configured (deep)** — user has a custom `routing-policy.yaml` at repo root. Our policy loader already picks it up. This is *silent override* today — we detect and surface it at Gate 0.
+- **Configured (deep)** — you have a custom `routing-policy.yaml` at repo root. The policy loader already picks it up. This is *silent override* today — surfaced at Gate 0.
 
 **v1: presence detection + default off-limits (C7 cut).** Discovery detects the presence of `.cursor/`, `.aider*`, `.continue/`, `.github/copilot-instructions.md`, `.mcp.json` entries, and `routing-policy.yaml`. Gate 0 lists them and defaults all to OFF-LIMITS. This alone gives the full safety guarantee — the write contract will refuse to touch them.
 
@@ -1051,7 +1051,7 @@ Every known risk gets **detection + clear-message handling**. We don't build ela
 | Issue | Handling |
 |---|---|
 | No test infrastructure at all | Detect at pre-check step 2. Gate 0 warns: "No test command detected. Proceed without test phase? [y/n]" |
-| Failing tests before we start | Run tests once at pre-check. If failing, Gate 0 warns: "Repo has N pre-existing failing tests. Our run won't cause these but may fail Phase 7 approval. Continue? [y/n]" |
+| Failing tests before we start | Run tests once at pre-check. If failing, Gate 0 warns: "Repo has N pre-existing failing tests. This pass won't cause them but may fail Phase 7 approval. Continue? [y/n]" |
 | Encrypted secrets manager (Doppler, Vault, `.env.enc`) | Detect via file presence. Gate 0 note: "Secrets appear to be in `<X>`. Off-limits doesn't cover them, but we don't touch them either." No .env work in this run. |
 | Git-LFS files | Detect from `.gitattributes`. Skip Read on LFS-marked files (would blow token budget). Gate 0 note lists what's skipped. |
 | Git submodules | Detect `.gitmodules`. Treat submodules as opaque (never write). Gate 0 note lists them. |
@@ -1088,7 +1088,7 @@ Original design put discovery and inline remediation in prompt 2; that was techn
 
 ### Prompt 1 — Setup (`Setup this plugin from this repo — <URL>`)
 
-Runs when the user is in their project directory (the common case). Fully shepherded per §25 — auto-do / pause-and-guide / verify. Six ordered sections:
+Runs when you are in your project directory (the common case). Fully shepherded per §25 — auto-do / pause-and-guide / verify. Six ordered sections:
 
 **Section 1 · Install (machine-level, always run):**
 1. Register marketplace
@@ -1107,7 +1107,7 @@ Runs when the user is in their project directory (the common case). Fully shephe
 **Section 4 · Credentials (discover first, ask second — §26 shepherd):**
 9. Anthropic (**required**): scan every location → if none found, hard-shepherd (can't skip; fallback to Claude Code subscription auth → `estimated` telemetry mode)
 10. Gemini (**optional but default policy needs it**): scan every location for all three flavors → offer to set up OR switch to `opus-only` OR skip
-11. Antigravity (**opt-in only**): check only if user's policy uses `flash-agsdk-worker`; otherwise noted-and-skipped
+11. Antigravity (**opt-in only**): check only if your policy uses `flash-agsdk-worker`; otherwise noted-and-skipped
 
 **Section 5 · Repo setup (only when in a git repo):**
 12. `.sdlc/` write permission
@@ -1148,7 +1148,7 @@ Repo-aware. Runs per task invocation. In the common case, all setup work was don
 6. **Gate 0** — confirming intent + scope. Stack, test command, and off-limits are already known from the baseline.
 7. **Pipeline runs** — per §5 state machine.
 
-### Graceful mid-setup recovery (new)
+### Resumable mid-setup recovery (new)
 
 The shepherd writes progress to `.sdlc/local/setup-status.json` after **each section completes** — schema: `{sections_done: [1,2,3,4], sections_pending: [5,6], last_prompt_step: {...}, timestamp}`. If a session dies mid-section (Ctrl+C, network drop, machine sleep), the last completed section is recorded; the current section's partial state is discarded (safer to redo one section than to have a half-complete state).
 
@@ -1171,7 +1171,7 @@ No new commands. No user-visible failure mode. Same shepherd, different entry po
 - **Cleaner mental model.** "Setup is complete after prompt 1" matches how users think about installation.
 - **Prompt 2 is fast.** Cached baseline + cached pre-check means most invocations skip straight to intent selection.
 - **User-action work is up-front.** If you need to visit a browser for a Gemini key, that happens once at setup — never mid-task.
-- **Repo-state risks surface early.** LFS, submodules, failing tests are noted at prompt 1, not surprising the user mid-task.
+- **Repo-state risks surface early.** LFS, submodules, failing tests are noted at prompt 1, not surprising you mid-task.
 
 ### Impact on plan
 
@@ -1183,7 +1183,7 @@ No new commands. No user-visible failure mode. Same shepherd, different entry po
 
 ## §26 — Credential discovery — "check first, ask second" (new, from D7)
 
-**Locked decision.** The shepherd (§25) doesn't naively ask "do you have a Gemini key?" — it **scans multiple locations** for existing credentials first, reports what it found, and only asks the user to set up fresh if truly nothing exists anywhere.
+**Locked decision.** The shepherd (§25) doesn't naively ask "do you have a Gemini key?" — it **scans multiple locations** for existing credentials first, reports what it found, and only asks you to set up fresh if truly nothing exists anywhere.
 
 ### Providers and their auth flavors
 
@@ -1194,7 +1194,7 @@ No new commands. No user-visible failure mode. Same shepherd, different entry po
 
 **Gemini (mechanical tier)** — three auth flavors:
 1. **Google AI Studio** — `GEMINI_API_KEY` env var, simplest, free tier
-2. **Vertex AI** — GCP project + auth via service account JSON or Application Default Credentials, production-grade
+2. **Vertex AI** — GCP project + auth via service account JSON or Application Default Credentials
 3. **Antigravity SDK** — sits on top of Vertex, reuses GCP auth, agent-based, higher per-task token cost
 
 There is **no separate "Antigravity API key"** — it uses GCP credentials.
@@ -1294,7 +1294,7 @@ Three ways to set up:
 | Detect git version | Claude | Same |
 | Detect plugin conflicts | Claude | Auto; if conflict, ask user to rename/uninstall, verify |
 | Detect Anthropic key | Claude | Auto; if missing, guide to obtain (link), wait, verify |
-| Detect Gemini key (optional) | Claude | Auto; if missing, **NOT blocking** — note in summary, offer to guide or skip |
+| Detect Gemini key (optional) | Claude | Auto; if missing, **NOT blocking** — note in the summary, offer to guide or skip |
 | Detect Antigravity SDK (optional) | Claude | Same as Gemini |
 | Filesystem write permission on `.sdlc/` | Claude | Auto; if fail, guide to chmod, verify |
 | `npm install` (rare, only if plugin needs deps) | Claude | Auto via Bash (permissioned) |
@@ -1349,7 +1349,7 @@ Setup complete.
 Ready. Run /sdlc:brownfield when you want to start.
 ```
 
-The user knows exactly what state their setup is in, what will happen at first run, and what to do if they want to change any of it.
+You know exactly what state your setup is in, what will happen at first run, and what to do if you want to change any of it.
 
 ### Impact on plan
 
@@ -1414,7 +1414,7 @@ Critical re-read of the plan looking for contradictions, gaps, over-engineering,
 |---|---|---|
 | A1 | **Baseline file naming inconsistent.** §2 says `<output_dir>/baseline.json` (per-run snapshot). §14.1 says `.sdlc/baseline/manifest.json` (committed living baseline). §14.4 references `baseline.git_head`. Three names for two different things. | Rename: **`.sdlc/runs/<id>/baseline.json`** for per-run snapshot; **`.sdlc/baseline/current.json`** for the living project baseline. Update every reference. |
 | A2 | **Mode-detection entry point missing.** State machine says "picks greenfield path when `mode: greenfield`" but doesn't say where `mode` is set. If a user runs `/sdlc:run` in an existing repo, what happens? | `/sdlc:run` gains a repo-empty check: if `./src` exists or `.git` exists with files, print "This looks like an existing repo — did you mean `/sdlc:brownfield`?" and refuse until confirmed. `/sdlc:brownfield` sets `mode: brownfield` unconditionally. |
-| A3 | **Non-git-repo case unspecified.** Every Tier 1 step assumes `git`. What if user is in a folder without `.git`? | Discovery detects; if no git → refuse with clear message ("brownfield mode needs git for rollback anchors — run `git init && git add -A && git commit -m 'baseline'` first, then re-run"). Not offering to auto-init; too destructive. |
+| A3 | **Non-git-repo case unspecified.** Every Tier 1 step assumes `git`. What if you are in a folder without `.git`? | Discovery detects; if no git → refuse with clear message ("brownfield mode needs git for rollback anchors — run `git init && git add -A && git commit -m 'baseline'` first, then re-run"). Not offering to auto-init; too destructive. |
 | A4 | **Gate prompts inside a subagent.** Orchestrator is a subagent; per platform research subagents can't run interactive dialogs. The gate template shows a `> ⏸ HITL Gate` block but doesn't say how it bubbles to the main-loop session. | Gate rendering is the subagent returning a specifically-shaped message to the main loop; the main loop (Claude Code session) displays it and awaits user input, then re-invokes the subagent with the answer. Document the message shape in `SKILL.md`. |
 | A5 | **`/sdlc-review` command never specified.** ~~Add short spec~~ **SUPERSEDED — dropped from v1 in a later pass.** Code review is a different product category from safely-changing-code (competes with CodeQL, Cursor review, GitHub Copilot review) and isn't core to the plugin's main value prop. Deferred to v2. See §6 out-of-scope. |
 | A6 | **The write contract's three layers include one that's soft.** Only the PreToolUse hook is an actual interception; the orchestrator "prompt gate" is soft (AI can drift) and the packet validator only catches planned writes, not ad-hoc `Write` calls the orchestrator makes outside a packet. | Be honest in §4: the *only* unbreakable layer is the hook. The prompt gate is best-effort. Recommend hook default-on for brownfield (open decision). Also: orchestrator prompt must forbid raw `Write`/`Edit` outside packets — all writes must go through a packet. |
@@ -1430,10 +1430,10 @@ Critical re-read of the plan looking for contradictions, gaps, over-engineering,
 |---|---|---|
 | B1 | **Greenfield → brownfield handoff.** User runs `/sdlc:run` today, then wants `/sdlc:brownfield` next week. Does brownfield discover the greenfield `.sdlc/` cleanly? | Test explicitly. Likely works because §14.1 state model is additive. Add to verification plan. |
 | B2 | **Git submodules.** Baseline SHAs, rollback, `git check-ignore` all get tangled with submodules. | v1: discovery detects submodules and warns "submodules are treated as opaque; runs won't touch them." v1.5: real submodule support. |
-| B3 | **Gitignore enforcement for `.sdlc/local/`.** Offered at Gate 0, but if user declines, `local/` gets committed and floods PRs. | Refuse to run at Gate 0 if `.sdlc/local/` isn't gitignored, unless `--allow-uncovered-local` is passed. |
+| B3 | **Gitignore enforcement for `.sdlc/local/`.** Offered at Gate 0, but if you decline, `local/` gets committed and floods PRs. | Refuse to run at Gate 0 if `.sdlc/local/` isn't gitignored, unless `--allow-uncovered-local` is passed. |
 | B4 | **Intent brief authoring flow underspecified.** §6 says "wizard writes it" — from what inputs? | Spell out: wizard interviews user (2-4 questions per intent), fills in the heading template, shows the draft, asks to confirm/edit, then commits it to `.sdlc/runs/<id>/intent_brief.md`. |
 | B5 | **POSIX flock is not cross-platform.** Windows without WSL breaks. | Use a lockfile-with-PID-and-expiry pattern (portable), not flock. Reference `proper-lockfile` npm package or implement inline. |
-| B6 | **`@`-import 4-hop limit.** If user's CLAUDE.md already has 3 hops of imports, adding ours breaks. | Session-hydrate checks CLAUDE.md's existing imports depth-first before proposing the `@import` line; if we'd exceed 4 hops, print alternative "add manually to whichever file has spare hop budget." |
+| B6 | **`@`-import 4-hop limit.** If your CLAUDE.md already has 3 hops of imports, adding ours breaks. | Session-hydrate checks CLAUDE.md's existing imports depth-first before proposing the `@import` line; if we'd exceed 4 hops, print alternative "add manually to whichever file has spare hop budget." |
 | B7 | **Preflight endpoint reachability.** §19 says "preflight verifies each endpoint answers" — but current `preflight_dispatch` only constructs adapters, doesn't ping. | Add optional `verify_reachable: bool` param to `preflight_dispatch`; when true, makes a zero-token OPTIONS or trivial completion. Default true in `ci-strict.yaml`. |
 | B8 | **Monorepo per-package scope mapping.** §15/§9 say tests run per-package scope covering "changed files" but the mapping from a file path to a package isn't defined. | Discovery emits `packages: [{name, root, manifest, test_scope}]`. Each packet stamps its package. Test runner walks touched files → packages → scopes. Add to §15. |
 
@@ -1453,7 +1453,7 @@ Critical re-read of the plan looking for contradictions, gaps, over-engineering,
 
 | # | Assumption | Where to state |
 |---|---|---|
-| D1 | The user has a `git` binary on PATH and the plugin's Bash calls to it succeed. | `plugin/scripts/verify-setup.mjs` — add git version check. |
+| D1 | You have a `git` binary on PATH and the plugin's Bash calls to it succeed. | `plugin/scripts/verify-setup.mjs` — add git version check. |
 | D2 | The user's Claude Code settings don't restrict Read tool on the target repo. | `verify-setup.mjs` — do a test Read at repo root; if it errors with permission, explain. |
 | D3 | The `dispatch-sanitize.mjs` sweep is invoked at the MCP server layer (before every `execute_with_model` call), not from user scripts. Currently the plan says "runs on every dispatch input" without specifying where the interception lives. | State plainly in §19: sweep lives in `plugin/mcp/gemini-flash-server/src/adapters/*.ts` — wraps every provider call. |
 | D4 | `SDLC_DEBUG=1` is read by every plugin script AND the MCP server. | Central env-reader at `plugin/scripts/env.mjs`; MCP server reads at startup. |

@@ -7,8 +7,6 @@ Copilot, a custom internal MCP server, existing pre-commit hooks, existing CI, e
 linters and formatters — all of these are things this plugin **coexists with, never replaces
 or reconfigures**.
 
-This document explains what "coexists" means in practice and what to expect.
-
 ## Four types of coexistence
 
 Real repos have four flavors of overlap with what the plugin does:

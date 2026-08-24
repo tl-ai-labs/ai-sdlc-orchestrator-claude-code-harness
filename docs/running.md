@@ -2,7 +2,9 @@
 
 > **For:** every `/mmo:pass` flag; scripting a run for CI or replay. **Also see:** [tutorial-first-run.md](tutorial-first-run.md) · [brownfield.md](brownfield.md) · [troubleshooting.md](troubleshooting.md).
 
-This page is the reference for `/mmo:pass` — the same run as `/mmo:greenfield` or `/mmo:brownfield`, but with every setting exposed as a flag. Useful for repeat runs, for scripting, and for understanding what the interactive commands chose for you. If you installed the plugin, start with `/mmo:greenfield` (greenfield) or `/mmo:brownfield` (existing repo) in a new session — Claude Code registers slash commands and starts plugin MCP servers only at session start, so the session that installed the plugin does not yet see them.
+`/mmo:pass` is the flag-exposed form of `/mmo:greenfield` and `/mmo:brownfield` — the same run, every setting as a flag. Use it for repeat runs, for scripting, and to see what the interactive commands chose for you.
+
+> **First session after install:** start with `/mmo:greenfield` (greenfield) or `/mmo:brownfield` (existing repo) in a *new session*. Claude Code registers slash commands and starts plugin MCP servers only at session start; the session that installed the plugin does not yet see them.
 
 Two policies ship with this repository. Pick one to start.
 
