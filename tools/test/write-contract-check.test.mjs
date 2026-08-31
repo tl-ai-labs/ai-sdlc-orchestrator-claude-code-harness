@@ -4,7 +4,9 @@
  * runs (ticket §7.1, §10.1).
  *
  * Testing shape: subprocess-based, piping the Claude Code hook input shape
- * on stdin and asserting the exit code + stderr. Exit 0 = allow, 1 = deny.
+ * on stdin and asserting the exit code + stderr. Exit 0 = allow, 2 = deny
+ * (Claude Code's blocking hook exit code — 1 is a NON-blocking hook error
+ * that would let the write proceed, which is the bug these tests pin).
  * Fail-open: bad or missing contract → allow.
  */
 import { test } from "node:test";
@@ -78,7 +80,7 @@ test("denies a path that hits off_limits — even if it also matches allowlist",
   });
   try {
     const r = await runHook(dir, { tool_input: { file_path: ".env.production" } });
-    assert.equal(r.code, 1, "off_limits must deny even when allowlist would match");
+    assert.equal(r.code, 2, "off_limits must deny even when allowlist would match");
     assert.match(r.stderr, /off-limits/, "reason must name the rule class");
   } finally { cleanup(dir); }
 });
@@ -90,7 +92,7 @@ test("denies a path that is not in the allowlist (allowlist-default-deny)", asyn
   });
   try {
     const r = await runHook(dir, { tool_input: { file_path: "docs/README.md" } });
-    assert.equal(r.code, 1, "not-in-allowlist must deny in strict mode");
+    assert.equal(r.code, 2, "not-in-allowlist must deny in strict mode");
     assert.match(r.stderr, /not in the confirmed allowlist/i);
   } finally { cleanup(dir); }
 });
@@ -150,7 +152,7 @@ test("cross-repo write: denies an absolute path that resolves outside cwd's cont
     // cwd=repoA, target=absolute path in repoB. Upfront cwd-anchored escape
     // check fires: target is outside repoA's contracted tree → deny.
     const r = await runHook(repoA, { tool_input: { file_path: absTargetInB } });
-    assert.equal(r.code, 1, `escape must deny; stderr=${r.stderr}`);
+    assert.equal(r.code, 2, `escape must deny; stderr=${r.stderr}`);
     assert.match(r.stderr, /OUTSIDE the calling session's contracted repo|Cross-project writes/,
       "must be labeled as a category error, not just out-of-scope");
   } finally { cleanup(repoA); cleanup(repoB); }
@@ -171,7 +173,7 @@ test("cross-repo write with contract on BOTH sides: escape from A's contract is 
     // Relative path that escapes repoA when resolved against repoA.
     const escapingRelative = "../../../../etc/passwd";
     const r = await runHook(repoA, { tool_input: { file_path: escapingRelative } });
-    assert.equal(r.code, 1, `escape must deny; stderr=${r.stderr}`);
+    assert.equal(r.code, 2, `escape must deny; stderr=${r.stderr}`);
     assert.match(r.stderr, /OUTSIDE the contract's repo root|Cross-project writes/,
       "escape must be labeled as a category error, not just out-of-scope");
   } finally { cleanup(repoA); }
@@ -181,7 +183,7 @@ test("pre-contract safety net: denies .env write even when no contract exists", 
   const dir = makeRepo(undefined); // no contract
   try {
     const r = await runHook(dir, { tool_input: { file_path: ".env" } });
-    assert.equal(r.code, 1, "always-off-limits path must deny even without a contract");
+    assert.equal(r.code, 2, "always-off-limits path must deny even without a contract");
     assert.match(r.stderr, /always-off-limits/, "must name the safety-net rule");
   } finally { cleanup(dir); }
 });
@@ -190,7 +192,7 @@ test("pre-contract safety net: denies .mcp.json write even when no contract exis
   const dir = makeRepo(undefined);
   try {
     const r = await runHook(dir, { tool_input: { file_path: ".mcp.json" } });
-    assert.equal(r.code, 1, "MCP config write is refused pre-contract");
+    assert.equal(r.code, 2, "MCP config write is refused pre-contract");
     assert.match(r.stderr, /always-off-limits/);
   } finally { cleanup(dir); }
 });
@@ -217,7 +219,7 @@ test("target-anchored contract resolution: absolute target inside a contracted r
     const absTarget = join(contracted, "src", "should-not-be-written.ts");
     mkdirSync(join(contracted, "src"), { recursive: true });
     const r = await runHook(neutralCwd, { tool_input: { file_path: absTarget } });
-    assert.equal(r.code, 1, "target-anchored contract must be found and enforced");
+    assert.equal(r.code, 2, "target-anchored contract must be found and enforced");
     assert.match(r.stderr, /not in the confirmed allowlist/i,
       "allowlist-default-deny must trigger against the target's contract");
   } finally { cleanup(neutralCwd); cleanup(contracted); }

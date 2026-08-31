@@ -20,7 +20,10 @@
  *
  * Exit codes (Claude Code hook contract):
  *   0 → allow
- *   1 → deny (stderr becomes the reason shown to the user)
+ *   2 → deny (Claude Code blocks the tool call and feeds stderr back to
+ *       the model as the reason). Exit 1 is NOT a deny: the hook contract
+ *       treats 1 as a non-blocking hook error — the message is surfaced
+ *       but the write still goes through, making every denial advisory.
  */
 
 import { readFile } from "node:fs/promises";
@@ -155,7 +158,11 @@ function deny(msg, ctx = {}) {
     matched_off_limits_rule: ctx.matchedRule,
     strict: ctx.strict,
   });
-  process.exit(1);
+  // Exit 2 is Claude Code's PreToolUse "block" code: the tool call is
+  // refused and stderr is fed back to the model as the reason. The old
+  // exit(1) was the NON-blocking hook-error code, so every DENY above was
+  // advisory — the off-limits/allowlist write went through anyway.
+  process.exit(2);
 }
 
 async function main() {
