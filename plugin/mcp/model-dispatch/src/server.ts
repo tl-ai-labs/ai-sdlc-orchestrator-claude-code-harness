@@ -280,6 +280,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           events: { type: "array" },
           policy_name: { type: "string" },
+          project_root: {
+            type: "string",
+            description:
+              "Project root, so a repo-local routing-policy.yaml resolves here exactly as it " +
+              "does for the run being simulated. Omitting it silently falls back to the " +
+              "shipped preset — a what-if against the wrong policy.",
+          },
           policy_path: { type: "string" },
         },
         required: ["events"],
@@ -518,7 +525,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "simulate_policy": {
         const a = args as any;
-        const policy = ensurePolicy(a.policy_name, undefined, a.policy_path);
+        // project_root flows through like every sibling tool's does
+        // (execute_with_model, preflight_dispatch, load_policy) — this
+        // handler used to hardcode `undefined` here, so a simulation for a
+        // project with a repo-local routing-policy.yaml silently priced the
+        // shipped preset instead of the policy the run actually used.
+        const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
         // Replay against the same slot choices the real run uses.
         const out = simulatePolicyCost(a.events, policy, selectOverrides());
         return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };

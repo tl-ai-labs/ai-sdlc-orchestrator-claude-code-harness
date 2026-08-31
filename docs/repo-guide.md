@@ -69,7 +69,7 @@ path, one API call per unit of work, nothing here is installed and nothing here 
 | `commands/` | 13 slash commands, one Markdown file each, all namespaced `/mmo:` — `greenfield.md`, `brownfield.md`, `pass.md`, seven per-job aliases, plus `setup.md`, `policy.md` and `revert.md`. |
 | `agents/` | 5 subagent definitions: `orchestrator`, `architect`, `discovery`, `senior-reviewer`, `security-reviewer`. |
 | `skills/` | Playbooks a subagent reads at run time. `pipeline/SKILL.md` carries the state machine, the task-packet schema (one packet per unit of work, the unit that gets routed to a model) and the approval gates; `brownfield-guide/SKILL.md` covers work on an existing repo. Per-stack guidance lives in `skills/pipeline/stacks/`. |
-| `config/policies/` | Routing policies as YAML. Two ship: `opus-only.yaml` and `opus-plus-flash.yaml`. A policy maps each phase to a model, prices each model, and sets the run's cost cap. |
+| `config/policies/` | Routing policies as YAML — the directory listing is the authoritative preset set (`opus-plus-flash.yaml` is the default). A policy maps each phase to a model, prices each model, and sets the run's cost cap. |
 | `config/intents.json` | The seven brownfield job types. |
 | `mcp/model-dispatch/` | The MCP server package (see the table above). |
 | `policy-console/` | The policy console package. |

@@ -139,7 +139,18 @@ empty, setup wasn't run for this project — stop and tell the user to run setup
 ([SETUP.md](../../SETUP.md), §5b). Do not proceed to spend anything without a policy the user
 has explicitly picked or explicitly kept as the shipped default.
 
-Load `${CLAUDE_PLUGIN_ROOT}/config/policies/<resolved-name>.yaml`.
+Resolve the policy through the `load_policy` MCP tool, passing `policy_name: <resolved-name>` and
+`project_root: $(pwd)`. Do **not** read the preset YAML from
+`${CLAUDE_PLUGIN_ROOT}/config/policies/` yourself: the loader's precedence puts a repo-local
+`<project root>/routing-policy.yaml` ahead of the named preset, and reading the preset file
+directly is exactly the bug that made greenfield preview one policy while the run priced under
+another. Passing `project_root` here means the preview and every later dispatch resolve through
+the same loader and can never disagree.
+
+The plan preview must state which policy file won and where it came from — one line, e.g.
+`Policy: project override (routing-policy.yaml)` or `Policy: preset opus-plus-flash` — so a
+surprise override is visible before anything is billed. To tell the two apart, check whether
+`<project root>/routing-policy.yaml` exists: if it does, the loader used it.
 
 Report, in a short list:
 - which model handles the judgment phases — requirements, design, task planning, senior review,

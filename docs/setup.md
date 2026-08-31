@@ -157,7 +157,7 @@ On the plugin route, [SETUP.md](../SETUP.md) §5b puts the choice to you. Four o
 
 | Option | What happens | When to pick it |
 |---|---|---|
-| **Open the browser to author or customize a policy** | Starts `plugin/policy-console/` (a single HTML page served by a tiny Node http server) on the first free port from 3000, opens the browser, watches `plugin/config/policies/` via `fs.watch`. Clicking Save writes a new YAML and the script auto-detects the write. | Any non-preset policy — different thinking budgets per phase, custom model per task-type, a policy that pins a region. |
+| **Open the browser to author or customize a policy** | Starts `plugin/policy-console/` (a single HTML page served by a tiny Node http server) on the first free port from 3000, opens the browser, watches `plugin/config/policies/` via `fs.watch`. Clicking Save writes a new YAML and the script auto-detects the write. The save lands inside the installed plugin's `config/policies/`, which `/plugin update` replaces wholesale — to keep a custom policy across updates, copy it to `<project root>/routing-policy.yaml`, which the loader prefers automatically. | Any non-preset policy — different thinking budgets per phase, custom model per task-type, a policy that pins a region. |
 | **`opus-plus-flash`** (recommended) | Silent set. Claude Opus for judgment phases, Gemini 3.5 Flash for mechanical (codegen, tests, docs). | The cost-efficient default. |
 | **`opus-only`** | Silent set. Claude Opus for every phase. | Single-model baseline, or when Gemini access is unavailable. |
 | **Skip** | Leaves `default_policy` unset. `/mmo:greenfield` and `/mmo:brownfield` refuse to start until a policy is picked. | Almost never. Prefer picking `opus-plus-flash` and changing later. |

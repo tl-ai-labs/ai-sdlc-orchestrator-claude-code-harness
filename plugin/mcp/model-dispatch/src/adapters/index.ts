@@ -18,21 +18,39 @@ import { log } from "../log.js";
 const LEGACY_GEMINI_ADAPTER_ID = "mcp:gemini-flash-server";
 let legacyAdapterIdWarned = false;
 
-export function createAdapter(config: ModelConfig): ModelAdapter {
-  if (config.adapter === "builtin-anthropic") return new BuiltinAnthropicAdapter(config);
-  if (config.adapter === "claude-cli") return new ClaudeCliAdapter(config);
-  if (config.adapter === "mcp:model-dispatch") return new GeminiFlashAdapter(config);
-  if (config.adapter === LEGACY_GEMINI_ADAPTER_ID) {
+/**
+ * The registry is a map so the set of known adapter ids and the dispatch in
+ * createAdapter can never drift apart: both are derived from these keys.
+ * validateModel() in policy.ts checks each model's `adapter:` against
+ * KNOWN_ADAPTER_IDS at policy-load time — previously a typo'd adapter id
+ * passed validation and only exploded when createAdapter ran mid-run, after
+ * premium phases had already been billed.
+ */
+const ADAPTER_FACTORIES: Record<string, (config: ModelConfig) => ModelAdapter> = {
+  "builtin-anthropic": (config) => new BuiltinAnthropicAdapter(config),
+  "claude-cli": (config) => new ClaudeCliAdapter(config),
+  "mcp:model-dispatch": (config) => new GeminiFlashAdapter(config),
+  [LEGACY_GEMINI_ADAPTER_ID]: (config) => {
     if (!legacyAdapterIdWarned) {
       legacyAdapterIdWarned = true;
       log("warn", "policy.adapter.deprecated", { adapter_id_seen: LEGACY_GEMINI_ADAPTER_ID, canonical: "mcp:model-dispatch" });
     }
     return new GeminiFlashAdapter(config);
+  },
+  "antigravity-worker": (config) => new AntigravityWorkerAdapter(config),
+};
+
+/** Every adapter id a policy may name, including the legacy compat alias. */
+export const KNOWN_ADAPTER_IDS: ReadonlySet<string> = new Set(Object.keys(ADAPTER_FACTORIES));
+
+export function createAdapter(config: ModelConfig): ModelAdapter {
+  const factory = ADAPTER_FACTORIES[config.adapter];
+  if (!factory) {
+    throw new Error(
+      `No adapter registered for '${config.adapter}'. Implement one and register it in adapters/index.ts.`,
+    );
   }
-  if (config.adapter === "antigravity-worker") return new AntigravityWorkerAdapter(config);
-  throw new Error(
-    `No adapter registered for '${config.adapter}'. Implement one and register it in adapters/index.ts.`,
-  );
+  return factory(config);
 }
 
 export type { ModelAdapter } from "./ModelAdapter.js";
