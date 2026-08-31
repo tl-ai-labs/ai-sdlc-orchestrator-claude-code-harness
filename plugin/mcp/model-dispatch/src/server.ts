@@ -459,6 +459,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           module: packet.module,
           model: modelName,
           routed_by: "orchestrator" as const,
+          // Server-measured from the vendor's own usage report, so always
+          // "vendor" — in BOTH auth modes (estimated mode's MCP-dispatched
+          // calls still carry vendor tokens; only direct-tier events are
+          // estimates, and those arrive via log_telemetry, not here). The
+          // report keys the run's cost label off this field; before this
+          // stamp existed every dispatched event fell to "unknown" and the
+          // whole run's numbers were disowned.
+          provenance: "vendor" as const,
           // Leaf id; the only field that distinguishes two leaves that share
           // a vendor model name (e.g. flash-completion vs flash-agsdk-worker).
           model_id: decision.modelId,

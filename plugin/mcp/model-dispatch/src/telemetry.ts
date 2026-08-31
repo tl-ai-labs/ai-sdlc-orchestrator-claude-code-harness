@@ -23,7 +23,17 @@ export function normalizeDirectTierEvent(
   ev: TelemetryEvent,
   now: Date = new Date(),
 ): TelemetryEvent {
-  return { ...ev, ts: now.toISOString(), latency_ms: null };
+  return {
+    ...ev,
+    ts: now.toISOString(),
+    latency_ms: null,
+    // Direct-tier events are char-count estimates by construction (vendor-
+    // measured numbers only ever come from execute_with_model, which never
+    // routes through here). A model that forgets the stamp must not cause
+    // the report to disown the event as "unknown"; an explicit stamp is
+    // passed through untouched.
+    provenance: ev.provenance ?? "estimated",
+  };
 }
 
 export function readEvents(jsonlPath: string): TelemetryEvent[] {

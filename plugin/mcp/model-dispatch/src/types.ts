@@ -70,6 +70,17 @@ export interface TelemetryEvent {
    */
   model_id?: string;
   routed_by: "orchestrator" | "fallback" | "manual";
+  /**
+   * Where this event's numbers came from. `"vendor"` = measured by the
+   * dispatch server from the vendor's own usage report (every
+   * `execute_with_model` event, in both auth modes); `"estimated"` =
+   * direct-tier char-count logged by the orchestrator via `log_telemetry`;
+   * `"transcript"` = reconstructed post-run from session transcripts
+   * (orchestrator-overhead collector). Optional because events written
+   * before this field existed lack it — readers treat absence as
+   * "unknown" and disown the run's label (tools/report.mjs).
+   */
+  provenance?: "vendor" | "estimated" | "transcript";
   routing: {
     policy_name: string;
     policy_version: number;
