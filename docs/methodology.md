@@ -42,7 +42,7 @@ These numbers reconcile to the Anthropic and Google dashboards for the API key a
 
 ### Estimator mode — `--auth=estimated`
 
-Claude Code handles auth via a Pro / Team / Enterprise subscription. Direct-tier calls (Opus phases, under any policy) run inside the subagent's conversation loop, which doesn't expose per-call `usage` to the subagent. The orchestrator therefore estimates tokens using a character-count heuristic:
+Claude Code handles auth via a Pro / Team / Enterprise subscription. Direct-tier calls (the judgment phases, under any policy) run inside the subagent's conversation loop, which doesn't expose per-call `usage` to the subagent. The orchestrator therefore estimates tokens using a character-count heuristic:
 
 ```
 tokens ≈ characters / 3.8
@@ -53,6 +53,8 @@ tokens ≈ characters / 3.8
 - `provenance: "estimated"`
 
 MCP-dispatched calls in this mode (Gemini under `opus-plus-flash`) still carry vendor tokens; only the direct-tier events are estimated. The report labels the whole run "Mixed" in that case.
+
+Which model that direct-tier work *executes* on is a separate question from how it is priced, and the two must be the same model for the estimate to mean anything. Execution is decided by Claude Code from the `CLAUDE_CODE_SUBAGENT_MODEL` environment variable, exported before the `claude` process launches; pricing comes from the policy's driver `model_name`. The orchestrator verifies they agree at run start via `plugin/scripts/driver-model-check.mjs` — the script derives the driver model by routing every judgment phase through the loaded policy with the same compiled routing the dispatch server uses, and stops the run (printing the exact export line) on unset or mismatch. The driver agent files carry no `model:` frontmatter pin, because a pin silently overrides the policy: the run executes the pinned model while the report prices the policy's.
 
 The 3.8 midpoint is fine for order-of-magnitude reasoning; it will not exactly match an Anthropic bill.
 

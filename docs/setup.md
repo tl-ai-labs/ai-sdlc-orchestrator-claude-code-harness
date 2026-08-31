@@ -30,8 +30,9 @@ The pipeline reaches four surfaces. You need at least one Anthropic surface for 
 | Variable | Type | Default | Required when | Description |
 |---|---|---|---|---|
 | `ANTHROPIC_API_KEY` | string | — | `--auth=vendor` | API key from [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys). Not needed under `--auth=estimated`, which uses the Claude Code subscription. |
+| `CLAUDE_CODE_SUBAGENT_MODEL` | string | — | `--auth=estimated` | The model the five driver subagents actually **execute** on. Must be exported **before `claude` launches** (an export inside the session runs in a child shell and never reaches the CLI process) and must equal the policy's driver `model_name` — print that with `node plugin/scripts/driver-model-check.mjs --project-root "$(pwd)" --print-only` plus the run's policy arguments. Without it the driver tier runs on whatever the session's model is while the report prices the policy's, which misattributes every driver dollar. Irrelevant under `--auth=vendor`, where every call dispatches through the server. |
 
-**Verify:** `verify-setup.mjs`. Under `vendor` an unset key is a blocking pre-flight halt; under `estimated` it is inert.
+**Verify:** `verify-setup.mjs`. Under `vendor` an unset key is a blocking pre-flight halt; under `estimated` it is inert. Under `estimated` the orchestrator additionally runs `plugin/scripts/driver-model-check.mjs` at run start and halts — printing the exact export line — when `CLAUDE_CODE_SUBAGENT_MODEL` is unset or does not match the policy's driver model. The driver agent files deliberately carry no `model:` frontmatter pin: a pin would silently override the policy, executing one model while the pricing block priced another.
 
 ### Anthropic via Claude subscription — the `claude-cli` adapter
 
