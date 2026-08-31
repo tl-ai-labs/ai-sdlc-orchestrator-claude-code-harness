@@ -63,14 +63,23 @@ function fakeSpawn(behavior) {
   };
 }
 
+/**
+ * Shaped like the real `claude -p --output-format json` result object:
+ * success is signaled by `type: "result"` + `subtype: "success"`. The old
+ * fixture invented `terminal_reason: "completed"` — a field/value pair the
+ * CLI never emits — which masked the adapter bug that classified every real
+ * success as an error (the check compared against that invented field).
+ */
 const SUCCESS_RESPONSE = {
+  type: "result",
+  subtype: "success",
   is_error: false,
   result: '{"ok":true}',
   total_cost_usd: 0.1219536,
   duration_ms: 3943,
   duration_api_ms: 2518,
+  num_turns: 1,
   stop_reason: "end_turn",
-  terminal_reason: "completed",
   session_id: "sess-1",
   usage: {
     input_tokens: 2,
@@ -104,11 +113,12 @@ test("returns a successful ExecutionResult and preserves vendor cost verbatim", 
 
 test("classifies is_error responses as a vendor_error ExecutionResult", async () => {
   const errorResponse = {
+    type: "result",
+    subtype: "error_during_execution",
     is_error: true,
     result: "quota exhausted",
     total_cost_usd: 0,
     stop_reason: "error",
-    terminal_reason: "error",
     usage: { input_tokens: 1, output_tokens: 0 },
   };
   const adapter = new ClaudeCliAdapter(BASE_CONFIG, {
@@ -121,6 +131,40 @@ test("classifies is_error responses as a vendor_error ExecutionResult", async ()
   assert.equal(out.terminal_reason, "vendor_error");
   assert.match(out.error, /quota exhausted/);
   assert.equal(out.result, null);
+});
+
+test("a non-success subtype is an error even when is_error is false", async () => {
+  // error_max_turns arrives with is_error false on some CLI versions; the
+  // subtype is the authoritative signal, so it must fail the call on its own.
+  const maxTurns = {
+    ...SUCCESS_RESPONSE,
+    subtype: "error_max_turns",
+    result: "hit the turn limit",
+  };
+  const adapter = new ClaudeCliAdapter(BASE_CONFIG, {
+    probeBinary: () => {},
+    spawnFn: fakeSpawn(() => ({ stdout: JSON.stringify(maxTurns), code: 0 })),
+  });
+  const out = await adapter.execute(PACKET);
+
+  assert.equal(out.success, false);
+  assert.equal(out.terminal_reason, "vendor_error");
+  assert.match(out.error, /turn limit/);
+});
+
+test("a payload with no subtype at all lands on the error side", async () => {
+  // Absence of the success signal is not success — a truncated or foreign
+  // payload must never be billed and parsed as a completed call.
+  const noSubtype = { ...SUCCESS_RESPONSE };
+  delete noSubtype.subtype;
+  const adapter = new ClaudeCliAdapter(BASE_CONFIG, {
+    probeBinary: () => {},
+    spawnFn: fakeSpawn(() => ({ stdout: JSON.stringify(noSubtype), code: 0 })),
+  });
+  const out = await adapter.execute(PACKET);
+
+  assert.equal(out.success, false);
+  assert.equal(out.terminal_reason, "vendor_error");
 });
 
 test("garbage stdout is reported as a vendor_error, not thrown", async () => {

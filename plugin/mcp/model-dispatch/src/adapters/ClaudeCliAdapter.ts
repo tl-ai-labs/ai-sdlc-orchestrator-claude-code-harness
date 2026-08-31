@@ -29,13 +29,23 @@ interface ClaudeCliOptions {
 }
 
 interface ClaudeCliResponse {
+  /** Always `"result"` on the final JSON object `claude -p` prints. */
+  type?: string;
+  /**
+   * The CLI's actual success signal: `"success"` on a completed run,
+   * `"error_max_turns"` / `"error_during_execution"` on failures. This —
+   * not `terminal_reason` — is what the result JSON carries; the CLI never
+   * emits a `terminal_reason` field on success, which is why the old
+   * `terminal_reason !== "completed"` check classified every real success
+   * as an error.
+   */
+  subtype?: string;
   is_error?: boolean;
   result?: string;
   total_cost_usd?: number;
   duration_ms?: number;
   duration_api_ms?: number;
   stop_reason?: string;
-  terminal_reason?: string;
   session_id?: string;
   usage?: {
     input_tokens?: number;
@@ -124,7 +134,14 @@ export class ClaudeCliAdapter implements ModelAdapter {
     }
 
     const response = run.response;
-    const isError = response.is_error === true || response.terminal_reason !== "completed";
+    // Success is `subtype === "success"` — the field the CLI actually emits
+    // on its result JSON. The old check compared `terminal_reason` against
+    // `"completed"`, a field/value pair the CLI never produces, so every
+    // successful call was misclassified as a vendor_error and the whole
+    // Max-subscription tier "failed" every packet. A payload with no
+    // `subtype` at all still lands on the error side — absence of the
+    // success signal is not success.
+    const isError = response.is_error === true || response.subtype !== "success";
     const usage = response.usage ?? {};
     const attemptTokens = {
       input: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
@@ -145,7 +162,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
       cost_usd: cost,
       latency_ms: latency,
       success: !isError,
-      error: isError ? response.result ?? response.terminal_reason ?? "claude-cli error" : undefined,
+      error: isError ? response.result ?? response.subtype ?? "claude-cli error" : undefined,
     };
 
     if (isError) {

@@ -33,7 +33,16 @@ The pipeline reaches four surfaces. You need at least one Anthropic surface for 
 
 **Verify:** `verify-setup.mjs`. Under `vendor` an unset key is a blocking pre-flight halt; under `estimated` it is inert.
 
-### Gemini as a model — AI Studio (API key)
+### Anthropic via Claude subscription — the `claude-cli` adapter
+
+A policy model whose `adapter:` is `claude-cli` (the `opus-plus-sonnet-max` policy's mechanical tier is the shipped example) is dispatched through the local `claude -p` subprocess instead of the Anthropic API. The subscription's OAuth session backs the request, so `ANTHROPIC_API_KEY` is not involved on this path even under `--auth=vendor`.
+
+| Requirement | Description |
+|---|---|
+| `claude` binary on PATH | The adapter probes `claude --version` at startup and refuses the model with an actionable error if the binary is missing. |
+| Logged-in Claude Code | A Claude Pro / Max / Team subscription session (`/login`). The CLI surfaces its own auth errors; the plugin does not probe OAuth state itself. |
+
+Cost on this path is vendor-correct without a key: the CLI reports `total_cost_usd` on every call and the adapter copies it into the event verbatim rather than re-deriving from token counts. Each call spawns a fresh `claude` process, which re-sends ~17k tokens of session context; that overhead shows up as cache-write tokens in the telemetry and is billed at the reduced cache-write rate.
 
 | Variable | Type | Default | Required when | Description |
 |---|---|---|---|---|
