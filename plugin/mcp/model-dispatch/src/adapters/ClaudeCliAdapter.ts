@@ -143,9 +143,13 @@ export class ClaudeCliAdapter implements ModelAdapter {
     // success signal is not success.
     const isError = response.is_error === true || response.subtype !== "success";
     const usage = response.usage ?? {};
+    // Cache writes bucketed separately for honest token accounting. Cost is
+    // NOT recomputed from these buckets — `total_cost_usd` below is the
+    // CLI's own billed figure and stays authoritative verbatim.
     const attemptTokens = {
-      input: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
+      input: usage.input_tokens ?? 0,
       input_cached: usage.cache_read_input_tokens ?? 0,
+      input_cache_write: usage.cache_creation_input_tokens ?? 0,
       output: usage.output_tokens ?? estimateTokens(response.result ?? ""),
     };
     const latency = response.duration_api_ms ?? response.duration_ms ?? Date.now() - started;

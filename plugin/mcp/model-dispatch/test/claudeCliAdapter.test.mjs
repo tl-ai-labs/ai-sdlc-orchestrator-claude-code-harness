@@ -101,8 +101,12 @@ test("returns a successful ExecutionResult and preserves vendor cost verbatim", 
   assert.equal(out.success, true);
   assert.equal(out.terminal_reason, "success");
   assert.deepEqual(out.result, { ok: true });
-  // input = input_tokens + cache_creation_input_tokens
-  assert.equal(out.tokens.input, 18767);
+  // Cache writes are their own bucket now, no longer folded into `input`:
+  // the fold hid a systematically mispriced quantity (cache writes bill at
+  // a premium over fresh input — see pricing.ts). Cost is unaffected here,
+  // since this adapter passes the CLI's billed figure through verbatim.
+  assert.equal(out.tokens.input, 2);
+  assert.equal(out.tokens.input_cache_write, 18765);
   assert.equal(out.tokens.input_cached, 30992);
   assert.equal(out.tokens.output, 4);
   assert.equal(out.cost_usd, 0.1219536, "cost passes through untouched from total_cost_usd");

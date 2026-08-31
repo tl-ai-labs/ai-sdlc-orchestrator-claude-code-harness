@@ -493,6 +493,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...baseEvent,
           input_tokens: att.tokens.input,
           input_tokens_cached: att.tokens.input_cached,
+          // Cache writes, disjoint from input_tokens (Anthropic adapters
+          // populate it; others leave it undefined and JSON.stringify drops
+          // the key, keeping their events byte-identical to before).
+          input_tokens_cache_write: att.tokens.input_cache_write,
           output_tokens: att.tokens.output,
           // Already counted in output_tokens and billed at the output rate;
           // surfaced only so a reader can see how much of a delegation's

@@ -26,7 +26,8 @@ This skill is the source of truth for the orchestrator. When invoked under `/mmo
 7. test_run                           → npm install && npm test; debug failures (route via policy)
 8. security_review (subagent: security-reviewer) → security_review.md
    ── GATE 3 ─────────────────────────────────────
-9. generate_final_report              → updates manifest.json with artifacts + rollups
+9. generate_final_report              → updates manifest.json with artifacts + rollups,
+                                        then collect-orchestrator-usage.mjs → true total (fail-open)
    ── GATE 4 (final acceptance) ───────────────────
 ```
 
@@ -234,6 +235,14 @@ Invoke `security-reviewer` subagent. Writes `<output_dir>/security_review.md`.
 ### Phase 9 — generate_final_report
 
 Read all events in `<telemetry_path>`. Build rollup manifest using the `buildManifest` shape (see `plugin/mcp/model-dispatch/src/telemetry.ts`). Write `<output_dir>/manifest.json`. Also write a brief `<output_dir>/SUMMARY.md` with: total cost, breakdown, links to key artifacts.
+
+Then, **after** the manifest is on disk, run the orchestrator-overhead collector — telemetry holds dispatched work only, and this session's own loop is invisible to it in both auth modes:
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/collect-orchestrator-usage.mjs" <output_dir> --project-root "$(pwd)"
+```
+
+On success it appends one `tier: "orchestrator"` event and patches the manifest with `orchestrator_overhead` + `true_total_cost_usd`; quote the **true total** in SUMMARY.md and label the dispatched figure as such. On failure (non-zero exit), do not block the run: label every cost in SUMMARY.md *dispatched work only — excludes orchestrator overhead* and note the collector command. Never blend the two figures.
 
 ---
 

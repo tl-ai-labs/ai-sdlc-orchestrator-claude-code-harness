@@ -297,6 +297,19 @@ the logger drops missing fields rather than printing them empty.
      --run-id=<run-id> --project-root "$(pwd)" --outcome=<completed|aborted|failed> --total-cost-usd=<from manifest.json>
    ```
 
+6. **Once at run end, after the manifest is written** — collect the orchestrator's own cost. Telemetry
+   records dispatched work only; this session's own loop (your reasoning, file reads, the growing
+   conversation) is invisible to it in **both** auth modes, and on measured runs exceeded the dispatched
+   figure by ~100×. The collector reconstructs it from the session transcripts and patches the pass:
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/collect-orchestrator-usage.mjs" <pass-dir> --project-root "$(pwd)"
+   ```
+   Run it in every auth mode (vendor and estimated alike). **Fail-open**: if it exits non-zero (for
+   example, no transcripts found where it looked), say so in the final report and present the cost as
+   *dispatched work only — excludes orchestrator overhead*; never block the run on it. When it succeeds,
+   the final report and `node tools/report.mjs` show three numbers — dispatched, orchestrator overhead,
+   true total — and architecture comparisons must quote the true total.
+
 **Fail-open by design**, same as the provenance helper: a logging call never blocks the run. If
 `mmo-log.mjs` errors, it warns to stderr and exits 0 — treat every one of these calls as fire-and-forget.
 

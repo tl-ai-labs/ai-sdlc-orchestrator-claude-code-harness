@@ -103,6 +103,7 @@ Every attempt emits its own TelemetryEvent with `attempt_number`, `ceiling_used`
 - **Token counts pass through unchanged from the source.** In vendor mode, the numbers on every event are exactly what the vendor's `usage` block returned. In estimated mode, they're exactly what the char/3.8 heuristic computed at the moment of the call. Report totals are those per-event counts summed — nothing between measurement and display.
 - **Cost is computed and written at the moment of each call.** Each event's `cost_usd` is (that event's tokens × the loaded policy YAML's `pricing:` block) / 1M, stamped into `telemetry.jsonl` at write time. The report's totals are those per-event costs summed.
 - **The report shows what the run produced.** Every figure on the report comes from summing that run's own telemetry events.
+- **Telemetry covers dispatched work only.** The orchestrator's own loop — reasoning, file reads, re-sending the growing conversation every turn — never passes through the MCP server, so no event above contains it. It is measured separately, post-run, from session transcripts; see [The orchestrator's own cost](#the-orchestrators-own-cost-and-the-transcript-collector).
 
 To verify any of these, walk `telemetry.jsonl` by hand — every line is inspectable.
 
@@ -131,6 +132,32 @@ Both leaves declare the same `pricing:` block, because they reach the same model
 Those two fields are for querying. For reading, `node tools/report.mjs` renders a **Delegated to an agent worker** section on any run that used the agent door — one row per delegated packet with its tool-call count, its wall-clock, and what changed in the working directory while it held it, against a `[C]` line for everything the harness did itself. The section is absent on runs that did not delegate. Its inputs are the per-delegation receipts under `delegation/`, described in [understanding-output.md](understanding-output.md#the-delegation-directory).
 
 **Identical rates do not mean identical cost, and the difference is not small.** An agent re-sends the accumulated conversation on every tool call, and each of its turns carries the SDK's own multi-thousand-token instruction preamble. A packet that a single completion call answers in one request can cost an agent several times as much for the same deliverable — entirely in token volume, at unchanged rates. The costs on the report are still exact: an agent dispatch is priced from the token counts the Antigravity SDK's `usage_metadata` reports, read through the same disjoint cached/fresh arithmetic described above, with the same `provenance: "vendor"`. A run comparing the two doors is measuring how many tokens each approach needs, which is the honest question.
+
+**Door comparisons are only valid on true totals.** Dispatched-work totals exclude the orchestrator's own loop (next section), and that exclusion does not fall evenly on the two doors — the driver does more in-session coordination for some shapes of work than others. On measured runs the omission was large enough to invert which door looked cheaper. Compare doors only after the collector has run, from the report's *True total* line; the report prints a warning on the delegation table until then.
+
+## The orchestrator's own cost, and the transcript collector
+
+Everything telemetry records is **dispatched work** — calls that passed through the MCP server (or were logged to it by the direct tier). The orchestrator itself runs as a Claude Code session, and that session's own loop — reasoning between phases, reading files, re-sending the ever-growing conversation on every turn — is invisible to telemetry in **both** auth modes. The omission is not a rounding error: on real measured runs the plugin reported **$1.87** of dispatched work while the session's transcripts summed to **≈$236** — a ~100× undercount, and (because the omission falls unevenly across architectures) large enough to invert model-door-vs-agent-door comparisons drawn from dispatched-only numbers.
+
+`plugin/scripts/collect-orchestrator-usage.mjs` closes the gap after the run:
+
+```bash
+node plugin/scripts/collect-orchestrator-usage.mjs <pass-dir>
+```
+
+**Method.** Claude Code writes session transcripts under `~/.claude/projects/<hash>/` (`<hash>` = the absolute project path with `/` and whitespace replaced by `-`), plus per-session `subagents/*.jsonl`. Every `"type": "assistant"` line carries the vendor's own `usage` block. The collector sums those, windowed to the run, and appends one `tier: "orchestrator"` event to `telemetry.jsonl`; the manifest gains an `orchestrator_overhead` block and a `true_total_cost_usd`, while `total_cost_usd` stays dispatched-only forever — the two spends are never blended silently, and `buildManifest` structurally partitions `tier: "orchestrator"` events out of every dispatched sum.
+
+The load-bearing details, each verified against a real transcript before the tool was written:
+
+- **Dedupe by `message.id`.** One API message is written as several JSONL lines (one per content block), each repeating identical usage. Naive per-line summing roughly *doubles* the figure; each id is counted once.
+- **Window anchor.** Transcripts carry no run id, so the window is the manifest's `started_at`/`ended_at` ± 5 minutes, applied per-message via each line's own timestamp. File-level pruning uses an mtime **lower bound only** — an upper bound would silently drop the run's messages whenever the session kept going after the run ended.
+- **Synthetic lines excluded.** `model: "<synthetic>"` lines are CLI error placeholders, not billed traffic.
+- **Single-rate pricing.** Transcripts carry tokens, not dollars, so everything is priced at the policy's derived driver model — including cache writes at the 1.25× premium (or the policy's explicit `input_cache_write` rate). The collector prints the observed per-model message counts and warns when any observed model differs from the one it priced at.
+- **Idempotent.** Re-running replaces the prior orchestrator event and re-patches the manifest; it never accumulates.
+
+**Limits, stated rather than hidden.** The transcript sum is what the CLI logged, priced at one model's rates — subscription (Max/Pro) sessions are not literally billed per-token, so read it as *what this session would cost at API rates*, which is the number architecture comparisons need. And under `--auth=estimated`, the driver-tier judgment phases exist twice: as char-count `provenance: "estimated"` telemetry events *and* inside the transcripts. The true total therefore double-counts up to the estimated subtotal in that mode; the collector and the report both print the overlap's size. Vendor-mode runs have no overlap — every dispatched call is an out-of-session API call.
+
+The report (`node tools/report.mjs`) renders three numbers once the collector has run — dispatched, orchestrator overhead, true total — and labels every dispatched-only dollar with its scope until then.
 
 ## Pricing table provenance
 

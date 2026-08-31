@@ -209,6 +209,8 @@ export interface ReplayEvent {
   retry_count: number;
   input_tokens: number;
   input_tokens_cached: number;
+  /** Cache-write count, disjoint from input_tokens. Absent on events written before the bucket existed. */
+  input_tokens_cache_write?: number;
   output_tokens: number;
 }
 
@@ -226,9 +228,14 @@ export function simulatePolicyCost(
     const model = policy.models.find((m) => m.id === decision.modelId);
     if (!model) continue;
     const inputFresh = ev.input_tokens - ev.input_tokens_cached;
+    // Cache writes replay at the same premium the live path charges
+    // (explicit per-model rate, else fresh × 1.25 — see pricing.ts).
+    const cacheWriteRate =
+      model.pricing.input_cache_write ?? model.pricing.input * 1.25;
     const cost =
       (inputFresh / 1_000_000) * model.pricing.input +
       (ev.input_tokens_cached / 1_000_000) * model.pricing.input_cached +
+      ((ev.input_tokens_cache_write ?? 0) / 1_000_000) * cacheWriteRate +
       (ev.output_tokens / 1_000_000) * model.pricing.output;
     perModel[model.id] = (perModel[model.id] ?? 0) + cost;
     total += cost;

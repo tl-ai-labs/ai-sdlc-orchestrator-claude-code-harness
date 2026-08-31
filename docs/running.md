@@ -12,7 +12,7 @@ Two policies ship with this repository. Pick one to start.
 
 ### `opus-only` — premium-ceiling baseline
 
-Every phase of the SDLC runs on Claude Opus 4.7. There is no delegation and no cost-saving routing. The number this pass produces is the "what does it cost if I use one top-tier model for everything?" line.
+Every phase of the SDLC runs on Claude Opus 4.7. There is no delegation and no cost-saving routing. The number this pass produces is the "what does it cost if I use one top-tier model for everything?" line — for **dispatched work**; use it as a baseline against other policies' dispatched figures, and for anything cross-architecture use the true total (dispatched + transcript-measured orchestrator overhead, see [methodology.md](methodology.md#the-orchestrators-own-cost-and-the-transcript-collector)).
 
 **Wall-clock:** about 1 – 1.5 hours (depends on model latency and HITL redirections).
 

@@ -244,7 +244,7 @@ Every artifact lands under `./.sdlc/` (for `/mmo:greenfield`) or `examples/<stud
 | `provenance.json` | Every file the run touched, with pre-run hash — the input `/mmo:revert` reads. |
 | `delegation/` | Only on runs that used the agent path. Three files per delegated packet: task brief, worker usage sidecar, receipt. |
 | `.hook-logs/hook.jsonl` | One line per `execute_with_model` call. Backup heartbeat; safe to delete. |
-| Cost report | `node tools/report.mjs <pass-dir>` — per-phase table, delegation table if any, total cost, methodology footer. |
+| Cost report | `node tools/report.mjs <pass-dir>` — per-phase table, delegation table if any, total cost labeled by scope (dispatched-only, or true total once the orchestrator-overhead collector has run), methodology footer. |
 
 Full reference in [docs/understanding-output.md](docs/understanding-output.md).
 
@@ -258,6 +258,8 @@ Model calls:  11, of which 5 dispatched packets (one retried)
 Tokens:       43,027 in / 33,647 out
 Recorded cost: $0.84
 ```
+
+Recorded cost is **dispatched work only** — the orchestrator session's own loop (reasoning, file reads, the growing conversation) never passes through telemetry and is measured separately, after the run, from session transcripts. On measured runs that overhead exceeded the dispatched figure by ~100×, so never compare architectures on numbers like the one above; see [docs/methodology.md](docs/methodology.md#the-orchestrators-own-cost-and-the-transcript-collector).
 
 Full recorded output — `.sdlc/`, `src/`, both readmes — is in [examples/quick-demo/passes/model-path/](examples/quick-demo/passes/model-path/). The same brief down the other door is in [examples/quick-demo/passes/agent-path/](examples/quick-demo/passes/agent-path/). Render the cost report yourself:
 

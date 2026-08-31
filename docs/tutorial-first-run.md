@@ -75,7 +75,7 @@ node tools/report.mjs .sdlc
 The report shows:
 
 - **Per-phase cost table** — one row per SDLC phase, tokens in / out, cost.
-- **Total session cost** — the number this run produced.
+- **Total session cost** — the number this run produced, labeled with its scope. Fresh off a run this is **dispatched work only**: the orchestrator session's own loop (its reasoning, file reads, the growing conversation) never passes through telemetry, and the report says so under the total along with the collector command that measures it. Run that command and the report grows a **true total** — the only figure to quote when comparing setups.
 - **Which model ran which phase** — one column shows the policy leaf that dispatched each phase.
 
 Every LLM call is in `.sdlc/telemetry.jsonl` for audit. Every field is documented in [understanding-output.md](understanding-output.md).
