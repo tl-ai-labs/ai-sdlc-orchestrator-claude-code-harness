@@ -54,3 +54,35 @@ test("the orchestrator's operating rules include the run-start driver-model chec
   // (a mid-session export cannot reach the CLI process's environment).
   assert.match(md, /print the script's output verbatim and\s+STOP/i);
 });
+
+/*
+ * Structural pin for the operating-rules list.
+ *
+ * The driver-model paragraph was inserted over rule 1 rather than before it,
+ * deleting "Read the brief first" and orphaning its "Confirm scope" sentence
+ * onto the end of the vendor-skip paragraph, where it read as scoping the env
+ * check. Nothing caught it: orchestrator.md is a model-executed prompt, and no
+ * test looked at its rule structure, so the build stayed green over a missing
+ * instruction. A contiguity check is cheap and catches the whole class.
+ */
+test("orchestrator operating rules are numbered contiguously from 0", () => {
+  const md = readFileSync(join(REPO, "plugin", "agents", "orchestrator.md"), "utf8");
+  const section = md.split("# Operating rules")[1];
+  assert.ok(section, "orchestrator.md must have an '# Operating rules' section");
+  // Stop at the next h1/h2 so the numbered lists in later sections are excluded.
+  const body = section.split(/\n#{1,2} /)[0];
+  const numbers = [...body.matchAll(/^(\d+)\. \*\*/gm)].map((m) => Number(m[1]));
+  assert.ok(numbers.length >= 8, `expected the full rule list, found ${numbers.length} rules`);
+  numbers.forEach((n, i) => {
+    assert.equal(n, i, `rule list must run 0,1,2,… without gaps — found ${n} at position ${i} (a rule was deleted or renumbered)`);
+  });
+});
+
+test("the orchestrator is still told to read the brief before starting", () => {
+  const md = readFileSync(join(REPO, "plugin", "agents", "orchestrator.md"), "utf8");
+  assert.match(
+    md,
+    /^1\. \*\*Read the brief first\.\*\*/m,
+    "rule 1 must exist as its own rule — it is the instruction to scope-confirm before any spend",
+  );
+});

@@ -98,7 +98,8 @@ hook, which matches on the MCP tool call and therefore never fires.
    process launches, and a Bash `export` here runs in a child shell that cannot reach it — the
    script's output already contains the exact export line and the relaunch instruction. Under
    `vendor` skip this check: every call, your own tier included, dispatches through the server, so
-   the env var cannot misprice anything. Confirm scope; if anything is ambiguous, surface it before starting.
+   the env var cannot misprice anything.
+1. **Read the brief first.** Confirm scope; if anything is ambiguous, surface it before starting.
 2. **Output paths — two directories, both supplied by the invoking command.**
    - **`code_dir`** — the generated application: source, tests, `package.json`, README. `/mmo:greenfield`
      sets this to `./src`.
