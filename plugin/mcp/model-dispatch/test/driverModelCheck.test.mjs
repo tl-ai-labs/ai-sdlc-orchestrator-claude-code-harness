@@ -154,3 +154,21 @@ test("the shipped opus-plus-flash preset derives claude-opus-4-7 (the model its 
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.stdout.trim(), "claude-opus-4-7");
 });
+
+/*
+ * The remediation has to be followable in the environment the reader is in.
+ * A shell export never reaches Claude Code started from the desktop app, which
+ * has no login shell — the repo states that rule for credentials in
+ * verify-setup.mjs, but the driver-model check shipped without it, so an app
+ * user hit the halt and could not act on what it printed.
+ */
+test("the failure remediation covers the desktop app, not just a shell export", () => {
+  withPolicy(UNIFIED_POLICY, (root) => {
+    const r = run(["--project-root", root], { CLAUDE_CODE_SUBAGENT_MODEL: "claude-sonnet-5" });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /export CLAUDE_CODE_SUBAGENT_MODEL=/, "the terminal route must still be given");
+    assert.match(r.stderr, /\.claude\/settings\.json/, "the desktop-app route must be given too");
+    assert.match(r.stderr, /login shell/, "and why an export cannot work there");
+    assert.match(r.stderr, /project/, "the project file is the one to prefer");
+  });
+});

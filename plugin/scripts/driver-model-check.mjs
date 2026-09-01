@@ -192,7 +192,13 @@ export async function main(argv = process.argv.slice(2)) {
       `against a model that did not run.\n\n` +
       `Fix (must happen BEFORE claude launches — an export inside the session ` +
       `cannot reach the CLI process):\n\n` +
-      `  export CLAUDE_CODE_SUBAGENT_MODEL=${derived.modelName}\n\n` +
+      `  Terminal:     export CLAUDE_CODE_SUBAGENT_MODEL=${derived.modelName}\n` +
+      `  Desktop app:  add "CLAUDE_CODE_SUBAGENT_MODEL": "${derived.modelName}" to the\n` +
+      `                "env" block of this project's .claude/settings.json — the app\n` +
+      `                is not launched from a login shell, so an export never reaches\n` +
+      `                it. Prefer the project file over ~/.claude/settings.json: the\n` +
+      `                user file pins the driver model for every session on the\n` +
+      `                machine, including runs that have nothing to do with this one\n\n` +
       `then relaunch claude and restart the run.`
   );
   return 1;
