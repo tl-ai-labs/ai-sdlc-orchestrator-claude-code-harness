@@ -259,6 +259,22 @@ async function main() {
   // (and target is by definition inside it). `escapes` cannot be true here.
   const { rel } = toRepoRelative(target, contractPath);
 
+  // The run's own output directory is auto-allowlisted (agents/orchestrator.md
+  // requires direct-tier artifacts to land under `.sdlc/runs/<run-id>/`).
+  // `.sdlc/**` is in the default off-limits list and off-limits is evaluated
+  // before the allowlist, so without this the contract refuses the run the
+  // artifacts it is told to write. Scoped to this contract's run_id.
+  const ownRunDir = typeof contract.run_id === "string" && contract.run_id
+    ? `.sdlc/runs/${contract.run_id}/`
+    : null;
+  if (ownRunDir && rel.startsWith(ownRunDir)) {
+    allow(`${rel} is inside the run's own auto-allowlisted output directory`, {
+      runId: contract.run_id,
+      path: rel,
+      matchedRule: `${ownRunDir}**`,
+    });
+  }
+
   // Off-limits check runs first — an off-limits path is refused even if it
   // also technically matches an allowlist glob (defensive: patterns can overlap).
   const offHit = firstMatch(rel, contract.off_limits);

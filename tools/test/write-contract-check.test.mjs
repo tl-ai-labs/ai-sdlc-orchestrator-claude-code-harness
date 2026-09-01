@@ -224,3 +224,81 @@ test("target-anchored contract resolution: absolute target inside a contracted r
       "allowlist-default-deny must trigger against the target's contract");
   } finally { cleanup(neutralCwd); cleanup(contracted); }
 });
+
+/*
+ * The run's own output directory. `.sdlc/**` sits in OFF_LIMITS_DEFAULT to stop
+ * the model hand-editing plugin state, and off-limits is evaluated before the
+ * allowlist — so before the carve-out an active contract refused the run the
+ * artifacts agents/orchestrator.md contractually requires it to write there.
+ * Once denials became blocking (exit 2) that stopped being cosmetic: a
+ * brownfield run failed at its first direct-tier write, and provenance.json —
+ * the file /mmo:revert restores from — was refused with it.
+ */
+const RUN_DIR_CONTRACT = {
+  schema_version: 1,
+  active: true,
+  strict: true,
+  run_id: "run-1",
+  allowlist: ["src/**"],
+  off_limits: [".env", ".sdlc/**", "dist/**"],
+};
+
+for (const artifact of ["requirements.md", "change_plan.md", "provenance.json"]) {
+  test(`the run's own .sdlc/runs/<run-id>/ artifact "${artifact}" is allowed under an active contract`, async () => {
+    const dir = makeRepo(RUN_DIR_CONTRACT);
+    try {
+      const r = await runHook(dir, { tool_input: { file_path: `.sdlc/runs/run-1/${artifact}` } });
+      assert.equal(r.code, 0, `${artifact} is auto-allowlisted; blocking it breaks the run that must write it`);
+    } finally { cleanup(dir); }
+  });
+}
+
+test("the carve-out is scoped to this run — another run's evidence directory stays denied", async () => {
+  const dir = makeRepo(RUN_DIR_CONTRACT);
+  try {
+    const r = await runHook(dir, { tool_input: { file_path: ".sdlc/runs/run-2/provenance.json" } });
+    assert.equal(r.code, 2, "a run must never write another run's evidence");
+  } finally { cleanup(dir); }
+});
+
+test("the carve-out does not open the rest of .sdlc — the contract file itself stays denied", async () => {
+  const dir = makeRepo(RUN_DIR_CONTRACT);
+  try {
+    const r = await runHook(dir, { tool_input: { file_path: ".sdlc/local/write-contract.json" } });
+    assert.equal(r.code, 2, "the contract must not be rewritable by the run it governs");
+  } finally { cleanup(dir); }
+});
+
+test("a contract with no run_id gets no carve-out", async () => {
+  const dir = makeRepo({ ...RUN_DIR_CONTRACT, run_id: undefined });
+  try {
+    const r = await runHook(dir, { tool_input: { file_path: ".sdlc/runs/run-1/requirements.md" } });
+    assert.equal(r.code, 2, "without a run_id there is no run directory to auto-allowlist");
+  } finally { cleanup(dir); }
+});
+
+/*
+ * The pre-contract safety net fires with no run context at all — in greenfield
+ * and in any repository that merely has the plugin installed. Since denials
+ * became blocking it must hold only paths that are unsafe to write anywhere;
+ * build output is not.
+ */
+for (const secret of [".env", ".env.production", ".mcp.json", ".git/config", ".claude/settings.local.json"]) {
+  test(`pre-contract safety net still denies "${secret}"`, async () => {
+    const dir = makeRepo(undefined);
+    try {
+      const r = await runHook(dir, { tool_input: { file_path: secret } });
+      assert.equal(r.code, 2, `${secret} is unsafe to write with no contract to scope it`);
+    } finally { cleanup(dir); }
+  });
+}
+
+for (const buildPath of ["dist/bundle.js", "build/out.css", ".next/server/page.js", "node_modules/react/index.js", ".sdlc/runs/run-1/manifest.json"]) {
+  test(`pre-contract safety net allows "${buildPath}" — build output and plugin state are not secrets`, async () => {
+    const dir = makeRepo(undefined);
+    try {
+      const r = await runHook(dir, { tool_input: { file_path: buildPath } });
+      assert.equal(r.code, 0, `${buildPath} must not be hard-blocked in every repo the plugin is installed in`);
+    } finally { cleanup(dir); }
+  });
+}
