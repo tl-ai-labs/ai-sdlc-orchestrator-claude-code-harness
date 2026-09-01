@@ -105,7 +105,7 @@ import { readdirSync, readFileSync, renameSync, statSync, writeFileSync, existsS
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { deriveDriverModel } from "./driver-model-check.mjs";
+import { deriveDriverModel, IN_SESSION_ADAPTERS } from "./driver-model-check.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = join(HERE, "..", "mcp", "model-dispatch", "dist");
@@ -170,16 +170,36 @@ export function candidateTranscripts(dir, windowStartMs) {
   const fresh = (p) => {
     try { return statSync(p).mtimeMs >= windowStartMs - WINDOW_SLACK_MS; } catch { return false; }
   };
+  // Subagent transcripts nest to varying depths under `subagents/` — a plain
+  // delegation writes one level down, a workflow adds a directory per run below
+  // that. Reading a single flat level found the shallow shape only and returned
+  // nothing for the rest, which is most of the spend this collector exists to
+  // measure. Walk instead, depth-bounded against a pathological tree.
+  const walk = (d, depth) => {
+    if (depth > 8) return;
+    let entries;
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = join(d, e.name);
+      if (e.isFile() && e.name.endsWith(".jsonl")) {
+        if (fresh(p)) out.push(p);
+      } else if (e.isDirectory()) {
+        walk(p, depth + 1);
+      }
+    }
+  };
+
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
     if (entry.isFile() && entry.name.endsWith(".jsonl")) {
       if (fresh(p)) out.push(p);
     } else if (entry.isDirectory()) {
-      const sub = join(p, "subagents");
-      if (!existsSync(sub)) continue;
-      for (const s of readdirSync(sub)) {
-        const sp = join(sub, s);
-        if (s.endsWith(".jsonl") && fresh(sp)) out.push(sp);
+      // `subagents/` sits either directly under the project directory or under
+      // each session directory inside it.
+      if (entry.name === "subagents") walk(p, 1);
+      else {
+        const sub = join(p, "subagents");
+        if (existsSync(sub)) walk(sub, 1);
       }
     }
   }
@@ -257,8 +277,32 @@ export async function main(argv = process.argv.slice(2)) {
     ? policyMod.loadPolicyFromPath(resolve(args.policyPath))
     : policyMod.loadPolicy({ policyName: args.policy ?? manifest.policy_name, projectRoot });
   const overrides = routingMod.parseSelectOverrides(process.env.MMO_SELECT);
-  const derived = deriveDriverModel(policy, routingMod, overrides);
-  const driver = policy.models.find((m) => m.id === derived.modelId);
+  // The orchestrator session runs on Claude Code whatever the policy routes the
+  // judgment tier to, so a policy with a non-in-session judgment tier still has
+  // overhead worth pricing. deriveDriverModel refuses that shape for its own
+  // caller (the estimated-mode env check); falling back here keeps the agent
+  // door measurable instead of leaving the worst-affected route uncounted.
+  let derived;
+  let driver;
+  let pricingBasis = "the policy's derived driver model";
+  try {
+    derived = deriveDriverModel(policy, routingMod, overrides);
+    driver = policy.models.find((m) => m.id === derived.modelId);
+  } catch (err) {
+    const inSession = policy.models.find((m) => IN_SESSION_ADAPTERS.has(m.adapter) && m.pricing);
+    if (!inSession) {
+      console.error(`collect-orchestrator-usage FAILED: ${err.message}`);
+      return 1;
+    }
+    derived = { modelName: inSession.model_name, modelId: inSession.id };
+    driver = inSession;
+    pricingBasis = "the policy's in-session model (judgment tier is not in-session)";
+    console.error(
+      `NOTE: ${err.message}\n` +
+        `Pricing the orchestrator's own overhead at '${inSession.model_name}' instead — the session ` +
+        `runs on Claude Code regardless of where the policy routes the judgment tier.`
+    );
+  }
 
   const tDir = args.transcriptsDir ? resolve(args.transcriptsDir) : transcriptsDirFor(projectRoot);
   const files = candidateTranscripts(tDir, windowStartMs);
@@ -308,7 +352,7 @@ export async function main(argv = process.argv.slice(2)) {
       policy_name: policy.name,
       policy_version: policy.version,
       rule_index: -1,
-      rule_reason: "orchestrator overhead — reconstructed from session transcripts, priced at the derived driver model",
+      rule_reason: `orchestrator overhead — reconstructed from session transcripts, priced at ${pricingBasis}`,
     },
     input_tokens: tokens.input,
     input_tokens_cached: tokens.input_cached,

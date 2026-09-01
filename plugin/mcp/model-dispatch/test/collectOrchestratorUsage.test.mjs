@@ -231,3 +231,54 @@ test("a pass dir without manifest.json is a clear failure, not a crash", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/*
+ * Transcript discovery depth. Subagent transcripts nest to varying depths
+ * under `subagents/`: a plain delegation writes one level down, a workflow adds
+ * a directory per run below that. Reading a single flat level found the shallow
+ * shape only, so the subagent spend — most of what this collector exists to
+ * measure — summed to nothing while the run still reported a confident total.
+ */
+import { candidateTranscripts } from "../../../scripts/collect-orchestrator-usage.mjs";
+
+function transcriptTree() {
+  const dir = mkdtempSync(join(tmpdir(), "mmo-transcripts-"));
+  const session = join(dir, "session-a");
+  mkdirSync(join(session, "subagents", "workflows", "wf-1"), { recursive: true });
+  mkdirSync(join(dir, "subagents"), { recursive: true });
+  writeFileSync(join(dir, "main.jsonl"), "");
+  writeFileSync(join(session, "subagents", "flat.jsonl"), "");
+  writeFileSync(join(session, "subagents", "workflows", "wf-1", "agent-1.jsonl"), "");
+  writeFileSync(join(dir, "subagents", "top-level.jsonl"), "");
+  writeFileSync(join(session, "not-a-transcript.txt"), "");
+  return dir;
+}
+
+test("transcript discovery finds subagent files nested below the flat subagents/ level", () => {
+  const dir = transcriptTree();
+  try {
+    const found = candidateTranscripts(dir, 0).map((p) => p.slice(dir.length + 1));
+    assert.ok(found.includes("main.jsonl"), "the main session transcript must still be found");
+    assert.ok(found.includes(join("session-a", "subagents", "flat.jsonl")), "flat subagent transcripts must still be found");
+    assert.ok(
+      found.includes(join("session-a", "subagents", "workflows", "wf-1", "agent-1.jsonl")),
+      "a subagent transcript one directory deeper must be found — this is the spend the collector missed",
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("transcript discovery reads a subagents/ directory sitting directly under the project dir", () => {
+  const dir = transcriptTree();
+  try {
+    const found = candidateTranscripts(dir, 0).map((p) => p.slice(dir.length + 1));
+    assert.ok(found.includes(join("subagents", "top-level.jsonl")));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("transcript discovery ignores non-transcript files", () => {
+  const dir = transcriptTree();
+  try {
+    const found = candidateTranscripts(dir, 0);
+    assert.ok(found.every((p) => p.endsWith(".jsonl")));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
