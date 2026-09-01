@@ -144,8 +144,10 @@ Resolve the policy through the `load_policy` MCP tool, passing `policy_name: <re
 `${CLAUDE_PLUGIN_ROOT}/config/policies/` yourself: the loader's precedence puts a repo-local
 `<project root>/routing-policy.yaml` ahead of the named preset, and reading the preset file
 directly is exactly the bug that made greenfield preview one policy while the run priced under
-another. Passing `project_root` here means the preview and every later dispatch resolve through
-the same loader and can never disagree.
+another. Passing `project_root` here also fixes it for the rest of the run: the server remembers
+the first root a caller supplies and reuses it for any later call that omits one, so the preview
+and every billed dispatch resolve through the same loader. Keep passing it on each
+`execute_with_model` anyway — the fallback is a safety net, not a licence to drop the argument.
 
 The plan preview must state which policy file won and where it came from — one line, e.g.
 `Policy: project override (routing-policy.yaml)` or `Policy: preset opus-plus-flash` — so a

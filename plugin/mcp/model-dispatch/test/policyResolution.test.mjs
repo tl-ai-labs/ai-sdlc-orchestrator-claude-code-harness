@@ -138,3 +138,45 @@ test("the simulate_policy inputSchema declares project_root like its siblings", 
   assert.ok(schemaBlock, "could not locate the simulate_policy tool schema in dist/server.js");
   assert.match(schemaBlock[0], /project_root/);
 });
+
+/*
+ * Session project-root memory. The preview passes `project_root` and the billed
+ * dispatch did not, so the two keyed the policy cache differently and the
+ * dispatch reloaded the shipped preset. These pin the behaviour, not the text.
+ */
+import { resolveProjectRoot, resetProjectRootMemory } from "../dist/project-root.js";
+
+test("a caller that omits project_root reuses the one an earlier caller supplied", () => {
+  resetProjectRootMemory();
+  assert.equal(resolveProjectRoot("/repo/a"), "/repo/a");
+  assert.equal(resolveProjectRoot(undefined), "/repo/a", "the dispatch must not fall back to no root");
+});
+
+test("an explicitly supplied project_root wins over the remembered one", () => {
+  resetProjectRootMemory();
+  resolveProjectRoot("/repo/a");
+  assert.equal(resolveProjectRoot("/repo/b"), "/repo/b");
+  assert.equal(resolveProjectRoot(undefined), "/repo/b", "the newer root replaces the remembered one");
+});
+
+test("with no root ever supplied the result stays undefined", () => {
+  resetProjectRootMemory();
+  assert.equal(resolveProjectRoot(undefined), undefined);
+});
+
+test("a dispatch that omits project_root still resolves the repo-local override", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-policy-"));
+  try {
+    resetProjectRootMemory();
+    writeFileSync(join(root, "routing-policy.yaml"), policyYaml("repo-override"));
+    // Preview: passes the root, as greenfield.md instructs.
+    const preview = loadPolicy({ policyName: "opus-only", projectRoot: resolveProjectRoot(root) });
+    assert.equal(preview.name, "repo-override");
+    // Billed dispatch: omits it. Before the fallback this loaded "opus-only".
+    const dispatched = loadPolicy({ policyName: "opus-only", projectRoot: resolveProjectRoot(undefined) });
+    assert.equal(dispatched.name, "repo-override", "the billed path must route under the policy the preview named");
+  } finally {
+    resetProjectRootMemory();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

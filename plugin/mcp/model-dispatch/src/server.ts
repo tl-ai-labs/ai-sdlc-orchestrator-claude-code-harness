@@ -36,6 +36,7 @@ import {
   resolveGcpLocation,
 } from "./adapters/geminiTransports.js";
 import type { TaskPacket, TelemetryEvent, Policy, SelectOverrides } from "./types.js";
+import { resolveProjectRoot } from "./project-root.js";
 import { log, setLevel, configureSinks, type Level } from "./log.js";
 
 /**
@@ -96,6 +97,9 @@ const LEGACY_SELECT_ENV = "SDLC_SELECT";
 let legacySelectWarned = false;
 
 function ensurePolicy(policyName?: string, projectRoot?: string, policyPath?: string): Policy {
+  // An omitted project_root falls back to the one an earlier caller supplied,
+  // so a dispatch resolves the same policy the preview did. See project-root.ts.
+  projectRoot = resolveProjectRoot(projectRoot);
   const key = `${policyName ?? "opus-only"}|${projectRoot ?? ""}|${policyPath ?? ""}`;
   if (activePolicy && activePolicyKey === key) return activePolicy;
   const policy = policyPath
