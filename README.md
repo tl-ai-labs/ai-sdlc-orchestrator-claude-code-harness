@@ -307,7 +307,8 @@ node tools/setup.mjs
 - [docs/two-gemini-paths.md](docs/two-gemini-paths.md) — measured comparison of the two doors on the same brief
 - [docs/brownfield-routing.md](docs/brownfield-routing.md) — which model does which work
 - [docs/walkthroughs/](docs/walkthroughs/) — the two Gemini paths, frame by frame ([model](docs/walkthroughs/model-path.html), [agent](docs/walkthroughs/agent-path.html))
-- [examples/quick-demo/](examples/quick-demo/) — smallest brief, one endpoint, minutes to run
+- [examples/unit-convert/](examples/unit-convert/) — one endpoint, one conversion, minutes to run
+- [examples/quick-demo/](examples/quick-demo/) — one-endpoint ping service, minutes to run
 - [examples/workforce-ops/](examples/workforce-ops/) — the reference brief
 - [examples/travel-ops/](examples/travel-ops/) — a second brief (booking, cancellation, refund handling)
 

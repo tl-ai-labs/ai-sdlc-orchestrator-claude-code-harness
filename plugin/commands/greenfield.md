@@ -65,11 +65,14 @@ If several exist, list them and ask which.
 
 **b. A brief the user names.** If the user has a brief elsewhere, ask for the path and read it.
 
-**c. A brief that ships with the plugin.** Offer the three shipped examples, described in one line
+**c. A brief that ships with the plugin.** Offer the four shipped examples, described in one line
 each so the choice is meaningful. Say plainly how long each takes, because the difference is
-minutes versus hours and the user is paying for it. All three paths are inside the installed
+minutes versus hours and the user is paying for it. All four paths are inside the installed
 plugin, not the working directory — the user is typically standing in an empty folder, where no
 repository file exists:
+- `${CLAUDE_PLUGIN_ROOT}/examples/unit-convert/brief.md` — one endpoint converting Celsius to
+  Fahrenheit, three responses, no database. The shortest brief here, and the only one with no
+  recorded pass in the repo, so a run against it cannot be mistaken for a replay of one.
 - `${CLAUDE_PLUGIN_ROOT}/examples/quick-demo/brief.md` — a one-endpoint ping service on Express,
   no database. The one to pick to see the pipeline end to end: minutes, not hours, and a fraction
   of the cost.

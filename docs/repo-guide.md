@@ -22,7 +22,7 @@ for reading or changing the code.
 | `plugin/` | The installable plugin: slash commands, subagents, skills, routing policies, the bundled MCP server, the policy console, hooks and scripts. |
 | `tools/` | Repo-side scripts and the root test suite — setup, cost reporting, log formatting. |
 | `docs/` | User and contributor documentation, plus specs, planning notes and recorded walkthroughs. |
-| `examples/` | Three project briefs (`quick-demo`, `workforce-ops`, `travel-ops`), plus the recorded output of two runs against `quick-demo` — one model-path, one agent-path — under `examples/quick-demo/passes/`. |
+| `examples/` | Four project briefs (`unit-convert`, `quick-demo`, `workforce-ops`, `travel-ops`), plus the recorded output of two runs against `quick-demo` — one model-path, one agent-path — under `examples/quick-demo/passes/`. |
 | `.claude-plugin/marketplace.json` | Marketplace manifest that makes this repo installable through `/plugin install`. |
 | `package.json` | Root manifest. Owns `npm test`, `npm run setup`, `npm run report`, `npm run verify`. |
 | `README.md` · `SETUP.md` · `CONTRIBUTING.md` · `CLAUDE.md` · `SECURITY.md` | What the plugin does, how to install it, how to contribute, the writing rules, the disclosure policy. |
@@ -76,7 +76,7 @@ path, one API call per unit of work, nothing here is installed and nothing here 
 | `scripts/` | Node scripts the commands shell out to — setup checks, credential discovery, the write-contract hook, provenance recording, run logging. |
 | `hooks/` | `hooks.json` registers two: a `PreToolUse` write-contract check that refuses edits outside an approved file list, and a `PostToolUse` telemetry heartbeat. |
 | `templates/` | Fragments copied into a target project, such as the `.gitignore` entry for run artifacts. |
-| `examples/` | Sandbox projects you point the plugin at by hand — six tiny apps, one per brownfield job type — plus copies of the three example briefs, which live here because only `plugin/` is copied on install. |
+| `examples/` | Sandbox projects you point the plugin at by hand — six tiny apps, one per brownfield job type — plus copies of the four example briefs, which live here because only `plugin/` is copied on install. |
 
 ## Running the tests
 
