@@ -38,6 +38,8 @@ Ping Service brief ([examples/quick-demo/](../examples/quick-demo/)), same polic
 
 **Costs are in estimator mode.** Treat them as the shape of the trade, not an invoice. Vendor-mode figures would reconcile to the Anthropic and Google dashboards.
 
+**The cost row is dispatched work only — it cannot rank the doors.** Neither figure includes the orchestrator session's own loop, and the omission falls unevenly: down the model door the orchestrator reads every file and carries every worker payload through its own context, so its unrecorded overhead is far larger than the agent door's. On measured runs the exclusion was large enough to *invert* the comparison — the door that looks cheaper here was the more expensive one in true total. Only true totals (dispatched + orchestrator overhead, reconstructed from session transcripts by `plugin/scripts/collect-orchestrator-usage.mjs`) compare the doors fairly; see [methodology.md](methodology.md#the-orchestrators-own-cost-and-the-transcript-collector).
+
 Run records:
 - Model path: [examples/quick-demo/passes/model-path/](../examples/quick-demo/passes/model-path/)
 - Agent path: [examples/quick-demo/passes/agent-path/](../examples/quick-demo/passes/agent-path/)

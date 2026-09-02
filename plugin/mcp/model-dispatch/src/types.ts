@@ -19,7 +19,13 @@ export type Phase =
   // rather than full subsystem design). Both routed to premium tier by
   // default — see plugin/config/policies/*.yaml.
   | "discovery"
-  | "change_plan";
+  | "change_plan"
+  // Not a routed phase — the label the orchestrator-overhead collector
+  // (plugin/scripts/collect-orchestrator-usage.mjs) stamps on its transcript
+  // event. No policy rule ever matches it and no packet ever carries it; it
+  // exists in this union only so the event type-checks. Readers must key on
+  // `tier: "orchestrator"`, not on this phase name.
+  | "orchestrator_overhead";
 
 export interface FileSlice {
   path: string;
@@ -70,6 +76,26 @@ export interface TelemetryEvent {
    */
   model_id?: string;
   routed_by: "orchestrator" | "fallback" | "manual";
+  /**
+   * Where this event's numbers came from. `"vendor"` = measured by the
+   * dispatch server from the vendor's own usage report (every
+   * `execute_with_model` event, in both auth modes); `"estimated"` =
+   * direct-tier char-count logged by the orchestrator via `log_telemetry`;
+   * `"transcript"` = reconstructed post-run from session transcripts
+   * (orchestrator-overhead collector). Optional because events written
+   * before this field existed lack it — readers treat absence as
+   * "unknown" and disown the run's label (tools/report.mjs).
+   */
+  provenance?: "vendor" | "estimated" | "transcript";
+  /**
+   * `"orchestrator"` marks the run's own overhead (the driver session's
+   * reasoning, file reads, growing-conversation re-sends), reconstructed
+   * post-run from transcripts by collect-orchestrator-usage.mjs. Absent on
+   * every dispatched-work event. `buildManifest` and tools/report.mjs
+   * partition on this field so overhead is never silently blended into
+   * dispatched-work totals.
+   */
+  tier?: "orchestrator";
   routing: {
     policy_name: string;
     policy_version: number;
@@ -83,6 +109,12 @@ export interface TelemetryEvent {
   };
   input_tokens: number;
   input_tokens_cached: number;
+  /**
+   * Prompt-cache-WRITE count, disjoint from `input_tokens` and
+   * `input_tokens_cached`. Optional — events written while cache writes were
+   * still folded into `input_tokens` lack it; readers treat absence as 0.
+   */
+  input_tokens_cache_write?: number;
   output_tokens: number;
   /** Thinking/reasoning tokens; already counted in output_tokens. */
   output_tokens_reasoning?: number;
@@ -110,6 +142,8 @@ export interface AttemptRecord {
     input_cached: number;
     output: number;
     output_reasoning?: number;
+    /** Prompt-cache-write count, disjoint from `input`. Anthropic adapters only. */
+    input_cache_write?: number;
   };
   cost_usd: number;
   latency_ms: number;
@@ -121,6 +155,12 @@ export interface ModelPricing {
   input: number;          // USD per 1M tokens
   input_cached: number;   // USD per 1M cached tokens
   output: number;         // USD per 1M tokens
+  /**
+   * USD per 1M prompt-cache-WRITE tokens. Optional — policies written before
+   * this rate existed omit it, and `computeCostUsd` falls back to
+   * `input × CACHE_WRITE_PREMIUM` (1.25, Anthropic's 5-min-TTL premium).
+   */
+  input_cache_write?: number;
 }
 
 /**
@@ -225,6 +265,8 @@ export interface ExecutionResult {
     input_cached: number;
     output: number;
     output_reasoning?: number;
+    /** Prompt-cache-write count, disjoint from `input`. Anthropic adapters only. */
+    input_cache_write?: number;
   };
   cost_usd: number;
   latency_ms: number;

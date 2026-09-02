@@ -212,6 +212,10 @@ every shipped preset; the browser only opens if the user picks `Author a new pol
    auto-detects — no need to return to the terminal to press Enter. Non-interactive fallback:
    after a 10-minute timeout the script exits cleanly with "no save detected".
 
+   A console-authored YAML lands inside the installed plugin's `config/policies/` directory,
+   which `/plugin update` replaces wholesale. To keep a custom policy across updates, copy it
+   to `<project root>/routing-policy.yaml` — the loader prefers that file automatically.
+
 Whichever the user chooses, `.sdlc/project.json` must have a `default_policy` field when this
 step returns — the task commands read it via session-hydrate and refuse to run without it.
 

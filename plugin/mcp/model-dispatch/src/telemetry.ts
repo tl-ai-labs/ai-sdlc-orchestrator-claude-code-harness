@@ -23,7 +23,17 @@ export function normalizeDirectTierEvent(
   ev: TelemetryEvent,
   now: Date = new Date(),
 ): TelemetryEvent {
-  return { ...ev, ts: now.toISOString(), latency_ms: null };
+  return {
+    ...ev,
+    ts: now.toISOString(),
+    latency_ms: null,
+    // Direct-tier events are char-count estimates by construction (vendor-
+    // measured numbers only ever come from execute_with_model, which never
+    // routes through here). A model that forgets the stamp must not cause
+    // the report to disown the event as "unknown"; an explicit stamp is
+    // passed through untouched.
+    provenance: ev.provenance ?? "estimated",
+  };
 }
 
 export function readEvents(jsonlPath: string): TelemetryEvent[] {
@@ -38,10 +48,39 @@ export interface Manifest {
   started_at: string;
   ended_at: string;
   duration_sec: number;
+  /**
+   * DISPATCHED-WORK cost only — the calls this server (or log_telemetry)
+   * saw. The orchestrator's own loop never passes through the MCP server,
+   * so its cost is NOT here; it lives in `orchestrator_overhead` when the
+   * post-run collector has run, and `true_total_cost_usd` is the sum. Kept
+   * dispatched-only (rather than silently growing) so every consumer that
+   * ever read this field keeps meaning the same thing.
+   */
   total_cost_usd: number;
   total_input_tokens: number;
   total_input_tokens_cached: number;
+  /** Dispatched-work cache-write tokens. Absent on manifests built before the bucket existed. */
+  total_input_tokens_cache_write?: number;
   total_output_tokens: number;
+  /**
+   * The run's own overhead — reasoning, file reads, growing-conversation
+   * re-sends — reconstructed from session transcripts by
+   * collect-orchestrator-usage.mjs. Present only after the collector runs;
+   * derived from `tier: "orchestrator"` events, which buildManifest
+   * PARTITIONS OUT of every dispatched sum above so the two spends are
+   * never blended silently.
+   */
+  orchestrator_overhead?: {
+    cost_usd: number;
+    input_tokens: number;
+    input_tokens_cached: number;
+    input_tokens_cache_write: number;
+    output_tokens: number;
+    events: number;
+    provenance: "transcript";
+  };
+  /** total_cost_usd + orchestrator_overhead.cost_usd. Present only alongside the block. */
+  true_total_cost_usd?: number;
   model_breakdown: Record<string, { calls: number; cost_usd: number; input_tokens: number; output_tokens: number }>;
   /** Older manifests without token fields still load; dashboard falls back. */
   phase_breakdown: Record<string, {
@@ -65,16 +104,26 @@ export interface Manifest {
   quality_scores?: Record<string, number>;
 }
 
-export function buildManifest(events: TelemetryEvent[], opts: {
+export function buildManifest(allEvents: TelemetryEvent[], opts: {
   pass: string;
   policy_name: string;
   artifacts?: Manifest["artifacts"];
 }): Manifest {
-  if (events.length === 0) {
+  if (allEvents.length === 0) {
     const now = new Date().toISOString();
     return emptyManifest(opts.pass, opts.policy_name, now);
   }
-  const sorted = events.slice().sort((a, b) => a.ts.localeCompare(b.ts));
+  // Partition FIRST: orchestrator-overhead events (post-run transcript
+  // reconstruction, tier: "orchestrator") never enter the dispatched sums
+  // or breakdowns below. This is the structural guarantee that re-deriving
+  // a manifest from collector-touched telemetry can't blend the two spends.
+  const events = allEvents.filter((ev) => ev.tier !== "orchestrator");
+  const orchEvents = allEvents.filter((ev) => ev.tier === "orchestrator");
+  // Run window comes from dispatched events (the collector's event is
+  // stamped at collection time, after the run); overhead-only input is a
+  // degenerate case where the overhead event is the only clock we have.
+  const windowSource = events.length > 0 ? events : orchEvents;
+  const sorted = windowSource.slice().sort((a, b) => a.ts.localeCompare(b.ts));
   const started_at = sorted[0].ts;
   const ended_at = sorted[sorted.length - 1].ts;
   const duration_sec = Math.max(
@@ -89,12 +138,14 @@ export function buildManifest(events: TelemetryEvent[], opts: {
   let total_cost_usd = 0,
     total_input_tokens = 0,
     total_input_tokens_cached = 0,
+    total_input_tokens_cache_write = 0,
     total_output_tokens = 0;
 
   for (const ev of events) {
     total_cost_usd += ev.cost_usd;
     total_input_tokens += ev.input_tokens;
     total_input_tokens_cached += ev.input_tokens_cached;
+    total_input_tokens_cache_write += ev.input_tokens_cache_write ?? 0;
     total_output_tokens += ev.output_tokens;
 
     const mb = (model_breakdown[ev.model] ??= {
@@ -151,6 +202,24 @@ export function buildManifest(events: TelemetryEvent[], opts: {
   for (const k of Object.keys(task_type_breakdown))
     task_type_breakdown[k].cost_usd = r6(task_type_breakdown[k].cost_usd);
 
+  // The overhead block + true total exist ONLY when overhead events exist —
+  // a manifest rebuilt from untouched telemetry is byte-compatible with one
+  // built before this field existed.
+  let orchestrator_overhead: Manifest["orchestrator_overhead"];
+  let true_total_cost_usd: number | undefined;
+  if (orchEvents.length > 0) {
+    orchestrator_overhead = {
+      cost_usd: r6(orchEvents.reduce((s, ev) => s + ev.cost_usd, 0)),
+      input_tokens: orchEvents.reduce((s, ev) => s + ev.input_tokens, 0),
+      input_tokens_cached: orchEvents.reduce((s, ev) => s + ev.input_tokens_cached, 0),
+      input_tokens_cache_write: orchEvents.reduce((s, ev) => s + (ev.input_tokens_cache_write ?? 0), 0),
+      output_tokens: orchEvents.reduce((s, ev) => s + ev.output_tokens, 0),
+      events: orchEvents.length,
+      provenance: "transcript",
+    };
+    true_total_cost_usd = r6(total_cost_usd + orchestrator_overhead.cost_usd);
+  }
+
   return {
     pass: opts.pass,
     policy_name: opts.policy_name,
@@ -160,7 +229,10 @@ export function buildManifest(events: TelemetryEvent[], opts: {
     total_cost_usd,
     total_input_tokens,
     total_input_tokens_cached,
+    total_input_tokens_cache_write,
     total_output_tokens,
+    orchestrator_overhead,
+    true_total_cost_usd,
     model_breakdown,
     phase_breakdown,
     module_breakdown,

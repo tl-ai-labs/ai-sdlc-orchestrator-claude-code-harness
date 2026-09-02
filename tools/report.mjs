@@ -30,10 +30,21 @@ if (!existsSync(telemetryPath)) {
   process.exit(2);
 }
 
-const events = readFileSync(telemetryPath, "utf8")
+const allEvents = readFileSync(telemetryPath, "utf8")
   .split("\n")
   .filter((l) => l.trim())
   .map((l) => JSON.parse(l));
+
+// Partition FIRST, mirroring buildManifest: the post-run collector
+// (plugin/scripts/collect-orchestrator-usage.mjs) appends a
+// `tier: "orchestrator"` event carrying the run's OWN loop cost,
+// reconstructed from session transcripts. Without this split that event
+// would land in the "Runner overhead" bucket below and silently blend the
+// two spends — the exact failure the collector exists to prevent. Every
+// aggregation below runs on dispatched events only; the overhead is
+// rendered as its own labeled line in Costs.
+const events = allEvents.filter((e) => e.tier !== "orchestrator");
+const orchEvents = allEvents.filter((e) => e.tier === "orchestrator");
 
 const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) : {};
 
@@ -68,7 +79,11 @@ const packetAgg = new Map(); // task_id → {phase, module, model, attempts, fin
 for (const e of events) {
   const p = e.phase ?? "unknown";
   const isSdlc = SDLC_PHASES.has(p);
-  const tokIn = e.input_tokens ?? 0;
+  // Tokens-in includes the cache-write bucket (absent on older telemetry):
+  // cache writes ARE input the vendor billed for, and keeping them in this
+  // column preserves continuity with reports rendered before the bucket
+  // was split out.
+  const tokIn = (e.input_tokens ?? 0) + (e.input_tokens_cache_write ?? 0);
   const tokOut = e.output_tokens ?? 0;
   const cached = e.input_tokens_cached ?? 0;
   const cost = e.cost_usd ?? 0;
@@ -137,6 +152,20 @@ const provTag = (rec) =>
 const totalCost = sdlcCost + overheadCost;
 const sessionCost = manifest.total_cost_usd ?? totalCost;
 
+// Orchestrator overhead — the run's own loop, measured post-run from session
+// transcripts. The manifest block is authoritative (the collector writes
+// event + manifest together); summing the telemetry events is the fallback
+// for a manifest that predates the collector run. `hasOverhead` false means
+// the collector has not run and every dollar below is dispatched-work only.
+const orchCost =
+  manifest.orchestrator_overhead?.cost_usd ??
+  (orchEvents.length > 0
+    ? orchEvents.reduce((s, e) => s + (e.cost_usd ?? 0), 0)
+    : null);
+const hasOverhead = orchCost != null;
+const trueTotal = manifest.true_total_cost_usd ?? (hasOverhead ? sessionCost + orchCost : null);
+const collectorCmd = `node plugin/scripts/collect-orchestrator-usage.mjs ${passDir}`;
+
 // ─── formatting helpers ──────────────────────────────────────────────
 const fmtUSD = (n) => `$${n.toFixed(4)}`;
 const fmtCompact = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
@@ -164,10 +193,18 @@ const modeHint =
   runMode === "estimated" ? "direct-tier events are char/3.8 estimated; total will drift from vendor-billed" :
   runMode === "mixed"     ? "MCP-dispatched events are vendor-reported; direct-tier events are estimated" :
                             "pre-provenance telemetry; run again with today's orchestrator to get a labeled report";
+// Scope sits right beside Mode: which spends this report's dollars cover.
+const scopeLabel = hasOverhead
+  ? "dispatched work + orchestrator overhead"
+  : "dispatched work only — excludes orchestrator overhead";
+const scopeHint = hasOverhead
+  ? `the run's own loop (${fmtUSD(orchCost)}, transcript-measured) is a separate line in Costs, never blended into dispatched totals`
+  : "the orchestrator's own loop never passes through the MCP server; measure and add it with the collector (see Costs)";
 
 if (asMarkdown) {
   console.log(`# ${header}\n`);
   console.log(`**Mode: ${modeLabel}** — ${modeHint}\n`);
+  console.log(`**Scope: ${scopeLabel}** — ${scopeHint}\n`);
   console.log(`## SDLC task run\n`);
   console.log(`| Phase | Prov | Calls | Tokens (in / out) | Cost |`);
   console.log(`|---|:---:|---:|---|---:|`);
@@ -176,7 +213,9 @@ if (asMarkdown) {
   console.log(`│ ${header.padEnd(64)} │`);
   console.log(`└${line}┘\n`);
   console.log(`Mode: ${modeLabel}`);
-  console.log(`  ${modeHint}\n`);
+  console.log(`  ${modeHint}`);
+  console.log(`Scope: ${scopeLabel}`);
+  console.log(`  ${scopeHint}\n`);
   console.log(`SDLC task run\n`);
   console.log(`  ${"Phase".padEnd(24)}${"Prov".padStart(6)}${"Calls".padStart(7)}${"Tokens (in / out)".padStart(22)}${"Cost".padStart(11)}`);
   console.log(`  ${"─".repeat(24 + 6 + 7 + 22 + 11)}`);
@@ -316,6 +355,16 @@ if (receipts.length || unreadableReceipts) {
         `and ${unreadableReceipts === 1 ? "is" : "are"} missing from this table.`,
     );
   }
+  // Door-comparison guard: this table is where driver-vs-worker (model door
+  // vs agent door) reads happen, and its rows are dispatched work only. The
+  // orchestrator's own loop dwarfed dispatched totals ~100× on measured
+  // runs — enough to invert the comparison — so the warning is strong until
+  // the collector has run and softens to a pointer once it has.
+  notes.push(
+    hasOverhead
+      ? "These rows are dispatched work; the orchestrator's own loop is a separate line in Costs and only the true total there compares architectures fairly."
+      : "These rows are dispatched work ONLY — the orchestrator's own loop is in no number here. Do not compare architectures (model door vs agent door) from this table; run the collector first (see Costs).",
+  );
   notes.push(`One receipt per delegation: ${basename(delegationDir)}/worker-delegation-<packet>.json`);
 
   // Escape *, <, > for the Markdown branch — plain glyphs for the terminal,
@@ -405,6 +454,10 @@ const totalNote =
   runMode === "mixed"     ? "MCP dispatches vendor-billed; direct calls estimated" :
                             "provenance field missing from events";
 
+// Three-number rendering when the collector has run (dispatched /
+// orchestrator / true total — architecture comparisons only ever from the
+// true total); otherwise the dispatched-only caveat plus the exact command
+// that removes it. Either way no dollar renders without a scope label.
 if (asMarkdown) {
   console.log(`## Costs\n`);
   console.log(`| Line | Amount |`);
@@ -415,8 +468,19 @@ if (asMarkdown) {
     console.log(`| — vendor-billed subtotal | ${fmtUSD(vendorCost)} |`);
     console.log(`| — estimator subtotal | ${fmtUSD(estimatedCost)} |`);
   }
-  console.log(`| **${totalLabel}** | **${fmtUSD(sessionCost)}** |\n`);
-  console.log(`_${totalNote}_\n`);
+  if (hasOverhead) {
+    console.log(`| ${totalLabel} — dispatched work only | ${fmtUSD(sessionCost)} |`);
+    console.log(`| Orchestrator overhead (transcript-measured) | ${fmtUSD(orchCost)} |`);
+    console.log(`| **True total (dispatched + orchestrator)** | **${fmtUSD(trueTotal)}** |\n`);
+    console.log(`_${totalNote}. The overhead line is the run's own loop, reconstructed from session transcripts by collect-orchestrator-usage.mjs; only the true total compares architectures fairly._\n`);
+    if (runMode === "estimated" || runMode === "mixed") {
+      console.log(`_Estimator overlap: this run's estimated direct-tier events describe in-session work the transcript-measured overhead also contains, so the true total is conservative (double-counts up to ${fmtUSD(estimatedCost)})._\n`);
+    }
+  } else {
+    console.log(`| **${totalLabel}** — dispatched work only | **${fmtUSD(sessionCost)}** |\n`);
+    console.log(`_${totalNote}_\n`);
+    console.log(`_**Excludes orchestrator overhead.** The orchestrator's own loop (reasoning, file reads, growing-conversation re-sends) never passes through the MCP server and is in no number above — on measured runs it exceeded the dispatched total ~100×. Measure and add it: \`${collectorCmd}\`_\n`);
+  }
 } else {
   console.log(`Costs\n`);
   console.log(`  SDLC task cost                                       ${fmtUSD(sdlcCost).padStart(9)}  (sum of SDLC-phase events)`);
@@ -426,8 +490,30 @@ if (asMarkdown) {
     console.log(`    — estimator subtotal                             ${fmtUSD(estimatedCost).padStart(9)}  (${estimatedEvents} events)`);
   }
   console.log(`  ${"─".repeat(24 + 6 + 7 + 22 + 11)}`);
-  console.log(`  ${totalLabel.padEnd(59)}${fmtUSD(sessionCost).padStart(11)}`);
-  console.log(`  ${modeHint === totalNote ? "" : "  " + totalNote}\n`);
+  if (hasOverhead) {
+    console.log(`  ${`${totalLabel} — dispatched work only`.padEnd(59)}${fmtUSD(sessionCost).padStart(11)}`);
+    console.log(`  ${"Orchestrator overhead (transcript-measured)".padEnd(59)}${fmtUSD(orchCost).padStart(11)}`);
+    console.log(`  ${"─".repeat(24 + 6 + 7 + 22 + 11)}`);
+    console.log(`  ${"True total (dispatched + orchestrator)".padEnd(59)}${fmtUSD(trueTotal).padStart(11)}`);
+    console.log(`  ${modeHint === totalNote ? "" : "  " + totalNote}`);
+    console.log(`    The overhead line is the run's own loop, reconstructed from session`);
+    console.log(`    transcripts by collect-orchestrator-usage.mjs; only the true total`);
+    console.log(`    compares architectures fairly.`);
+    if (runMode === "estimated" || runMode === "mixed") {
+      console.log(`    Estimator overlap: the estimated direct-tier events describe in-session`);
+      console.log(`    work the transcript-measured overhead also contains, so the true total`);
+      console.log(`    is conservative (double-counts up to ${fmtUSD(estimatedCost)}).`);
+    }
+    console.log("");
+  } else {
+    console.log(`  ${`${totalLabel} — dispatched work only`.padEnd(59)}${fmtUSD(sessionCost).padStart(11)}`);
+    console.log(`  ${modeHint === totalNote ? "" : "  " + totalNote}`);
+    console.log(`    EXCLUDES ORCHESTRATOR OVERHEAD: the orchestrator's own loop (reasoning,`);
+    console.log(`    file reads, growing-conversation re-sends) never passes through the MCP`);
+    console.log(`    server and is in no number above — on measured runs it exceeded the`);
+    console.log(`    dispatched total ~100×. Measure and add it:`);
+    console.log(`      ${collectorCmd}\n`);
+  }
 }
 
 // Methodology — content shifts based on mode

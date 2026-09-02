@@ -34,7 +34,7 @@ You type `/mmo:greenfield` (new app) or `/mmo:brownfield` (existing repo). An **
 | [plugin/templates/](../plugin/templates/) | Boilerplate the plugin writes into a target project (a `.gitignore` fragment, a CI settings fragment). |
 | [tools/](../tools/) | Repo-level tooling: `setup.mjs` (clone-route installer), `report.mjs` (cost report from a pass directory), and the test suite in `tools/test/`. |
 | [docs/](.) | Everything you're reading now — see [docs/README.md](README.md) for the full index. |
-| [examples/](../examples/) | Real recorded runs (briefs plus their full `.sdlc/` output) you can read or replay without spending anything: `quick-demo`, `workforce-ops`, `travel-ops`. |
+| [examples/](../examples/) | Real recorded runs (briefs plus their full `.sdlc/` output) you can read or replay without spending anything: `unit-convert`, `quick-demo`, `workforce-ops`, `travel-ops`. |
 | [.sdlc/](../.sdlc/) | Where a run against *this* repo would write its own output — telemetry, manifest, generated files. Present here because this repo has been used to test itself. |
 
 ## Key terms

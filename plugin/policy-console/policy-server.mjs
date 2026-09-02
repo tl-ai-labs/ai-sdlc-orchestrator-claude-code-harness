@@ -78,7 +78,22 @@ const ADAPTER_LABEL = {
 
 const GEMINI_TIERS = ["off", "minimal", "low", "medium", "high"];
 const ANTHROPIC_EFFORT_TIERS = ["off", "low", "medium", "high", "xhigh", "max"];
-const SHIPPED_PRESETS = ["opus-only", "opus-plus-flash"];
+// Every preset YAML the plugin ships, for the console's "preset" vs "custom"
+// origin chip. A name list is the only discriminator available: console-saved
+// custom policies land in the same config/policies/ directory as the shipped
+// files, so the directory listing cannot tell the two apart. Keep this in step
+// with plugin/config/policies/ when a preset ships — nothing functional gates
+// on it, but a shipped preset missing here shows as "custom" in the console
+// (which is exactly how five of these went mislabeled when the list said two).
+const SHIPPED_PRESETS = [
+  "flash-agsdk-only",
+  "opus-only",
+  "opus-only-v5",
+  "opus-plus-flash",
+  "opus-plus-flash-v37",
+  "opus-plus-sonnet",
+  "opus-plus-sonnet-max",
+];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function thinkingSupport(model) {

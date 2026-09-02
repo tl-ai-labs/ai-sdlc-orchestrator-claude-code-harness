@@ -36,6 +36,7 @@ import {
   resolveGcpLocation,
 } from "./adapters/geminiTransports.js";
 import type { TaskPacket, TelemetryEvent, Policy, SelectOverrides } from "./types.js";
+import { resolveProjectRoot } from "./project-root.js";
 import { log, setLevel, configureSinks, type Level } from "./log.js";
 
 /**
@@ -96,6 +97,9 @@ const LEGACY_SELECT_ENV = "SDLC_SELECT";
 let legacySelectWarned = false;
 
 function ensurePolicy(policyName?: string, projectRoot?: string, policyPath?: string): Policy {
+  // An omitted project_root falls back to the one an earlier caller supplied,
+  // so a dispatch resolves the same policy the preview did. See project-root.ts.
+  projectRoot = resolveProjectRoot(projectRoot);
   const key = `${policyName ?? "opus-only"}|${projectRoot ?? ""}|${policyPath ?? ""}`;
   if (activePolicy && activePolicyKey === key) return activePolicy;
   const policy = policyPath
@@ -280,6 +284,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           events: { type: "array" },
           policy_name: { type: "string" },
+          project_root: {
+            type: "string",
+            description:
+              "Project root, so a repo-local routing-policy.yaml resolves here exactly as it " +
+              "does for the run being simulated. Omitting it silently falls back to the " +
+              "shipped preset — a what-if against the wrong policy.",
+          },
           policy_path: { type: "string" },
         },
         required: ["events"],
@@ -459,6 +470,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           module: packet.module,
           model: modelName,
           routed_by: "orchestrator" as const,
+          // Server-measured from the vendor's own usage report, so always
+          // "vendor" — in BOTH auth modes (estimated mode's MCP-dispatched
+          // calls still carry vendor tokens; only direct-tier events are
+          // estimates, and those arrive via log_telemetry, not here). The
+          // report keys the run's cost label off this field; before this
+          // stamp existed every dispatched event fell to "unknown" and the
+          // whole run's numbers were disowned.
+          provenance: "vendor" as const,
           // Leaf id; the only field that distinguishes two leaves that share
           // a vendor model name (e.g. flash-completion vs flash-agsdk-worker).
           model_id: decision.modelId,
@@ -478,6 +497,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...baseEvent,
           input_tokens: att.tokens.input,
           input_tokens_cached: att.tokens.input_cached,
+          // Cache writes, disjoint from input_tokens (Anthropic adapters
+          // populate it; others leave it undefined and JSON.stringify drops
+          // the key, keeping their events byte-identical to before).
+          input_tokens_cache_write: att.tokens.input_cache_write,
           output_tokens: att.tokens.output,
           // Already counted in output_tokens and billed at the output rate;
           // surfaced only so a reader can see how much of a delegation's
@@ -510,7 +533,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "simulate_policy": {
         const a = args as any;
-        const policy = ensurePolicy(a.policy_name, undefined, a.policy_path);
+        // project_root flows through like every sibling tool's does
+        // (execute_with_model, preflight_dispatch, load_policy) — this
+        // handler used to hardcode `undefined` here, so a simulation for a
+        // project with a repo-local routing-policy.yaml silently priced the
+        // shipped preset instead of the policy the run actually used.
+        const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
         // Replay against the same slot choices the real run uses.
         const out = simulatePolicyCost(a.events, policy, selectOverrides());
         return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };

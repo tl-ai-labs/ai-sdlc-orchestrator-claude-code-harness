@@ -25,11 +25,29 @@ If `examples/<study-id>/passes/<run-id>/` already exists, its contents will be o
 
 **Single-model runs** — to author every phase with one model (e.g. an "Opus only" baseline), pass a policy whose `rules:` list has only a default rule routing to that model. The same command flow runs; the routing table just does not fork.
 
-**Policy resolution:** the orchestrator loads the policy YAML from `plugin/config/policies/<policy>.yaml` and uses it for every routing decision in this run.
+**Policy resolution:** every policy tool on the MCP server (`execute_with_model`,
+`preflight_dispatch`, `load_policy`, `simulate_policy`) resolves through one loader with one
+precedence, and the orchestrator's job is to pass the arguments that express what the user asked
+for:
+
+1. **An explicit `--policy=<name>` flag wins over everything.** Pass it as
+   `policy_path: ${CLAUDE_PLUGIN_ROOT}/config/policies/<name>.yaml` — an explicit path bypasses
+   the loader's search entirely, which is what lets a flag typed for *this run* beat a repo-local
+   override.
+2. **Otherwise a repo-local `<project root>/routing-policy.yaml` wins over any name.** Pass
+   `policy_name: <resolved default>` plus `project_root: $(pwd)`; the loader prefers the project
+   file whenever it exists. Omitting `project_root` is the historical bug: the run silently fell
+   back to the shipped preset while the project's own policy sat unread.
+3. **Otherwise the named preset** `plugin/config/policies/<name>.yaml` loads — the project's
+   `default_policy` from `.sdlc/project.json`, or `opus-plus-flash` when none is set.
+
+Pass the same policy arguments on **every** call, `simulate_policy` included — a what-if priced
+under a different policy than the run used is worse than no what-if.
 
 **Requirements before starting:**
 - Gemini credentials must be present when the policy uses any Gemini model — either Google Cloud credentials for Gemini Enterprise Agent Platform, formerly Vertex AI (`gcloud auth application-default login`, no key), or `GEMINI_API_KEY` for AI Studio. If neither is available, abort with a clear message naming both.
 - `ANTHROPIC_API_KEY` env var must be set when `--auth=vendor`. If signed in to a Claude Code subscription under `--auth=estimated`, Claude Code provides direct-tier auth and the variable does not need to be exported. It IS required for `claude --print` (headless) invocations under `--auth=vendor`.
+- `CLAUDE_CODE_SUBAGENT_MODEL` must be exported **before `claude` launches** when `--auth=estimated`, set to the policy's driver `model_name` — it is what the five driver subagents actually execute on, and the orchestrator's run-start driver-model check aborts (printing the exact export line) when it is unset or wrong. Print the expected value ahead of a headless run with `node "${CLAUDE_PLUGIN_ROOT}/scripts/driver-model-check.mjs" --project-root "$(pwd)" --print-only` plus the run's `--policy`/`--policy-path` arguments. Irrelevant under `--auth=vendor`.
 - The MCP server `model-dispatch` must be registered (it is, via the plugin manifest).
 
 **HITL gates active:** Gate 1 (requirements), Gate 2 (design), Gate 3 (security review), Gate 4 (final acceptance).
@@ -51,7 +69,7 @@ flags:
 | `--brief=<path>` | Optional: pre-written intent brief (replaces the interview). Any markdown file with the section layout in [docs/brownfield.md](../../docs/brownfield.md) works. |
 | `--gates=<prompt\|auto-approve\|auto-abort>` | Gate behavior. `prompt` (default) is interactive; `auto-approve` accepts every gate (headless friendly); `auto-abort` **v1.5** — approves only when the run's fingerprint matches `.sdlc/project.json`, aborts otherwise. Recommended for CI so drift never silently proceeds. |
 | `--from-config=<path>` | **v1.5** — read gate answers from a committed team config file. Combined with `--gates=auto-abort`, this is the CI-safe flow. |
-| `--policy=<name>` | Same as greenfield. Overrides the setup-time project default (`.sdlc/project.json.default_policy`) and, if present, any repo-local `routing-policy.yaml`. |
+| `--policy=<name>` | Same as greenfield. Overrides the setup-time project default (`.sdlc/project.json.default_policy`) and, if present, any repo-local `routing-policy.yaml` — the flag is passed to the MCP server as an explicit `policy_path`, which outranks the loader's project-override search (see **Policy resolution** above). |
 | `--strict-write=off` | Downgrade the write-contract PreToolUse hook from HARD-BLOCK to WARN. Every off-limits or not-in-allowlist write is logged but not refused. Use with care — this defeats the plugin's main safety guarantee. |
 | `--allow-dirty` | Bypass the git-clean check when the git contract's `commit_strategy != none`. |
 | `--recheck` | Force pre-check re-run even when the cached status is still valid. Useful after a plugin version bump. |
