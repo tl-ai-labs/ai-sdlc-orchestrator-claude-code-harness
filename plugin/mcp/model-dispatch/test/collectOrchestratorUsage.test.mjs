@@ -282,3 +282,121 @@ test("transcript discovery ignores non-transcript files", () => {
     assert.ok(found.every((p) => p.endsWith(".jsonl")));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+/*
+ * `output_tokens` is complete only on a message's terminal line — the one
+ * carrying `stop_reason`. Booking any other line under-counts the message,
+ * and it does so silently, toward under-reporting.
+ */
+import { sumTranscriptUsage } from "../../../scripts/collect-orchestrator-usage.mjs";
+
+/** Write one session file from `[output_tokens, stop_reason]` pairs. */
+function transcript(dir, rows, id = "msg_one") {
+  const lines = rows.map(([out, stop]) => JSON.stringify({
+    type: "assistant",
+    timestamp: new Date().toISOString(),
+    message: {
+      id,
+      model: "claude-opus-5",
+      stop_reason: stop,
+      usage: {
+        input_tokens: 2,
+        cache_read_input_tokens: 17850,
+        cache_creation_input_tokens: 5024,
+        output_tokens: out,
+      },
+    },
+  }));
+  const f = join(dir, "session.jsonl");
+  writeFileSync(f, lines.join("\n") + "\n");
+  return [f];
+}
+
+function withTranscript(rows, assertions, id) {
+  const dir = mkdtempSync(join(tmpdir(), "mmo-stream-"));
+  try {
+    assertions(sumTranscriptUsage(transcript(dir, rows, id), 0, Date.now() + 60_000));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test("a streamed message books the terminal line's output, not the first line's", () => {
+  withTranscript([[2, null], [2, null], [2, null], [865, "tool_use"]], ({ tokens, stats }) => {
+    assert.equal(stats.counted, 1, "four lines are one message");
+    assert.equal(stats.duplicates, 3);
+    assert.equal(tokens.output, 865);
+    assert.equal(tokens.input, 2, "input is identical across lines, counted once");
+    assert.equal(tokens.input_cached, 17850);
+    assert.equal(tokens.input_cache_write, 5024);
+  });
+});
+
+test("the terminal line wins even when a non-terminal line reports more", () => {
+  // Guards the difference between this rule and "take the largest": a
+  // mid-stream line must never outrank the message's own end-of-stream marker.
+  withTranscript([[2, null], [9999, null], [865, "end_turn"]], ({ tokens }) => {
+    assert.equal(tokens.output, 865);
+  });
+});
+
+test("the terminal line wins when it arrives before the others", () => {
+  withTranscript([[865, "end_turn"], [2, null], [9999, null]], ({ tokens }) => {
+    assert.equal(tokens.output, 865);
+  });
+});
+
+test("with no terminal line the largest value is kept as a lower bound", () => {
+  withTranscript([[2, null], [400, null], [120, null]], ({ tokens }) => {
+    assert.equal(tokens.output, 400);
+  });
+});
+
+test("two distinct messages each book their own terminal value", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mmo-stream-"));
+  try {
+    const rows = [
+      { id: "a", out: 2, stop: null }, { id: "a", out: 500, stop: "end_turn" },
+      { id: "b", out: 7, stop: null }, { id: "b", out: 300, stop: "end_turn" },
+    ].map((r) => JSON.stringify({
+      type: "assistant",
+      timestamp: new Date().toISOString(),
+      message: { id: r.id, model: "claude-opus-5", stop_reason: r.stop, usage: { input_tokens: 1, output_tokens: r.out } },
+    }));
+    const f = join(dir, "s.jsonl");
+    writeFileSync(f, rows.join("\n") + "\n");
+    const { tokens, stats } = sumTranscriptUsage([f], 0, Date.now() + 60_000);
+    assert.equal(stats.counted, 2);
+    assert.equal(tokens.output, 800);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/*
+ * The original defect was not the wrong key name — it was `?? 0` turning a
+ * missing key into a confident wrong answer. Renaming the key fixes today's
+ * manifest; refusing to assume zero is what keeps the next rename loud.
+ */
+test("a manifest carrying no dispatched cost is refused, never treated as $0", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mmo-nocost-"));
+  try {
+    mkdirSync(join(dir, "pass"), { recursive: true });
+    const now = new Date();
+    writeFileSync(join(dir, "pass", "manifest.json"), JSON.stringify({
+      pass: "p1",
+      policy_name: "opus-only",
+      started_at: new Date(now - 60_000).toISOString(),
+      ended_at: now.toISOString(),
+      totals: { dispatched_events: 1 },   // no dispatched_cost_usd, no total_cost_usd
+    }));
+    const tdir = join(dir, "t");
+    mkdirSync(tdir, { recursive: true });
+    writeFileSync(join(tdir, "s.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: now.toISOString(),
+      message: { id: "m1", model: "claude-opus-5", stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 20 } },
+    }) + "\n");
+
+    const res = spawnSync(process.execPath, [SCRIPT, join(dir, "pass"), "--transcripts-dir", tdir], { encoding: "utf-8" });
+    assert.equal(res.status, 1, "must exit non-zero rather than report overhead as the whole cost");
+    assert.match(res.stderr, /dispatched cost/i);
+    assert.match(res.stderr, /totals\.dispatched_cost_usd/, "names the key it looked for");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

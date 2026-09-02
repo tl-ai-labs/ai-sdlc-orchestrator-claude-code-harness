@@ -29,9 +29,17 @@
  *      `cache_creation_input_tokens`, `output_tokens` — and `message.model`.
  *   3. DEDUPE — the critical one: one API message is written as SEVERAL
  *      JSONL lines (one per content block), each repeating the same
- *      `message.id` and IDENTICAL usage. On the reference transcript 5,218
- *      of 7,203 message ids appeared more than once — naive per-line summing
- *      roughly DOUBLES the cost. Each `message.id` is counted exactly once.
+ *      `message.id`. On the reference transcript 5,218 of 7,203 message ids
+ *      appeared more than once — naive per-line summing roughly DOUBLES the
+ *      cost, so each id is counted once. The usage on those lines is identical
+ *      for input, cache_read and cache_write, but NOT for `output_tokens`:
+ *      that is a partial snapshot, complete only on the message's terminal
+ *      line — the one carrying `stop_reason`. Keeping the first line's value
+ *      books a couple of tokens where the true figure is hundreds (measured
+ *      2.85x low on a real run), so the terminal line's value is booked
+ *      instead. A message with no terminal line (truncated, or still
+ *      streaming) falls back to the largest value seen, which is a lower
+ *      bound rather than a guess.
  *   4. EXCLUDE: `message.model === "<synthetic>"` lines are error
  *      placeholders fabricated by the CLI, not billed API traffic.
  *   5. WINDOW ANCHOR: run_id is NOT present in transcript metadata (checked
@@ -213,6 +221,9 @@ export function candidateTranscripts(dir, windowStartMs) {
  */
 export function sumTranscriptUsage(files, windowStartMs, windowEndMs) {
   const seen = new Set();
+  /** Per message id: the output figure booked, and whether it came from the
+   *  terminal (stop_reason) line. See the streaming note below. */
+  const outputById = new Map();
   const observedModels = {};
   const tokens = { input: 0, input_cached: 0, input_cache_write: 0, output: 0 };
   const stats = { files: files.length, lines: 0, assistant: 0, counted: 0, duplicates: 0, synthetic: 0, outside_window: 0 };
@@ -236,11 +247,30 @@ export function sumTranscriptUsage(files, windowStartMs, windowEndMs) {
           continue;
         }
       }
-      // One API message = many JSONL lines (one per content block), all
-      // repeating the same id and the same usage — count each id ONCE.
+      // Duplicate lines for one id repeat input/cache_read/cache_write, so
+      // first-seen is correct for those. `output_tokens` is not: it is a
+      // partial snapshot that is only complete on the message's terminal line,
+      // the one carrying `stop_reason`. Book that line's value, so the figure
+      // comes from the message's own end-of-stream marker rather than from
+      // whichever line happened to be largest. Without a terminal line — a
+      // truncated or still-streaming message — fall back to the maximum seen,
+      // which is the best available lower bound.
+      const out = usage.output_tokens ?? 0;
+      const terminal = msg.stop_reason != null;
       if (msg.id) {
-        if (seen.has(msg.id)) { stats.duplicates++; continue; }
+        const prev = outputById.get(msg.id);
+        if (seen.has(msg.id)) {
+          stats.duplicates++;
+          // A terminal line always wins; otherwise only a larger value does,
+          // and never over a value already taken from a terminal line.
+          if (!prev?.terminal && (terminal || out > prev.out)) {
+            tokens.output += out - prev.out;
+            outputById.set(msg.id, { out, terminal });
+          }
+          continue;
+        }
         seen.add(msg.id);
+        outputById.set(msg.id, { out, terminal });
       }
       stats.counted++;
       const model = msg.model ?? "(unlabeled)";
@@ -248,7 +278,7 @@ export function sumTranscriptUsage(files, windowStartMs, windowEndMs) {
       tokens.input += usage.input_tokens ?? 0;
       tokens.input_cached += usage.cache_read_input_tokens ?? 0;
       tokens.input_cache_write += usage.cache_creation_input_tokens ?? 0;
-      tokens.output += usage.output_tokens ?? 0;
+      tokens.output += out;
     }
   }
   return { tokens, stats, observedModels };
@@ -304,9 +334,17 @@ export async function main(argv = process.argv.slice(2)) {
     );
   }
 
+  // The declared window runs to ended_at + slack, which is in the future when
+  // the run-end step invokes this. Reading it as-is silently reports a partial
+  // measurement as a complete one, so clamp to now and say how much of the
+  // window was unobservable.
+  const collectedAtMs = Date.now();
+  const unobservableMs = Math.max(0, windowEndMs + WINDOW_SLACK_MS - collectedAtMs);
+  const effectiveEndMs = Math.min(windowEndMs, collectedAtMs - WINDOW_SLACK_MS);
+
   const tDir = args.transcriptsDir ? resolve(args.transcriptsDir) : transcriptsDirFor(projectRoot);
   const files = candidateTranscripts(tDir, windowStartMs);
-  const { tokens, stats, observedModels } = sumTranscriptUsage(files, windowStartMs, windowEndMs);
+  const { tokens, stats, observedModels } = sumTranscriptUsage(files, windowStartMs, effectiveEndMs);
 
   console.log(`collect-orchestrator-usage: pass '${manifest.pass}' window ${manifest.started_at} → ${manifest.ended_at} (±5m)`);
   console.log(`transcripts: ${tDir}`);
@@ -315,6 +353,13 @@ export async function main(argv = process.argv.slice(2)) {
       `(${stats.duplicates} duplicate content-block line(s) skipped, ${stats.synthetic} synthetic, ${stats.outside_window} outside window)`
   );
   console.log(`observed_models ${JSON.stringify(observedModels)}`);
+  if (unobservableMs > 0) {
+    console.error(
+      `NOTE: the declared window extends ${Math.round(unobservableMs / 1000)}s past this ` +
+        `collection. Messages written after now cannot be counted, so this figure is a ` +
+        `lower bound. Re-run after the window closes for the complete measurement.`
+    );
+  }
 
   if (stats.counted === 0) {
     console.error(
@@ -364,12 +409,28 @@ export async function main(argv = process.argv.slice(2)) {
     retry_count: 0,
   };
 
-  const trueTotal = pricingMod.round6((manifest.total_cost_usd ?? 0) + cost);
+  // buildManifest writes the dispatched figure as totals.dispatched_cost_usd;
+  // total_cost_usd is only present on a manifest this collector has already
+  // patched. Reading the latter alone meant a first run defaulted it to 0 and
+  // reported overhead as if it were the whole cost — a silent under-report of
+  // the entire mechanical tier, which is the failure this script exists to end.
+  // Absent both, stop: a cost of zero must never be assumed.
+  const dispatched = manifest.totals?.dispatched_cost_usd ?? manifest.total_cost_usd;
+  if (typeof dispatched !== "number") {
+    console.error(
+      `collect-orchestrator-usage FAILED: the manifest carries no dispatched cost ` +
+        `(looked for totals.dispatched_cost_usd, then total_cost_usd). Refusing to ` +
+        `assume $0 — that would report the overhead as the entire run cost. Nothing was written.`
+    );
+    return 1;
+  }
+
+  const trueTotal = pricingMod.round6(dispatched + cost);
   console.log(
     `overhead: in ${tokens.input} + cached ${tokens.input_cached} + cache_write ${tokens.input_cache_write} ` +
       `+ out ${tokens.output} tokens @ '${derived.modelName}' = $${cost}`
   );
-  console.log(`dispatched total $${manifest.total_cost_usd ?? 0} → true total $${trueTotal}`);
+  console.log(`dispatched total $${dispatched} → true total $${trueTotal}`);
 
   // Estimated-mode overlap, surfaced not hidden (see header).
   if (existsSync(telemetryPath)) {
