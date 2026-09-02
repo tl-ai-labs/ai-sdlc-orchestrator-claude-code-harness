@@ -16,7 +16,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -167,8 +167,42 @@ test("the failure remediation covers the desktop app, not just a shell export", 
     const r = run(["--project-root", root], { CLAUDE_CODE_SUBAGENT_MODEL: "claude-sonnet-5" });
     assert.equal(r.code, 1);
     assert.match(r.stderr, /export CLAUDE_CODE_SUBAGENT_MODEL=/, "the terminal route must still be given");
-    assert.match(r.stderr, /\.claude\/settings\.json/, "the desktop-app route must be given too");
+    assert.match(r.stderr, /~\/\.claude\/settings\.json/, "the desktop-app route must name the user file");
     assert.match(r.stderr, /login shell/, "and why an export cannot work there");
-    assert.match(r.stderr, /project/, "the project file is the one to prefer");
+    assert.match(
+      r.stderr,
+      /project'?s? \.claude\/settings\.json is\s+not applied/,
+      "and must say the project settings file does not work, since that is the instinctive place to put it",
+    );
+  });
+});
+
+/*
+ * Measured on 2026-09-02: the value was set correctly in a project's
+ * .claude/settings.json and three full app restarts still reported it unset,
+ * because Claude Code reads `env` only from the user file. Generic advice does
+ * not rescue a reader already in that state — the check has to name it.
+ */
+test("a value stranded in the project settings file is diagnosed by name", () => {
+  withPolicy(UNIFIED_POLICY, (root) => {
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(
+      join(root, ".claude", "settings.json"),
+      JSON.stringify({ env: { CLAUDE_CODE_SUBAGENT_MODEL: "claude-opus-4-8" } }),
+    );
+
+    const r = run(["--project-root", root]);
+    assert.equal(r.code, 1, "the value is stranded, so the check must still fail");
+    assert.match(r.stderr, /already declares CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-4-8/);
+    assert.match(r.stderr, /has not taken effect/);
+    assert.match(r.stderr, /Move the entry there/);
+  });
+});
+
+test("no stranded-value note appears when the project has no settings file", () => {
+  withPolicy(UNIFIED_POLICY, (root) => {
+    const r = run(["--project-root", root], { CLAUDE_CODE_SUBAGENT_MODEL: "claude-sonnet-5" });
+    assert.equal(r.code, 1);
+    assert.doesNotMatch(r.stderr, /already declares/, "nothing is stranded, so nothing to report");
   });
 });

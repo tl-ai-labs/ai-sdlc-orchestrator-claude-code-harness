@@ -46,6 +46,7 @@
  * MMO_SELECT slot overrides are honored the same way the server honors them.
  */
 
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -129,6 +130,25 @@ export function deriveDriverModel(policy, routing, overrides = {}) {
   return { modelName: first.modelName, modelId: first.modelId, perPhase };
 }
 
+/**
+ * Claude Code does not apply an `env` block from a project's
+ * .claude/settings.json — only the user file at ~/.claude/settings.json. A
+ * reader who follows the obvious instinct sets it in the project file, sees no
+ * effect across repeated app restarts, and has nothing to tell them why. Return
+ * the value declared there so the failure can name that trap instead of
+ * repeating generic advice.
+ */
+export function declaredInProjectSettings(projectRoot) {
+  if (!projectRoot) return undefined;
+  try {
+    const raw = readFileSync(join(resolve(projectRoot), ".claude", "settings.json"), "utf8");
+    const declared = JSON.parse(raw)?.env?.CLAUDE_CODE_SUBAGENT_MODEL;
+    return typeof declared === "string" && declared !== "" ? declared : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseArgs(argv) {
   const args = { projectRoot: undefined, policy: undefined, policyPath: undefined, printOnly: false };
   for (let i = 0; i < argv.length; i++) {
@@ -187,18 +207,27 @@ export async function main(argv = process.argv.slice(2)) {
         `whatever this session's model happens to be`
       : `CLAUDE_CODE_SUBAGENT_MODEL=${actual}, but policy '${policy.name}' prices ` +
         `the driver tier as '${derived.modelName}'`;
+  const stranded = declaredInProjectSettings(args.projectRoot);
+  const strandedNote = stranded
+    ? `\n\nNOTE: ${join(String(args.projectRoot), ".claude", "settings.json")} already ` +
+      `declares CLAUDE_CODE_SUBAGENT_MODEL=${stranded}, and it has not taken effect. ` +
+      `Claude Code does not apply an "env" block from a project settings file — ` +
+      `only from ~/.claude/settings.json. Move the entry there.`
+    : "";
+
   console.error(
     `driver-model-check FAILED: ${problem} — the report would price driver work ` +
-      `against a model that did not run.\n\n` +
+      `against a model that did not run.${strandedNote}\n\n` +
       `Fix (must happen BEFORE claude launches — an export inside the session ` +
       `cannot reach the CLI process):\n\n` +
       `  Terminal:     export CLAUDE_CODE_SUBAGENT_MODEL=${derived.modelName}\n` +
       `  Desktop app:  add "CLAUDE_CODE_SUBAGENT_MODEL": "${derived.modelName}" to the\n` +
-      `                "env" block of this project's .claude/settings.json — the app\n` +
-      `                is not launched from a login shell, so an export never reaches\n` +
-      `                it. Prefer the project file over ~/.claude/settings.json: the\n` +
-      `                user file pins the driver model for every session on the\n` +
-      `                machine, including runs that have nothing to do with this one\n\n` +
+      `                "env" block of ~/.claude/settings.json — the app is not\n` +
+      `                launched from a login shell, so an export never reaches it,\n` +
+      `                and an "env" block in a project's .claude/settings.json is\n` +
+      `                not applied. That user file is machine-wide: it pins the\n` +
+      `                driver model for every session on this machine, so remove\n` +
+      `                the entry once the run is done\n\n` +
       `then relaunch claude and restart the run.`
   );
   return 1;
