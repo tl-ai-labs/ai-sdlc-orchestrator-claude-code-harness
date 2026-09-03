@@ -295,6 +295,8 @@ console.log(`
       --permission-mode acceptEdits \\
       --output-format stream-json --verbose \\
       > examples/workforce-ops/passes/pass1/live-run.log
+    ${c.dim}# keep live-run.log: its last line is Claude Code's own cost receipt, and the run-end${c.reset}
+    ${c.dim}# collector checks the session's true cost against it (refuses to write on a mismatch).${c.reset}
 
     ${c.dim}# opus + Gemini Flash multi-model under vendor mode${c.reset}
     claude --print "/mmo:pass --auth=vendor --policy=opus-plus-flash --run-id=pass2 examples/workforce-ops/brief.md" \\

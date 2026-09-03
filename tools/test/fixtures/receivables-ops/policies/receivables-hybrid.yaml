@@ -1,0 +1,120 @@
+# Receivables Ops · Pass 2 — premium judgment on Claude Opus 5, mechanical
+# volume on Gemini 3.7 Flash. This is the pass that carries the study's thesis.
+# Same phase/task_type split as Workforce Ops pass 4, so the two are comparable.
+
+version: 1
+name: receivables-hybrid
+
+models:
+  - id: opus5
+    adapter: builtin-anthropic
+    model_name: claude-opus-5
+    display_name: claude-opus-5
+    pricing: { input: 5.00, input_cached: 0.50, output: 25.00 }
+    pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
+    auth: { env: ANTHROPIC_API_KEY }
+  - id: flash37
+    adapter: mcp:gemini-flash-server
+    model_name: gemini-3.7-flash
+    display_name: gemini-3.7-flash
+    backend: vertex          # Vertex AI via ADC — no API key
+    location: global         # recent Flash point-releases 404 in regional endpoints
+    reasoning: { tier: high }
+    pricing: { input: 0.75, input_cached: 0, output: 3.75 }
+    pricing_source: https://cloud.google.com/vertex-ai/generative-ai/pricing
+
+rules:
+  # ── Premium-judgment phases — stay on Opus 5 ────────────────────────────
+  - when: { phase: requirements_analysis }
+    use: opus5
+    reason: "Judgment-heavy, low volume — premium"
+  - when: { phase: architecture_design }
+    use: opus5
+    reason: "Foundational, decision-bearing — premium"
+  - when: { phase: plan_task_packets }
+    use: opus5
+    reason: "Needs full context to slice work cleanly — premium"
+  - when: { phase: senior_code_review }
+    use: opus5
+    reason: "Cross-file reasoning + judgment — premium"
+  - when: { phase: security_review }
+    use: opus5
+    reason: "Risk-bearing, low volume — premium"
+
+  # ── High-volume mechanical phases — Gemini 3.7 Flash ────────────────────
+  - when:
+      phase: codegen
+      task_type:
+        - controller_handler
+        - service_method
+        - dto
+        - module_wiring
+        - migration
+        - seed_data
+        - entity
+        - guard
+        - interceptor
+        - filter
+        - react_component
+        - react_page
+        - api_client
+        - frontend_util
+        - frontend_config
+        - frontend_html
+        # The four below are NOT in opus-plus-flash.yaml's list, so under that
+        # policy they fell through to `default: opus`. They are listed here for
+        # a concrete reason: this study's Opus work is done by the orchestrator
+        # inside the Claude Code session (subscription-funded), never dispatched
+        # through the MCP server, because the Anthropic adapter needs an API key
+        # this study deliberately does not use. A dispatched packet that routed
+        # to opus5 would therefore fail mid-run on a missing key.
+        #
+        # Verified before the run: with these four added, no codegen/tests/docs
+        # task type routes to the Anthropic adapter. The cost of the change is
+        # that pass 2 sends slightly more to the cheap tier than Workforce Ops'
+        # pass 4 did — worth stating when the two studies are read side by side.
+        - prisma_schema
+        - decorator
+        - middleware
+        - bootstrap
+    use: flash37
+    reason: "Schema-driven boilerplate — cost-efficient tier"
+  - when: { phase: tests }
+    use: flash37
+    reason: "Scaffold-heavy, pattern-based — cost-efficient tier"
+  - when: { phase: docs }
+    use: flash37
+    reason: "Volume work — cost-efficient tier"
+
+  # ── Debug with escalation: cheap first, Opus 5 after two failures ───────
+  - when: { phase: debug, retry_count: { gte: 2 } }
+    use: opus5
+    reason: "Escalation: 2 cost-efficient tier attempts failed"
+  - when: { phase: debug }
+    use: flash37
+    reason: "Most debugs have clear cause — cost-efficient tier"
+
+  # Anything unrecognised fails safe to premium. Note the consequence: a
+  # task_type the planner invents that is not listed above lands here silently
+  # and is billed at Opus rates. Check the model mix on the dry run before
+  # committing to a priced pass — a hybrid that is secretly all-Opus looks
+  # perfectly valid in the telemetry.
+  - default: opus5
+    reason: "Unrecognized task — fail safe to premium"
+
+# ─────────────────────────────────────────────────────────────
+# Why this policy is shaped the way it is
+# Receivables Ops · Pass 2 — premium judgment on Claude Opus 5, mechanical
+# volume on Gemini 3.7 Flash. This is the pass that carries the study's thesis.
+#
+# The phase/task_type split below is deliberately IDENTICAL in shape to
+# opus-plus-flash.yaml (Workforce Ops pass 4). That is the point: if this study
+# routed differently, its savings % could not be read next to the original's.
+# The models change; the policy structure does not.
+#
+# Note what is NOT special-cased. This brief's riskiest code is its money path
+# — integer minor units, line-level half-up rounding, over-allocation rejection
+# — and it is left in the cost-efficient tier along with every other
+# service_method. Carving it out to Opus would pre-load the answer to the exact
+# question the study asks. The judge rubric scores money correctness explicitly,
+# so if Flash gets it wrong, the study reports that rather than hiding it.

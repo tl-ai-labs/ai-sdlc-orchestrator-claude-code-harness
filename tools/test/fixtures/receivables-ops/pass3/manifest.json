@@ -1,0 +1,13 @@
+{
+  "pass": "pass3",
+  "policy_name": "receivables-floor",
+  "started_at": "2026-08-16T07:57:19.032Z",
+  "ended_at": "2026-08-16T09:08:02.472Z",
+  "totals": {
+    "dispatched_cost_usd": 6.076299,
+    "events": 178,
+    "models_used": [
+      "gemini-3.7-flash"
+    ]
+  }
+}

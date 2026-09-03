@@ -5,11 +5,13 @@
  * driver-model-check tests do: the script imports this package's compiled
  * dist/, and this suite runs after `npm run build`.
  *
- * Every case spawns the real CLI against a synthetic transcript tree via
- * --transcripts-dir. Fixture timestamps are anchored to NOW at test runtime
- * (not hardcoded dates) because the collector prunes transcript files by
- * mtime lower bound — a fixture written today with a 2020 run window would
- * be pruned before its lines were ever read. Offline; temp dirs only.
+ * Every case spawns the real CLI against a transcript tree via
+ * --transcripts-dir. The synthetic cases anchor their timestamps to NOW at
+ * test runtime because the collector prunes transcript files by mtime lower
+ * bound — a fixture written today with a 2020 run window would be pruned
+ * before its lines were ever read. The real-run cases at the bottom use the
+ * fixed 2026-08-16 dates of the runs they were copied from and rely on the
+ * checkout's mtime being later than that. Offline; temp dirs only.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -138,8 +140,12 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
     // The single-rate assumption is surfaced, not silent.
     assert.match(r.stderr, /WARNING/);
     assert.match(r.stderr, /claude-haiku-4-5/);
-    // Estimator overlap surfaced from the dispatched event's provenance.
-    assert.match(r.stdout, /1 estimated direct-tier event\(s\) totaling \$0\.05/);
+    // The dispatched event ran inside the session (provenance "estimated"), so
+    // it is already inside the transcript overhead: subtracted once, said aloud.
+    assert.match(r.stdout, /in-session dispatch: 1 event\(s\) totaling \$0\.05/);
+    assert.match(r.stdout, /5m 400000 \/ 1h 0/);
+    // No receipt beside the manifest: transcript-priced, and the tool says so.
+    assert.match(r.stderr, /no receipt at/);
 
     const events = readTelemetry(fix);
     assert.equal(events.length, 2);
@@ -164,11 +170,21 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
       input_tokens: 1_500_000,
       input_tokens_cached: 2_000_000,
       input_tokens_cache_write: 400_000,
+      input_tokens_cache_write_1h: 0,
       output_tokens: 300_000,
       events: 1,
       provenance: "transcript",
+      pricing_basis: "the policy's derived driver model",
+      cost_source: "transcript",
+      transcript_cost_usd: 3.7,
+      receipt_cost_usd: null,
+      receipt_path: null,
+      dispatched_in_session_cost_usd: 0.05,
+      dispatched_in_session_events: 1,
     });
-    assert.equal(m.true_total_cost_usd, 3.75);
+    // true total = dispatched 0.05 − in-session 0.05 + overhead 3.70: the
+    // estimated packet is counted once, inside the overhead, not twice.
+    assert.equal(m.true_total_cost_usd, 3.7);
   } finally {
     rmSync(fix.root, { recursive: true, force: true });
   }
@@ -183,7 +199,7 @@ test("re-running replaces the prior orchestrator event — never accumulates", (
     const events = readTelemetry(fix);
     assert.equal(events.filter((e) => e.tier === "orchestrator").length, 1);
     assert.equal(events.length, 2);
-    assert.equal(readManifest(fix).true_total_cost_usd, 3.75);
+    assert.equal(readManifest(fix).true_total_cost_usd, 3.7);
   } finally {
     rmSync(fix.root, { recursive: true, force: true });
   }
@@ -399,4 +415,307 @@ test("a manifest carrying no dispatched cost is refused, never treated as $0", (
     assert.match(res.stderr, /dispatched cost/i);
     assert.match(res.stderr, /totals\.dispatched_cost_usd/, "names the key it looked for");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+// ── Real runs: three receivables-ops passes with Claude Code's own receipt ──
+// Fixtures: tools/test/fixtures/receivables-ops (see its README). Everything
+// below is cross-checked against what the CLI itself billed.
+const FIX = join(HERE, "..", "..", "..", "..", "tools", "test", "fixtures", "receivables-ops");
+const fixRun = (pass, policy, extra = []) =>
+  spawnSync(
+    process.execPath,
+    [SCRIPT, join(FIX, pass), "--project-root", FIX, "--policy-path", join(FIX, "policies", `${policy}.yaml`),
+      "--transcripts-dir", join(FIX, pass, "transcripts"), "--dry-run", ...extra],
+    { encoding: "utf-8", env: { ...process.env, MMO_SELECT: "" } }
+  );
+const receiptOf = (pass) => JSON.parse(readFileSync(join(FIX, pass, "claude-session.json"), "utf-8"));
+const telemetryOf = (pass) => readFileSync(join(FIX, pass, "telemetry.jsonl"), "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+const num = (re, text) => { const m = text.match(re); assert.ok(m, `no match for ${re} in:\n${text}`); return Number(m[1]); };
+
+test("pass1: 1-hour cache writes priced at 2x land the transcript within 6% of the receipt, above it, and in-session dispatch is subtracted once", () => {
+  const r = fixRun("pass1", "receivables-premium");
+  assert.equal(r.status, 0, r.stderr);
+  const receipt = receiptOf("pass1").total_cost_usd;
+  // Every cache write in this session was on the 1-hour tier.
+  assert.match(r.stdout, /cache_write 355943 \(5m 0 \/ 1h 355943\)/);
+  // The receipt's own dollars imply the 1-hour rate — the diagnostic that found the bug.
+  assert.match(r.stdout, /receipt implies a cache-write rate of \$10\.00\/M/);
+  const transcript = num(/receipt cross-check: transcript \$([0-9.]+)/, r.stdout);
+  assert.ok(transcript >= receipt, `transcript ${transcript} must not sit below the receipt ${receipt}`);
+  assert.ok(transcript <= receipt * 1.06, `transcript ${transcript} is more than 6% over the receipt ${receipt}`);
+  // 89 dispatched events were apportioned from the session's own total → inside the transcript.
+  const dispatched = 3.739405;
+  assert.match(r.stdout, /in-session dispatch: 89 event\(s\) totaling \$3\.739405/);
+  const trueTotal = num(/→ true total \$([0-9.]+)/, r.stdout);
+  assert.equal(trueTotal, transcript);
+  // Without the fix this run reported $3.74 for a session the CLI billed at $15.27.
+  assert.ok(trueTotal > 4 * dispatched);
+});
+
+test("pass3: a Gemini-only policy still prices the Opus session that drove it, from the receipt, and adds the out-of-session Gemini work once", () => {
+  const r = fixRun("pass3", "receivables-floor");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /prices no Claude model; receipt bills claude-opus-5/);
+  const receipt = receiptOf("pass3").total_cost_usd;
+  const events = telemetryOf("pass3");
+  const outside = events.filter((e) => e.provenance !== "apportioned_from_measured_total").reduce((s, e) => s + e.cost_usd, 0);
+  assert.ok(outside > 5, "the Gemini work (real Vertex calls) must stay in the total");
+  // The telemetry carries one apportioned Opus event added by a later repair,
+  // but the manifest's dispatched $6.08 names only gemini-3.7-flash — so no
+  // part of the dispatched figure is inside the session, nothing is subtracted.
+  assert.doesNotMatch(r.stdout, /in-session dispatch:/);
+  const trueTotal = num(/→ true total \$([0-9.]+)/, r.stdout);
+  const expected = Math.round((6.076299 + receipt) * 1e6) / 1e6;
+  assert.ok(Math.abs(trueTotal - expected) < 0.000002, `true total ${trueTotal} ≠ dispatched + receipt = ${expected}`);
+  // The dashboard's hand-corrected figure for this pass was $22.31.
+  assert.ok(trueTotal > 21.3 && trueTotal < 22.4, `true total ${trueTotal} is not in the corrected-dashboard range`);
+});
+
+test("pass2: a transcript tree missing a subagent file sits far below the receipt — refused with exit 3, nothing written", () => {
+  const r = fixRun("pass2", "receivables-hybrid");
+  assert.equal(r.status, 3, r.stdout + r.stderr);
+  assert.match(r.stderr, /BELOW the CLI's own receipt/);
+  assert.match(r.stderr, /subagent transcript not copied/);
+  assert.match(r.stdout, /receipt cross-check: transcript \$2\.6[0-9]+ vs receipt \$4\.76/);
+});
+
+test("no receipt: transcript-priced at the policy rate, and the tool asks for one", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-noreceipt-"));
+  try {
+    const passDir = join(root, "pass"); mkdirSync(passDir);
+    for (const f of ["manifest.json", "telemetry.jsonl"]) writeFileSync(join(passDir, f), readFileSync(join(FIX, "pass1", f)));
+    const r = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-premium.yaml"), "--transcripts-dir", join(FIX, "pass1", "transcripts"), "--dry-run"], { encoding: "utf-8", env: { ...process.env, MMO_SELECT: "" } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /no receipt at .*claude-session\.json/);
+    assert.match(r.stdout, /= \$16\.152465 \[transcript\]/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an explicit --receipt path that does not exist is an error, not a silent unverified run", () => {
+  const r = fixRun("pass1", "receivables-premium", ["--receipt", join(FIX, "pass1", "no-such-receipt.json")]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--receipt .*no-such-receipt\.json does not exist/);
+});
+
+test("receipt-only: no transcript in the window but a receipt beside the manifest — its dollars are used verbatim and said so", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-receipt-only-"));
+  try {
+    const passDir = join(root, "pass"); mkdirSync(passDir);
+    for (const f of ["manifest.json", "telemetry.jsonl", "claude-session.json"]) writeFileSync(join(passDir, f), readFileSync(join(FIX, "pass3", f)));
+    const empty = join(root, "empty"); mkdirSync(empty);
+    const r = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-floor.yaml"), "--transcripts-dir", empty, "--dry-run"], { encoding: "utf-8", env: { ...process.env, MMO_SELECT: "" } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /its \$16\.235409 is used verbatim/);
+    assert.match(r.stdout, /= \$16\.235409 \[receipt-only\]/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pricing: 1-hour cache writes bill at 2x input, 5-minute at 1.25x, disjoint and additive", async () => {
+  const pricing = await import(join(HERE, "..", "dist", "pricing.js"));
+  const card = { input: 4, input_cached: 0.4, output: 20 };
+  assert.equal(pricing.computeCostUsd({ input: 0, input_cached: 0, output: 0, input_cache_write: 1_000_000 }, card), 5);
+  assert.equal(pricing.computeCostUsd({ input: 0, input_cached: 0, output: 0, input_cache_write_1h: 1_000_000 }, card), 8);
+  assert.equal(pricing.computeCostUsd({ input: 0, input_cached: 0, output: 0, input_cache_write: 500_000, input_cache_write_1h: 500_000 }, card), 6.5);
+  // An explicit 1-hour rate on the policy wins over the multiplier.
+  assert.equal(pricing.computeCostUsd({ input: 0, input_cached: 0, output: 0, input_cache_write_1h: 1_000_000 }, { ...card, input_cache_write_1h: 7 }), 7);
+});
+
+
+test("headless recipe: the last result line of a stream-json live-run.log beside the manifest is picked up as the receipt", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-stream-"));
+  try {
+    const passDir = join(root, "pass"); mkdirSync(passDir);
+    for (const f of ["manifest.json", "telemetry.jsonl"]) writeFileSync(join(passDir, f), readFileSync(join(FIX, "pass3", f)));
+    const receipt = receiptOf("pass3");
+    const stream = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: receipt.session_id }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "working" }] } }),
+      JSON.stringify({ type: "result", subtype: "success", session_id: receipt.session_id, total_cost_usd: receipt.total_cost_usd, usage: receipt.usage, modelUsage: receipt.modelUsage, num_turns: receipt.num_turns }),
+    ].join("\n") + "\n";
+    writeFileSync(join(passDir, "live-run.log"), stream);
+    const r = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-floor.yaml"), "--transcripts-dir", join(FIX, "pass3", "transcripts"), "--dry-run"], { encoding: "utf-8", env: { ...process.env, MMO_SELECT: "" } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /receipt: .*live-run\.log → \$16\.235409/);
+    assert.match(r.stdout, /→ true total \$22\.311708/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+// ── Reviewer scenarios: unit pins on the exported helpers, then end-to-end ──
+import { pathToFileURL } from "node:url";
+const helpers = () => import(pathToFileURL(SCRIPT).href);
+const ENV = { ...process.env, MMO_SELECT: "" };
+
+test("inSessionDispatched: consistent telemetry subtracts exactly the in-session events; vendor calls stay", async () => {
+  const { inSessionDispatched } = await helpers();
+  const policy = { models: [{ id: "d", model_name: "claude-opus-5", adapter: "builtin-anthropic" }, { id: "g", model_name: "gemini-3.7-flash", adapter: "mcp:model-dispatch" }] };
+  const events = [{ model: "claude-opus-5", provenance: "estimated", cost_usd: 1 }, { model: "gemini-3.7-flash", provenance: "vendor", cost_usd: 2 }];
+  const r = inSessionDispatched(events, policy, { totals: { models_used: ["claude-opus-5", "gemini-3.7-flash"] } }, 3);
+  assert.deepEqual([r.cost, r.count, r.consistent, r.notes], [1, 1, true, []]);
+});
+
+test("inSessionDispatched: rewritten telemetry is bounded by dispatched minus the out-of-session events, and says so", async () => {
+  const { inSessionDispatched } = await helpers();
+  const policy = { models: [{ id: "d", model_name: "claude-opus-5", adapter: "builtin-anthropic" }, { id: "g", model_name: "gemini-3.7-flash", adapter: "mcp:model-dispatch" }] };
+  // Opus events re-apportioned to $15 after the run; Gemini's $2 of real Vertex calls untouched; dispatched was $3.
+  const events = [{ model: "claude-opus-5", provenance: "apportioned_from_measured_total", cost_usd: 15 }, { model: "gemini-3.7-flash", provenance: "vendor", cost_usd: 2 }];
+  const r = inSessionDispatched(events, policy, { totals: { models_used: ["claude-opus-5", "gemini-3.7-flash"] } }, 3);
+  assert.equal(r.cost, 1);
+  assert.equal(r.consistent, false);
+  assert.equal(r.notes.length, 1);
+  assert.match(r.notes[0], /rewritten after the run/);
+  // A model the manifest never dispatched contributes nothing, however the telemetry was rewritten.
+  const r2 = inSessionDispatched(events, policy, { totals: { models_used: ["gemini-3.7-flash"] } }, 3);
+  assert.equal(r2.cost, 0);
+  assert.equal(r2.count, 0);
+});
+
+test("inSessionDispatched: a claude-cli worker is inside only when its session was scanned; an API call on a model also listed as a claude-cli seat is never subtracted by name", async () => {
+  const { inSessionDispatched } = await helpers();
+  const policy = { models: [{ id: "d", model_name: "claude-opus-5", adapter: "builtin-anthropic" }, { id: "w", model_name: "claude-sonnet-5", adapter: "claude-cli" }, { id: "oc", model_name: "claude-opus-5", adapter: "claude-cli" }] };
+  const worker = [{ model: "claude-sonnet-5", provenance: "vendor", cost_usd: 6 }];
+  assert.equal(inSessionDispatched(worker, policy, {}, 6, { claudeCliScanned: true }).cost, 6);
+  assert.equal(inSessionDispatched(worker, policy, {}, 6, { claudeCliScanned: false }).cost, 0);
+  const ambiguous = [{ model: "claude-opus-5", provenance: "vendor", cost_usd: 1 }];
+  assert.equal(inSessionDispatched(ambiguous, policy, {}, 1).cost, 0, "same model on builtin-anthropic and claude-cli: the name alone cannot classify it");
+  assert.equal(inSessionDispatched([{ ...ambiguous[0], model_id: "oc" }], policy, {}, 1).cost, 1, "model_id names the claude-cli seat");
+  assert.equal(inSessionDispatched([{ ...ambiguous[0], model_id: "d" }], policy, {}, 1).cost, 0, "model_id names the API seat");
+});
+
+test("filesForSession: pins to the receipt's session when a file carries the id, falls back to everything otherwise", async () => {
+  const { filesForSession } = await helpers();
+  const files = ["/t/aaaa-1111.jsonl", "/t/bbbb-2222.jsonl", "/t/aaaa-1111/subagents/x.jsonl"];
+  assert.deepEqual(filesForSession(files, "aaaa-1111"), ["/t/aaaa-1111.jsonl", "/t/aaaa-1111/subagents/x.jsonl"]);
+  assert.deepEqual(filesForSession(files, "zzzz-9999"), files);
+  assert.deepEqual(filesForSession(files, null), files);
+});
+
+/** A small real-shaped run: policy, pass dir, transcript tree, optional receipt. */
+function mkRun({ policy, manifest, telemetry, transcripts, receipt }) {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-rev-"));
+  const passDir = join(root, "pass"); mkdirSync(passDir);
+  const tDir = join(root, "transcripts"); mkdirSync(tDir);
+  writeFileSync(join(root, "policy.yaml"), policy);
+  writeFileSync(join(passDir, "manifest.json"), JSON.stringify(manifest));
+  writeFileSync(join(passDir, "telemetry.jsonl"), telemetry.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  for (const [name, lines] of Object.entries(transcripts)) {
+    mkdirSync(dirname(join(tDir, name)), { recursive: true });
+    writeFileSync(join(tDir, name), lines.join("\n") + "\n");
+  }
+  if (receipt) writeFileSync(join(passDir, "claude-session.json"), JSON.stringify(receipt));
+  const run = (extra = []) => spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", tDir, "--dry-run", ...extra], { encoding: "utf-8", env: ENV });
+  return { root, passDir, run, rm: () => rmSync(root, { recursive: true, force: true }) };
+}
+const line = (id, model, out, ts, sessionId) => JSON.stringify({ type: "assistant", timestamp: ts, sessionId, message: { id, model, stop_reason: "end_turn", usage: { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: out } } });
+const CLI_POLICY = `
+version: 1
+name: rev-cli
+models:
+  - id: driver
+    adapter: builtin-anthropic
+    model_name: claude-opus-5
+    pricing: { input: 1, input_cached: 0.1, output: 5 }
+  - id: worker
+    adapter: claude-cli
+    model_name: claude-sonnet-5
+    pricing: { input: 1, input_cached: 0.1, output: 5 }
+rules:
+  - when: { phase: codegen }
+    use: worker
+  - default: driver
+`;
+
+test("a claude-cli worker's dollars stay in the total when the scan is pinned to the driver's receipt session; without a receipt its swept-in session is subtracted once", () => {
+  const T0 = "2026-08-16T10:00:00.000Z", T1 = "2026-08-16T10:05:00.000Z", T2 = "2026-08-16T10:10:00.000Z";
+  const base = {
+    policy: CLI_POLICY,
+    manifest: { pass: "p", policy_name: "rev-cli", started_at: T0, ended_at: T2, totals: { dispatched_cost_usd: 6, models_used: ["claude-sonnet-5"] } },
+    telemetry: [{ ts: T1, model: "claude-sonnet-5", model_id: "worker", provenance: "vendor", cost_usd: 6, phase: "codegen" }],
+    transcripts: { "aaaa-1111.jsonl": [line("m1", "claude-opus-5", 2_000_000, T1, "aaaa-1111")], "bbbb-2222.jsonl": [line("m2", "claude-sonnet-5", 2_000_000, T1, "bbbb-2222")] },
+  };
+  const withReceipt = mkRun({ ...base, receipt: { session_id: "aaaa-1111", total_cost_usd: 10, modelUsage: { "claude-opus-5": { outputTokens: 2_000_000, costUSD: 10 } } } });
+  const without = mkRun(base);
+  try {
+    const r = withReceipt.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /scanned 1 file\(s\)/);
+    assert.doesNotMatch(r.stdout, /in-session dispatch:/);
+    assert.match(r.stdout, /→ true total \$16\b/);
+    const r2 = without.run();
+    assert.equal(r2.status, 0, r2.stderr);
+    assert.match(r2.stdout, /scanned 2 file\(s\)/);
+    assert.match(r2.stdout, /in-session dispatch: 1 event\(s\) totaling \$6/);
+    assert.match(r2.stdout, /→ true total \$20\b/);
+  } finally { withReceipt.rm(); without.rm(); }
+});
+
+test("a session that keeps running past ended_at is fully counted when the scan is pinned to its receipt; another session's file is left out", () => {
+  const T0 = "2026-08-16T10:00:00.000Z", T1 = "2026-08-16T10:05:00.000Z", TEND = "2026-08-16T10:10:00.000Z", LATE = "2026-08-16T10:30:00.000Z";
+  const policy = CLI_POLICY;
+  const manifest = { pass: "p", policy_name: "rev-cli", started_at: T0, ended_at: TEND, totals: { dispatched_cost_usd: 0, models_used: [] } };
+  const transcripts = { "aaaa-1111.jsonl": [line("m1", "claude-opus-5", 1_000_000, T1, "aaaa-1111"), line("m2", "claude-opus-5", 1_000_000, LATE, "aaaa-1111")], "other.jsonl": [line("m3", "claude-opus-5", 1_000_000, T1, "cccc-3333")] };
+  const pinned = mkRun({ policy, manifest, telemetry: [], transcripts, receipt: { session_id: "aaaa-1111", total_cost_usd: 10, modelUsage: { "claude-opus-5": { outputTokens: 2_000_000, costUSD: 10 } } } });
+  const loose = mkRun({ policy, manifest, telemetry: [], transcripts });
+  try {
+    const r = pinned.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /scan pinned to session aaaa-1111; no upper time bound/);
+    assert.match(r.stdout, /counted 2 unique API message\(s\)/);
+    assert.match(r.stdout, /receipt cross-check: transcript \$10 vs receipt \$10 → \+0\.0%/);
+    const r2 = loose.run();
+    assert.equal(r2.status, 0, r2.stderr);
+    assert.match(r2.stdout, /1 outside window/);
+    assert.match(r2.stdout, /counted 2 unique API message\(s\)/); // m1 + the other session's m3
+  } finally { pinned.rm(); loose.rm(); }
+});
+
+test("pass2 in receipt-only mode: the Gemini vendor spend survives the in-session subtraction (bounded by dispatched minus out-of-session events)", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-pass2ro-"));
+  try {
+    const passDir = join(root, "pass"); mkdirSync(passDir);
+    for (const f of ["manifest.json", "telemetry.jsonl", "claude-session.json"]) writeFileSync(join(passDir, f), readFileSync(join(FIX, "pass2", f)));
+    const empty = join(root, "empty"); mkdirSync(empty);
+    const r = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-hybrid.yaml"), "--transcripts-dir", empty, "--dry-run"], { encoding: "utf-8", env: ENV });
+    assert.equal(r.status, 0, r.stderr);
+    const gemini = telemetryOf("pass2").filter((e) => e.model === "gemini-3.7-flash").reduce((s, e) => s + e.cost_usd, 0);
+    const trueTotal = num(/→ true total \$([0-9.]+)/, r.stdout);
+    const receipt = receiptOf("pass2").total_cost_usd;
+    assert.ok(trueTotal >= receipt + gemini - 0.000002, `true total ${trueTotal} lost Gemini's $${gemini.toFixed(4)} (receipt ${receipt})`);
+    assert.match(r.stderr, /rewritten after the run/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a Gemini-only policy with a two-model receipt still takes the receipt branch", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-twomodel-"));
+  try {
+    const passDir = join(root, "pass"); mkdirSync(passDir);
+    for (const f of ["manifest.json", "telemetry.jsonl"]) writeFileSync(join(passDir, f), readFileSync(join(FIX, "pass3", f)));
+    const receipt = receiptOf("pass3");
+    receipt.modelUsage["claude-haiku-4-5"] = { inputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 100, costUSD: 0.01 };
+    receipt.total_cost_usd = receipt.total_cost_usd + 0.01;
+    writeFileSync(join(passDir, "claude-session.json"), JSON.stringify(receipt));
+    const r = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-floor.yaml"), "--transcripts-dir", join(FIX, "pass3", "transcripts"), "--dry-run"], { encoding: "utf-8", env: ENV });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /receipt bills claude-opus-5 \+ claude-haiku-4-5/);
+    assert.match(r.stdout, /= \$16\.245409 \[receipt \(no policy rate to cross-check against\)\]/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a stream capture without a result line is refused as a receipt", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-nostream-"));
+  try {
+    const passDir = join(root, "pass"); mkdirSync(passDir);
+    for (const f of ["manifest.json", "telemetry.jsonl"]) writeFileSync(join(passDir, f), readFileSync(join(FIX, "pass3", f)));
+    writeFileSync(join(passDir, "live-run.log"), JSON.stringify({ type: "system", subtype: "init" }) + "\n" + JSON.stringify({ type: "assistant", message: {} }) + "\n");
+    const r = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-floor.yaml"), "--transcripts-dir", join(FIX, "pass3", "transcripts"), "--dry-run"], { encoding: "utf-8", env: ENV });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /neither a JSON object nor a stream-json capture/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
