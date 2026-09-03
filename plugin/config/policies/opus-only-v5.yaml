@@ -8,7 +8,9 @@ models:
   - id: opus
     adapter: builtin-anthropic
     model_name: claude-opus-5
-    # TODO(pricing): confirm Opus 5 list rates from platform.claude.com/docs
+    # Opus 5 list card: input 5.00 / cached 0.50 / output 25.00 per 1M; cache writes 1.25x (5m) or 2x (1h)
+    # of input. Confirmed 2026-09-03 against Claude Code's own session receipts (two real runs,
+    # reproduced to the cent; see tools/test/fixtures/receivables-ops).
     # before shipping. Values below carried over from opus-only.yaml (Opus 4.7)
     # as a conservative placeholder.
     pricing:
