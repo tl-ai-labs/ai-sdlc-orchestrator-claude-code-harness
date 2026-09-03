@@ -21,9 +21,10 @@ models:
   - id: sonnet
     adapter: builtin-anthropic
     model_name: claude-sonnet-5
-    # TODO(pricing): confirm Sonnet 5 list rates from platform.claude.com/docs
-    # before shipping. Values below are plausible Sonnet-tier placeholders —
-    # historically Sonnet has been ~$3 / $15 per 1M input / output tokens.
+    # Sonnet 5 list card: input 3.00 / cached 0.30 / output 15.00 per 1M; cache writes 1.25x (5m)
+    # or 2x (1h) of input. Confirmed 2026-08-24 in the SWE-bench Pro v2 harness (reprice-export.mjs,
+    # incident "repair B"): a stale CLI billed Opus sessions at exactly this card, every component
+    # 0.6x of Opus, reproduced from 680 token ledgers to the cent.
     pricing: { input: 3.00, input_cached: 0.30, output: 15.00 }
     pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
     pricing_last_verified: 2026-08-19
