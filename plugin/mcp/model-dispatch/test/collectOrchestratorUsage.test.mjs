@@ -708,14 +708,19 @@ test("a Gemini-only policy with a two-model receipt still takes the receipt bran
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a stream capture without a result line is refused as a receipt", () => {
+test("a headless capture with no result line yet is 'not final': transcript-priced, marked unverified, exit 0; as an explicit --receipt it is an error", () => {
   const root = mkdtempSync(join(tmpdir(), "mmo-collect-nostream-"));
   try {
     const passDir = join(root, "pass"); mkdirSync(passDir);
-    for (const f of ["manifest.json", "telemetry.jsonl"]) writeFileSync(join(passDir, f), readFileSync(join(FIX, "pass3", f)));
+    for (const f of ["manifest.json", "telemetry.jsonl"]) writeFileSync(join(passDir, f), readFileSync(join(FIX, "pass1", f)));
     writeFileSync(join(passDir, "live-run.log"), JSON.stringify({ type: "system", subtype: "init" }) + "\n" + JSON.stringify({ type: "assistant", message: {} }) + "\n");
-    const r = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-floor.yaml"), "--transcripts-dir", join(FIX, "pass3", "transcripts"), "--dry-run"], { encoding: "utf-8", env: ENV });
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /neither a JSON object nor a stream-json capture/);
+    const args = [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-premium.yaml"), "--transcripts-dir", join(FIX, "pass1", "transcripts"), "--dry-run"];
+    const r = spawnSync(process.execPath, args, { encoding: "utf-8", env: ENV });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /has no "result" line yet .* UNVERIFIED/);
+    assert.match(r.stdout, /= \$16\.152465 \[transcript\]/);
+    const r2 = spawnSync(process.execPath, [...args, "--receipt", join(passDir, "live-run.log")], { encoding: "utf-8", env: ENV });
+    assert.equal(r2.status, 1);
+    assert.match(r2.stderr, /neither a JSON object nor a stream-json capture/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

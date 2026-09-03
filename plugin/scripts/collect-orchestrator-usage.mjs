@@ -86,7 +86,10 @@
  *      verbatim ("receipt-only"). When the receipt names a session id and a
  *      file carries it, the scan is pinned to that session with no upper
  *      time bound — the invocation the receipt bills keeps running after
- *      `ended_at`. Both numbers are always printed.
+ *      `ended_at`. Both numbers are always printed. At run-end a headless
+ *      live-run.log has no result line yet (the CLI writes it on exit): the
+ *      figure is written transcript-priced and marked unverified, and a
+ *      re-run after the session exits verifies it. Re-running is idempotent.
  *   9. IN-SESSION DISPATCH: packets the session executed itself (provenance
  *      `estimated` or `apportioned_from_measured_total`), and a `claude-cli`
  *      worker whose own `claude -p` session was swept into a transcript-priced
@@ -358,7 +361,14 @@ export function readReceipt(path, { required = false } = {}) {
     // receipt; take the LAST one, so a resumed/continued session reports its
     // final accounting.
     const results = text.split("\n").filter((l) => l.includes('"result"')).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((o) => o && o.type === "result");
-    if (results.length === 0) throw new Error(`receipt ${path} is neither a JSON object nor a stream-json capture with a "type":"result" line`);
+    if (results.length === 0) {
+      // A stream capture with no result line is a session still running —
+      // exactly what the run-end step sees, because the CLI prints the
+      // result event only when the process exits. An auto-discovered one is
+      // "not final yet"; an explicit --receipt that is not a receipt is an error.
+      if (required) throw new Error(`receipt ${path} is neither a JSON object nor a stream-json capture with a "type":"result" line`);
+      return { pending: true, path };
+    }
     raw = results[results.length - 1];
   }
   const r = raw?.result && typeof raw.result === "object" && raw.result.modelUsage ? raw.result : raw;
@@ -509,7 +519,17 @@ export async function main(argv = process.argv.slice(2)) {
     ? [resolve(args.receipt)]
     : [join(passDir, "claude-session.json"), join(passDir, "live-run.log")];
   const receiptPath = receiptCandidates.find((c) => existsSync(c)) ?? receiptCandidates[0];
-  const receipt = readReceipt(receiptPath, { required: Boolean(args.receipt) });
+  let receipt = readReceipt(receiptPath, { required: Boolean(args.receipt) });
+  let receiptPending = false;
+  if (receipt?.pending) {
+    receiptPending = true;
+    receipt = null;
+    console.error(
+      `NOTE: ${receiptPath} has no "result" line yet — the session that writes it is still running (the CLI ` +
+        `prints its receipt when the process exits). The figure below is transcript-priced and UNVERIFIED. ` +
+        `Re-run this collector once the session has exited to verify it against the receipt; re-running is safe.`
+    );
+  }
 
   // The declared window runs to ended_at + slack, which is in the future when
   // the run-end step invokes this. Reading it as-is silently reports a partial
@@ -728,10 +748,13 @@ export async function main(argv = process.argv.slice(2)) {
   } else {
     cost = transcriptCost;
     costSource = "transcript";
-    console.error(
-      `NOTE: no receipt at ${receiptPath} — dollars are transcript-priced at ${pricingBasis}. ` +
-        `Keep the run's \`claude -p --output-format json\` result (or pass --receipt) and this tool will verify itself against it.`
-    );
+    if (!receiptPending) {
+      console.error(
+        `NOTE: no receipt at ${receiptPath} — dollars are transcript-priced at ${pricingBasis} and UNVERIFIED. ` +
+          `Keep the run's \`claude -p --output-format json\` result (or the headless live-run.log; or pass --receipt) ` +
+          `and this tool will verify itself against it.`
+      );
+    }
   }
 
   // ── Dispatched total, minus what already sits inside the transcript ─────

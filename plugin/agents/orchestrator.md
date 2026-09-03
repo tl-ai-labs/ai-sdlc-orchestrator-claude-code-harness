@@ -304,10 +304,11 @@ the logger drops missing fields rather than printing them empty.
    figure by ~100×. The collector reconstructs it from the session transcripts and patches the pass:
    ```
    node "${CLAUDE_PLUGIN_ROOT}/scripts/collect-orchestrator-usage.mjs" <pass-dir> --project-root "$(pwd)"
-   (If the run was captured headlessly to <pass-dir>/live-run.log, or a runner kept
-   <pass-dir>/claude-session.json, the collector reads Claude Code's own receipt from it
-   and verifies the transcript figure against it; exit 3 means the two disagree and
-   nothing was written — report that, do not guess a number.)
+   (If a runner kept <pass-dir>/claude-session.json, the collector verifies the transcript
+   figure against Claude Code's own receipt; exit 3 means the two disagree and nothing was
+   written — report that, do not guess a number. A headless <pass-dir>/live-run.log has no
+   receipt line until the session exits, so at this step the figure is transcript-priced and
+   marked UNVERIFIED; the operator re-runs the collector after exit to verify it.)
    ```
    Run it in every auth mode (vendor and estimated alike). **Fail-open**: if it exits non-zero (for
    example, no transcripts found where it looked), say so in the final report and present the cost as
