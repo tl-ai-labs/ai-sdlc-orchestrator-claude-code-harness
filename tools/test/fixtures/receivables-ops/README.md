@@ -29,4 +29,4 @@ The fixtures live here, beside the repo-level test corpus, rather than inside `p
 | pass2 | receivables-hybrid | NEGATIVE: the committed transcript is missing a subagent file — the receipt cross-check must fail loudly |
 | pass3 | receivables-floor (Gemini-only policy, Opus driver) | the policy cannot yield a Claude driver model; the receipt prices the session anyway |
 
-Policies are copied with `gemini-thinking` renamed to `mcp:gemini-flash-server`, an adapter this plugin knows.
+Policies are copied with the orchestrator repo's `gemini-thinking` adapter renamed to `antigravity-worker`, an adapter this plugin knows (the worker adapter is irrelevant to what these fixtures test).

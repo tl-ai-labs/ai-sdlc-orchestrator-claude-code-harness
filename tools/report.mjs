@@ -168,6 +168,14 @@ const hasOverhead = orchCost != null;
 // manifests patched by the earlier collector, whose true total added both.
 const inSessionSubtracted = manifest.orchestrator_overhead?.dispatched_in_session_cost_usd ?? null;
 const trueTotalLabel = inSessionSubtracted != null ? "True total (dispatched − in-session + orchestrator)" : "True total (dispatched + orchestrator)";
+// Whether the overhead figure was checked against Claude Code's own receipt.
+const receiptCost = manifest.orchestrator_overhead?.receipt_cost_usd ?? null;
+const costSource = manifest.orchestrator_overhead?.cost_source ?? null;
+const verifiedLine = costSource == null
+  ? null
+  : receiptCost != null
+    ? `Verified against Claude Code's own receipt ($${receiptCost.toFixed(4)}; ${costSource})`
+    : "UNVERIFIED — no receipt was found beside the manifest (transcript-priced); re-run the collector after a headless session exits, or keep its claude -p result";
 const trueTotal = manifest.true_total_cost_usd ?? (hasOverhead ? sessionCost + orchCost : null);
 const collectorCmd = `node plugin/scripts/collect-orchestrator-usage.mjs ${passDir}`;
 
@@ -480,6 +488,7 @@ if (asMarkdown) {
       console.log(`| In-session dispatch, subtracted once | −${fmtUSD(inSessionSubtracted)} |`);
     }
     console.log(`| **${trueTotalLabel}** | **${fmtUSD(trueTotal)}** |\n`);
+    if (verifiedLine) console.log(`_${verifiedLine}._\n`);
     console.log(`_${totalNote}. The overhead line is the run's own loop, reconstructed from session transcripts by collect-orchestrator-usage.mjs; only the true total compares architectures fairly._\n`);
     if (inSessionSubtracted == null && (runMode === "estimated" || runMode === "mixed")) {
       console.log(`_Estimator overlap: this run's estimated direct-tier events describe in-session work the transcript-measured overhead also contains, so the true total is conservative (double-counts up to ${fmtUSD(estimatedCost)})._\n`);
@@ -506,6 +515,7 @@ if (asMarkdown) {
     }
     console.log(`  ${"─".repeat(24 + 6 + 7 + 22 + 11)}`);
     console.log(`  ${trueTotalLabel.padEnd(59)}${fmtUSD(trueTotal).padStart(11)}`);
+    if (verifiedLine) console.log(`    ${verifiedLine}.`);
     console.log(`  ${modeHint === totalNote ? "" : "  " + totalNote}`);
     console.log(`    The overhead line is the run's own loop, reconstructed from session`);
     console.log(`    transcripts by collect-orchestrator-usage.mjs; only the true total`);

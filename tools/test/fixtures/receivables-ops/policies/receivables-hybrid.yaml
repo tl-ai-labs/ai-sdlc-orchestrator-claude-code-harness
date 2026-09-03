@@ -14,7 +14,7 @@ models:
     pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
     auth: { env: ANTHROPIC_API_KEY }
   - id: flash37
-    adapter: mcp:gemini-flash-server
+    adapter: antigravity-worker
     model_name: gemini-3.7-flash
     display_name: gemini-3.7-flash
     backend: vertex          # Vertex AI via ADC — no API key
