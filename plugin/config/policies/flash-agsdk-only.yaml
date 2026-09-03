@@ -15,11 +15,13 @@ models:
     adapter: antigravity-worker
     model_name: gemini-3.7-flash
     display_name: gemini-3.7-flash (Antigravity agent)
-    # TODO(pricing): confirm Gemini 3.7 Flash rates. Values below carried over
+    # Gemini 3.7 Flash introductory rate card, in force 13 Aug 2026 – 31 Dec 2026 (reverts to
+    # $1.50 / $7.50 on 1 Jan 2027). Same pin as the SWE-bench Pro v2 harness and the
+    # orchestrator repo's receivables policies; confirmed 2026-09-03.
     # from gemini-3.5-flash as a placeholder. Vertex adds +10% on REGIONAL
     # endpoints; the geminiTransports.ts::applyVertexSurcharge applies it at
     # dispatch — do not hand-edit x1.10 in.
-    pricing: { input: 1.50, input_cached: 0.15, output: 9.00 }
+    pricing: { input: 0.75, input_cached: 0.075, output: 3.75 }
     pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
     pricing_last_verified: 2026-08-19
     # `region:` unpinned so this leaf follows GOOGLE_CLOUD_LOCATION and hits
