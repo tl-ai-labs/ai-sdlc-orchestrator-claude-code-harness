@@ -75,11 +75,29 @@ export interface Manifest {
     input_tokens: number;
     input_tokens_cached: number;
     input_tokens_cache_write: number;
+    /** 1-hour-TTL share of input_tokens_cache_write (2x input); absent before the tier split. */
+    input_tokens_cache_write_1h?: number;
     output_tokens: number;
     events: number;
     provenance: "transcript";
+    /** Which model's rate priced the overhead, in words. */
+    pricing_basis?: string;
+    /** "transcript", "transcript (receipt-verified, +x%)", "receipt-only", … */
+    cost_source?: string;
+    /** The transcript-priced figure, kept beside cost_usd when a receipt supplied or verified it. */
+    transcript_cost_usd?: number | null;
+    /** Claude Code's own end-of-session total for the driver session, when a receipt was found. */
+    receipt_cost_usd?: number | null;
+    receipt_path?: string | null;
+    /** Dispatched dollars that ran inside the session and were subtracted once from true_total_cost_usd. */
+    dispatched_in_session_cost_usd?: number;
+    dispatched_in_session_events?: number;
   };
-  /** total_cost_usd + orchestrator_overhead.cost_usd. Present only alongside the block. */
+  /**
+   * total_cost_usd − orchestrator_overhead.dispatched_in_session_cost_usd +
+   * orchestrator_overhead.cost_usd. Present only alongside the block. Before
+   * the in-session field existed it was the plain sum.
+   */
   true_total_cost_usd?: number;
   model_breakdown: Record<string, { calls: number; cost_usd: number; input_tokens: number; output_tokens: number }>;
   /** Older manifests without token fields still load; dashboard falls back. */

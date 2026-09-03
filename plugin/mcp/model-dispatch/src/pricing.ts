@@ -7,8 +7,26 @@ import type { ModelPricing } from "./types.js";
  */
 export const CACHE_WRITE_PREMIUM = 1.25;
 
+/**
+ * The 1-hour TTL cache write bills at 2x fresh input. Claude Code sessions
+ * that run long enough use it exclusively (`usage.cache_creation.
+ * ephemeral_1h_input_tokens`), so pricing every write at the 5-minute
+ * premium under-bills them by 37.5% of the write line — measured 6% of a
+ * real 32-minute orchestrator session against the CLI's own receipt.
+ */
+export const CACHE_WRITE_PREMIUM_1H = 2.0;
+
 export function computeCostUsd(
-  tokens: { input: number; input_cached: number; output: number; input_cache_write?: number },
+  tokens: {
+    input: number;
+    input_cached: number;
+    output: number;
+    /** 5-minute-TTL cache writes (or the undifferentiated total, when the
+     *  caller has no TTL split — priced at the 5-minute premium, as before). */
+    input_cache_write?: number;
+    /** 1-hour-TTL cache writes. DISJOINT from `input_cache_write`. */
+    input_cache_write_1h?: number;
+  },
   pricing: ModelPricing
 ): number {
   // `tokens.input` is the FRESH-priced count; `tokens.input_cached` is the
@@ -22,12 +40,14 @@ export function computeCostUsd(
   // priced them at the FRESH rate — a systematic ~20% undercount on the
   // written tokens. The explicit per-model rate wins when declared;
   // otherwise fresh-rate × CACHE_WRITE_PREMIUM matches Anthropic's billing.
-  const cacheWriteRate  = pricing.input_cache_write ?? pricing.input * CACHE_WRITE_PREMIUM;
-  const inputFreshCost  = (tokens.input                  / 1_000_000) * pricing.input;
-  const inputCachedCost = (tokens.input_cached           / 1_000_000) * pricing.input_cached;
-  const cacheWriteCost  = ((tokens.input_cache_write ?? 0) / 1_000_000) * cacheWriteRate;
-  const outputCost      = (tokens.output                 / 1_000_000) * pricing.output;
-  return round6(inputFreshCost + inputCachedCost + cacheWriteCost + outputCost);
+  const cacheWriteRate   = pricing.input_cache_write ?? pricing.input * CACHE_WRITE_PREMIUM;
+  const cacheWrite1hRate = pricing.input_cache_write_1h ?? pricing.input * CACHE_WRITE_PREMIUM_1H;
+  const inputFreshCost   = (tokens.input                     / 1_000_000) * pricing.input;
+  const inputCachedCost  = (tokens.input_cached              / 1_000_000) * pricing.input_cached;
+  const cacheWriteCost   = ((tokens.input_cache_write ?? 0)    / 1_000_000) * cacheWriteRate;
+  const cacheWrite1hCost = ((tokens.input_cache_write_1h ?? 0) / 1_000_000) * cacheWrite1hRate;
+  const outputCost       = (tokens.output                    / 1_000_000) * pricing.output;
+  return round6(inputFreshCost + inputCachedCost + cacheWriteCost + cacheWrite1hCost + outputCost);
 }
 
 export function round6(n: number): number {

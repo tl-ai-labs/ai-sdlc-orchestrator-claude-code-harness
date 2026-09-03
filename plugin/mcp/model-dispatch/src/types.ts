@@ -144,6 +144,8 @@ export interface AttemptRecord {
     output_reasoning?: number;
     /** Prompt-cache-write count, disjoint from `input`. Anthropic adapters only. */
     input_cache_write?: number;
+    /** 1-hour-TTL prompt-cache-write count, disjoint from `input_cache_write` (5-minute). */
+    input_cache_write_1h?: number;
   };
   cost_usd: number;
   latency_ms: number;
@@ -161,6 +163,8 @@ export interface ModelPricing {
    * `input × CACHE_WRITE_PREMIUM` (1.25, Anthropic's 5-min-TTL premium).
    */
   input_cache_write?: number;
+  /** Optional explicit 1-hour-TTL cache-write rate; defaults to input x 2.0. */
+  input_cache_write_1h?: number;
 }
 
 /**
@@ -267,6 +271,8 @@ export interface ExecutionResult {
     output_reasoning?: number;
     /** Prompt-cache-write count, disjoint from `input`. Anthropic adapters only. */
     input_cache_write?: number;
+    /** 1-hour-TTL prompt-cache-write count, disjoint from `input_cache_write` (5-minute). */
+    input_cache_write_1h?: number;
   };
   cost_usd: number;
   latency_ms: number;

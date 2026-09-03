@@ -1,0 +1,37 @@
+# Receivables Ops · Pass 3 — every phase on Gemini 3.7 Flash.
+# The cost floor: how cheap the same software gets with no premium tier at all,
+# and what that costs in rework. Run to measure the risk, not to assume it away.
+
+version: 1
+name: receivables-floor
+
+models:
+  - id: flash37
+    adapter: mcp:gemini-flash-server
+    model_name: gemini-3.7-flash
+    display_name: gemini-3.7-flash
+    # Vertex AI via Application Default Credentials — no API key. `global` is
+    # deliberate: recent Flash point-releases ship there first and 404 in
+    # regional endpoints (3.6 did at GA), which is why the shootout runner pins
+    # 3.7 to global too.
+    backend: vertex
+    location: global
+    reasoning: { tier: high }
+    # Introductory rate card, in force from the 13 Aug 2026 release through
+    # 31 Dec 2026; reverts to $1.50 / $7.50 on 1 Jan 2027. input_cached is 0
+    # because nothing in this pass primes a cache, so the field multiplies zero
+    # — a guessed rate here would be a number that never gets exercised.
+    pricing: { input: 0.75, input_cached: 0, output: 3.75 }
+    pricing_source: https://cloud.google.com/vertex-ai/generative-ai/pricing
+
+rules:
+  - default: flash37
+    reason: "Pass 3 — single-model, cost-efficient tier across every phase"
+
+# ─────────────────────────────────────────────────────────────
+# Why this policy is shaped the way it is
+# Receivables Ops · Pass 3 — every phase runs on Gemini 3.7 Flash.
+# The cost floor: how cheap does the same software get with no premium tier at
+# all? Quality risk is real on the judgment-heavy phases (architecture, security
+# review) and on this brief's money arithmetic in particular — the pass exists
+# to *measure* that risk against the baselines, not to assume it away.

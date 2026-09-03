@@ -1,0 +1,14 @@
+{
+  "pass": "pass2",
+  "policy_name": "receivables-hybrid",
+  "started_at": "2026-08-16T06:53:32.420Z",
+  "ended_at": "2026-08-16T07:56:44.943Z",
+  "totals": {
+    "dispatched_cost_usd": 3.881876,
+    "events": 109,
+    "models_used": [
+      "claude-opus-5",
+      "gemini-3.7-flash"
+    ]
+  }
+}

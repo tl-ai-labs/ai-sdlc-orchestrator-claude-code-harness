@@ -242,7 +242,7 @@ Then, **after** the manifest is on disk, run the orchestrator-overhead collector
 node "${CLAUDE_PLUGIN_ROOT}/scripts/collect-orchestrator-usage.mjs" <output_dir> --project-root "$(pwd)"
 ```
 
-On success it appends one `tier: "orchestrator"` event and patches the manifest with `orchestrator_overhead` + `true_total_cost_usd`; quote the **true total** in SUMMARY.md and label the dispatched figure as such. On failure (non-zero exit), do not block the run: label every cost in SUMMARY.md *dispatched work only — excludes orchestrator overhead* and note the collector command. Never blend the two figures.
+On success it appends one `tier: "orchestrator"` event and patches the manifest with `orchestrator_overhead` + `true_total_cost_usd`; quote the **true total** in SUMMARY.md and label the dispatched figure as such. On failure (non-zero exit), do not block the run: label every cost in SUMMARY.md *dispatched work only — excludes orchestrator overhead* and note the collector command. Never blend the two figures. Keep the run's `claude -p --output-format json` result beside the manifest as `claude-session.json` when you have it: the collector checks itself against it and exits 3 (nothing written) if the transcript tree is missing billed messages.
 
 ---
 

@@ -163,6 +163,11 @@ const orchCost =
     ? orchEvents.reduce((s, e) => s + (e.cost_usd ?? 0), 0)
     : null);
 const hasOverhead = orchCost != null;
+// Written by the collector since the receipt/in-session fix: the dispatched
+// dollars that ran inside the session and were subtracted once. Absent on
+// manifests patched by the earlier collector, whose true total added both.
+const inSessionSubtracted = manifest.orchestrator_overhead?.dispatched_in_session_cost_usd ?? null;
+const trueTotalLabel = inSessionSubtracted != null ? "True total (dispatched − in-session + orchestrator)" : "True total (dispatched + orchestrator)";
 const trueTotal = manifest.true_total_cost_usd ?? (hasOverhead ? sessionCost + orchCost : null);
 const collectorCmd = `node plugin/scripts/collect-orchestrator-usage.mjs ${passDir}`;
 
@@ -471,9 +476,12 @@ if (asMarkdown) {
   if (hasOverhead) {
     console.log(`| ${totalLabel} — dispatched work only | ${fmtUSD(sessionCost)} |`);
     console.log(`| Orchestrator overhead (transcript-measured) | ${fmtUSD(orchCost)} |`);
-    console.log(`| **True total (dispatched + orchestrator)** | **${fmtUSD(trueTotal)}** |\n`);
+    if (inSessionSubtracted != null && inSessionSubtracted > 0) {
+      console.log(`| In-session dispatch, subtracted once | −${fmtUSD(inSessionSubtracted)} |`);
+    }
+    console.log(`| **${trueTotalLabel}** | **${fmtUSD(trueTotal)}** |\n`);
     console.log(`_${totalNote}. The overhead line is the run's own loop, reconstructed from session transcripts by collect-orchestrator-usage.mjs; only the true total compares architectures fairly._\n`);
-    if (runMode === "estimated" || runMode === "mixed") {
+    if (inSessionSubtracted == null && (runMode === "estimated" || runMode === "mixed")) {
       console.log(`_Estimator overlap: this run's estimated direct-tier events describe in-session work the transcript-measured overhead also contains, so the true total is conservative (double-counts up to ${fmtUSD(estimatedCost)})._\n`);
     }
   } else {
@@ -493,8 +501,11 @@ if (asMarkdown) {
   if (hasOverhead) {
     console.log(`  ${`${totalLabel} — dispatched work only`.padEnd(59)}${fmtUSD(sessionCost).padStart(11)}`);
     console.log(`  ${"Orchestrator overhead (transcript-measured)".padEnd(59)}${fmtUSD(orchCost).padStart(11)}`);
+    if (inSessionSubtracted != null && inSessionSubtracted > 0) {
+      console.log(`  ${"In-session dispatch, subtracted once".padEnd(59)}${("−" + fmtUSD(inSessionSubtracted)).padStart(11)}`);
+    }
     console.log(`  ${"─".repeat(24 + 6 + 7 + 22 + 11)}`);
-    console.log(`  ${"True total (dispatched + orchestrator)".padEnd(59)}${fmtUSD(trueTotal).padStart(11)}`);
+    console.log(`  ${trueTotalLabel.padEnd(59)}${fmtUSD(trueTotal).padStart(11)}`);
     console.log(`  ${modeHint === totalNote ? "" : "  " + totalNote}`);
     console.log(`    The overhead line is the run's own loop, reconstructed from session`);
     console.log(`    transcripts by collect-orchestrator-usage.mjs; only the true total`);
