@@ -7,6 +7,9 @@
  * pricing, and telemetry never see a slot name.
  */
 
+// The what-if replay prices through the live path's own function so the two
+// can never disagree on the same token buckets.
+import { computeCostUsd } from "./pricing.js";
 import type {
   Policy,
   Rule,
@@ -207,10 +210,21 @@ export interface ReplayEvent {
   task_type: string;
   module: string;
   retry_count: number;
+  /**
+   * FRESH input count — the same bucket a TelemetryEvent stores. Cache reads
+   * and cache writes are NOT inside it: every adapter splits them before
+   * server.ts writes the event, so a reader must never subtract them again.
+   */
   input_tokens: number;
   input_tokens_cached: number;
   /** Cache-write count, disjoint from input_tokens. Absent on events written before the bucket existed. */
   input_tokens_cache_write?: number;
+  /**
+   * 1-hour-TTL cache-write count, disjoint from `input_tokens_cache_write`
+   * (5-minute). Today only the collector's `tier: "orchestrator"` event
+   * carries it; dispatched events leave it undefined and price as before.
+   */
+  input_tokens_cache_write_1h?: number;
   output_tokens: number;
 }
 
@@ -227,16 +241,32 @@ export function simulatePolicyCost(
     const decision = pickModel(ev, policy, overrides);
     const model = policy.models.find((m) => m.id === decision.modelId);
     if (!model) continue;
-    const inputFresh = ev.input_tokens - ev.input_tokens_cached;
-    // Cache writes replay at the same premium the live path charges
-    // (explicit per-model rate, else fresh × 1.25 — see pricing.ts).
-    const cacheWriteRate =
-      model.pricing.input_cache_write ?? model.pricing.input * 1.25;
-    const cost =
-      (inputFresh / 1_000_000) * model.pricing.input +
-      (ev.input_tokens_cached / 1_000_000) * model.pricing.input_cached +
-      ((ev.input_tokens_cache_write ?? 0) / 1_000_000) * cacheWriteRate +
-      (ev.output_tokens / 1_000_000) * model.pricing.output;
+    // Price the replayed event with the SAME function the live path uses
+    // (pricing.ts computeCostUsd) on the SAME disjoint buckets the event
+    // stores, so a what-if can never disagree with the dollars the run
+    // actually logged for the same tokens.
+    //
+    // This loop used to compute `inputFresh = ev.input_tokens -
+    // ev.input_tokens_cached` first. That assumed `input_tokens` was the
+    // TOTAL prompt count, but every adapter already subtracts the cached
+    // share before the event is written, so the replay took the cache reads
+    // out a second time: a 20k-fresh / 80k-cached event replayed as −60k
+    // fresh tokens and a NEGATIVE dollar figure, and any cache-heavy run was
+    // told a policy was cheaper than it really was. The only test used
+    // input_tokens_cached: 0, which is why it never fired. The hand-rolled
+    // arithmetic also never learned the 1-hour cache-write tier the live
+    // path prices at 2×. Delegating to computeCostUsd fixes both and keeps
+    // the two paths from drifting apart again.
+    const cost = computeCostUsd(
+      {
+        input: ev.input_tokens,
+        input_cached: ev.input_tokens_cached,
+        input_cache_write: ev.input_tokens_cache_write,
+        input_cache_write_1h: ev.input_tokens_cache_write_1h,
+        output: ev.output_tokens,
+      },
+      model.pricing
+    );
     perModel[model.id] = (perModel[model.id] ?? 0) + cost;
     total += cost;
   }

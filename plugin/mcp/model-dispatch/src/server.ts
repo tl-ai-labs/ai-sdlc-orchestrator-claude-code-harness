@@ -282,7 +282,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: "object",
         properties: {
-          events: { type: "array" },
+          events: {
+            type: "array",
+            description:
+              "Telemetry events exactly as telemetry.jsonl stores them. Token buckets are " +
+              "DISJOINT: input_tokens is the FRESH count (cache reads and writes are not " +
+              "inside it); input_tokens_cached, input_tokens_cache_write and " +
+              "input_tokens_cache_write_1h are priced at their own rates. Pass them as-is — " +
+              "the replay never subtracts one bucket from another.",
+          },
           policy_name: { type: "string" },
           project_root: {
             type: "string",
