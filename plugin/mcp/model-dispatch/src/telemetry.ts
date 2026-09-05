@@ -82,13 +82,28 @@ export interface Manifest {
     provenance: "transcript";
     /** Which model's rate priced the overhead, in words. */
     pricing_basis?: string;
-    /** "transcript", "transcript (receipt-verified, +x%)", "receipt-only", … */
+    /**
+     * How cost_usd was arrived at, in words; the report matches on the prefix.
+     * "receipt (transcript agrees, ±x%)" — every token bucket in the window
+     * equals the CLI's own receipt, so the receipt's dollars are booked;
+     * "receipt-only"; "transcript (receipt covers only the last invocation,
+     * verified ±x%; N earlier invocation(s) unverified)"; "transcript (receipt
+     * pending; provisional)"; "transcript (no receipt; unverified)". A
+     * "; approximate window" suffix marks a window anchored without the run's
+     * own command turn.
+     */
     cost_source?: string;
     /** The transcript-priced figure, kept beside cost_usd when a receipt supplied or verified it. */
     transcript_cost_usd?: number | null;
     /** Claude Code's own end-of-session total for the driver session, when a receipt was found. */
     receipt_cost_usd?: number | null;
     receipt_path?: string | null;
+    /**
+     * The window the collector measured: ISO bounds (end null = the end of the
+     * session file), the anchor each bound came from, whether both were exact,
+     * and the session file the scan was pinned to (null = every file scanned).
+     */
+    window?: { start: string; end: string | null; start_anchor: string; end_anchor: string; exact: boolean; session_id: string | null };
     /** Dispatched dollars that ran inside the session and were subtracted once from true_total_cost_usd. */
     dispatched_in_session_cost_usd?: number;
     dispatched_in_session_events?: number;

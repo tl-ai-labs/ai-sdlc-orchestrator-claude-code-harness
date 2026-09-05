@@ -165,7 +165,18 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
 
     const m = readManifest(fix);
     assert.equal(m.total_cost_usd, 0.05); // dispatched figure NEVER grows
-    assert.deepEqual(m.orchestrator_overhead, {
+    // No command turn and no run log: both anchors are the manifest's dispatch
+    // stamps ± 5 minutes, the window is approximate, and the block says so.
+    const { window, ...overhead } = m.orchestrator_overhead;
+    assert.deepEqual(window, {
+      start: new Date(Date.parse(m.started_at) - 5 * MIN).toISOString(),
+      end: new Date(Date.parse(m.ended_at) + 5 * MIN).toISOString(),
+      start_anchor: "manifest started_at - 5m",
+      end_anchor: "manifest ended_at + 5m",
+      exact: false,
+      session_id: null,
+    });
+    assert.deepEqual(overhead, {
       cost_usd: 3.7,
       input_tokens: 1_500_000,
       input_tokens_cached: 2_000_000,
@@ -175,7 +186,7 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
       events: 1,
       provenance: "transcript",
       pricing_basis: "the policy's derived driver model",
-      cost_source: "transcript",
+      cost_source: "transcript (no receipt; unverified; approximate window)",
       transcript_cost_usd: 3.7,
       receipt_cost_usd: null,
       receipt_path: null,
@@ -433,24 +444,20 @@ const receiptOf = (pass) => JSON.parse(readFileSync(join(FIX, pass, "claude-sess
 const telemetryOf = (pass) => readFileSync(join(FIX, pass, "telemetry.jsonl"), "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const num = (re, text) => { const m = text.match(re); assert.ok(m, `no match for ${re} in:\n${text}`); return Number(m[1]); };
 
-test("pass1: 1-hour cache writes priced at 2x land the transcript within 6% of the receipt, above it, and in-session dispatch is subtracted once", () => {
+test("pass1: a transcript stripped of its human turns holds the preamble invocation too — ABOVE the receipt in every bucket, refused with exit 3, nothing written", () => {
   const r = fixRun("pass1", "receivables-premium");
-  assert.equal(r.status, 0, r.stderr);
-  const receipt = receiptOf("pass1").total_cost_usd;
-  // Every cache write in this session was on the 1-hour tier.
-  assert.match(r.stdout, /cache_write 355943 \(5m 0 \/ 1h 355943\)/);
-  // The receipt's own dollars imply the 1-hour rate — the diagnostic that found the bug.
+  assert.equal(r.status, 3, r.stdout + r.stderr);
+  // Every cache write in this session was on the 1-hour tier, and the receipt's
+  // own dollars imply that rate — the diagnostic that found the tier bug.
+  assert.match(r.stdout, /tokens transcript in 158 · cached 15843890 · cache_write 355943 · out 186812 \| receipt in 142 · cached 15480055 · cache_write 310521 · out 177022/);
   assert.match(r.stdout, /receipt implies a cache-write rate of \$10\.00\/M/);
-  const transcript = num(/receipt cross-check: transcript \$([0-9.]+)/, r.stdout);
-  assert.ok(transcript >= receipt, `transcript ${transcript} must not sit below the receipt ${receipt}`);
-  assert.ok(transcript <= receipt * 1.06, `transcript ${transcript} is more than 6% over the receipt ${receipt}`);
-  // 89 dispatched events were apportioned from the session's own total → inside the transcript.
-  const dispatched = 3.739405;
-  assert.match(r.stdout, /in-session dispatch: 89 event\(s\) totaling \$3\.739405/);
-  const trueTotal = num(/→ true total \$([0-9.]+)/, r.stdout);
-  assert.equal(trueTotal, transcript);
-  // Without the fix this run reported $3.74 for a session the CLI billed at $15.27.
-  assert.ok(trueTotal > 4 * dispatched);
+  assert.match(r.stdout, /claude-opus-5: in 158>142 · cached 15843890>15480055 · cache_write 355943>310521 · out 186812>177022 → over the receipt/);
+  // The fixture keeps only assistant lines, so the 8-message preamble that
+  // preceded the run's own command turn cannot be separated from the run: the
+  // tool says why and writes nothing rather than a number 5.8% high.
+  assert.match(r.stderr, /the window holds messages the receipt never billed/);
+  assert.match(r.stderr, /the scan is not pinned to a session file, so its human turns cannot be read/);
+  assert.doesNotMatch(r.stdout, /true total/);
 });
 
 test("pass3: a Gemini-only policy still prices the Opus session that drove it, from the receipt, and adds the out-of-session Gemini work once", () => {
@@ -488,7 +495,10 @@ test("no receipt: transcript-priced at the policy rate, and the tool asks for on
     const r = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-premium.yaml"), "--transcripts-dir", join(FIX, "pass1", "transcripts"), "--dry-run"], { encoding: "utf-8", env: { ...process.env, MMO_SELECT: "" } });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /no receipt at .*claude-session\.json/);
-    assert.match(r.stdout, /= \$16\.152465 \[transcript\]/);
+    assert.match(r.stdout, /= \$16\.152465 \[transcript \(no receipt; unverified; approximate window\)\]/);
+    // 89 dispatched events were apportioned from the session's own total → inside the transcript, subtracted once.
+    assert.match(r.stdout, /in-session dispatch: 89 event\(s\) totaling \$3\.739405/);
+    assert.equal(num(/→ true total \$([0-9.]+)/, r.stdout), 16.152465);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -610,8 +620,10 @@ function mkRun({ policy, manifest, telemetry, transcripts, receipt }) {
     writeFileSync(join(tDir, name), lines.join("\n") + "\n");
   }
   if (receipt) writeFileSync(join(passDir, "claude-session.json"), JSON.stringify(receipt));
-  const run = (extra = []) => spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", tDir, "--dry-run", ...extra], { encoding: "utf-8", env: ENV });
-  return { root, passDir, run, rm: () => rmSync(root, { recursive: true, force: true }) };
+  const exec = (extra, dry) => spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", tDir, ...(dry ? ["--dry-run"] : []), ...extra], { encoding: "utf-8", env: ENV });
+  const run = (extra = []) => exec(extra, true);
+  const write = (extra = []) => exec(extra, false); // writes telemetry + manifest, for pins on what lands on disk
+  return { root, passDir, run, write, rm: () => rmSync(root, { recursive: true, force: true }) };
 }
 const line = (id, model, out, ts, sessionId) => JSON.stringify({ type: "assistant", timestamp: ts, sessionId, message: { id, model, stop_reason: "end_turn", usage: { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: out } } });
 const CLI_POLICY = `
@@ -704,7 +716,8 @@ test("a Gemini-only policy with a two-model receipt still takes the receipt bran
     const r = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-floor.yaml"), "--transcripts-dir", join(FIX, "pass3", "transcripts"), "--dry-run"], { encoding: "utf-8", env: ENV });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /receipt bills claude-opus-5 \+ claude-haiku-4-5/);
-    assert.match(r.stdout, /= \$16\.245409 \[receipt \(no policy rate to cross-check against\)\]/);
+    assert.match(r.stderr, /NOTE: the receipt also bills claude-haiku-4-5 \(110 tokens, \$0\.01\) for calls the transcript does not record/);
+    assert.match(r.stdout, /= \$16\.245409 \[receipt \(transcript agrees; no policy rate for a rate check\)\]/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -718,7 +731,7 @@ test("a headless capture with no result line yet is 'not final': transcript-pric
     const r = spawnSync(process.execPath, args, { encoding: "utf-8", env: ENV });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /has no "result" line yet .* UNVERIFIED/);
-    assert.match(r.stdout, /= \$16\.152465 \[transcript\]/);
+    assert.match(r.stdout, /= \$16\.152465 \[transcript \(receipt pending; provisional; approximate window\)\]/);
     const r2 = spawnSync(process.execPath, [...args, "--receipt", join(passDir, "live-run.log")], { encoding: "utf-8", env: ENV });
     assert.equal(r2.status, 1);
     assert.match(r2.stderr, /neither a JSON object nor a stream-json capture/);
@@ -776,4 +789,452 @@ test("both manifest spellings produce identical accounting", () => {
     rmSync(drifted.root, { recursive: true, force: true });
     rmSync(builder.root, { recursive: true, force: true });
   }
+});
+
+// ─── Window anchors: the run's own invocation ───────────────────────────────
+// Claude Code bills per invocation, and an invocation begins at its human
+// turn. The window opens at the run's own command turn (exact) and closes at
+// the next human turn after run.end, or at the end of the session file (also
+// exact — assistant messages only ever follow a human turn). Without a
+// command turn it opens at run.start minus 5 minutes, else at the manifest's
+// started_at minus 5 minutes; started_at is the first DISPATCHED event, and
+// opening there dropped 22% of a real run's driver spend (v37-agsdk-1,
+// 2026-09-05). Those fallbacks are labelled approximate, and the exact
+// per-bucket receipt rule is what decides whether they held.
+import { runStartFromLog, runEndFromLog, humanTurns, compareBuckets } from "../../../scripts/collect-orchestrator-usage.mjs";
+
+const ANCHOR_POLICY = `
+version: 1
+name: check-anchor
+models:
+  - id: driver
+    adapter: builtin-anthropic
+    model_name: claude-opus-4-8
+    pricing: { input: 1, input_cached: 0.1, output: 10 }
+rules:
+  - default: driver
+`;
+// Timeline (all 2026-09-05Z). command turn 18:51:15.673; run.start 18:53:03;
+// first dispatch 19:05:00; last dispatch 19:06:00; run.end 19:06:30. The old
+// window opened at 19:00:00 (dispatch − 5m).
+const COMMAND_TS = "2026-09-05T18:51:15.673Z";
+const RUN_START = "2026-09-05T18:53:03.107Z";
+const RUN_END = "2026-09-05T19:06:30.000Z";
+const NEXT_TURN = "2026-09-05T19:20:00.000Z";
+const ANCHOR_MANIFEST = { pass: "r-anchor", policy_name: "check-anchor", started_at: "2026-09-05T19:05:00.000Z", ended_at: "2026-09-05T19:06:00.000Z", totals: { dispatched_cost_usd: 0.5, models_used: ["gemini-3.5-flash"] } };
+const ANCHOR_TELEMETRY = [{ pass: "r-anchor", phase: "codegen", task_id: "t-1", provenance: "vendor", model: "gemini-3.5-flash", model_id: "worker", cost_usd: 0.5 }];
+// 1,000,000 output tokens at $10/M = $10.00 per message; four candidates:
+const ANCHOR_LINES = [
+  line("m_old", "claude-opus-4-8", 1_000_000, "2026-09-05T18:40:00.000Z"),   // before the command turn: another invocation
+  line("m_setup", "claude-opus-4-8", 1_000_000, "2026-09-05T18:51:30.000Z"), // the driver's setup, 1.5m before run.start
+  line("m_pre", "claude-opus-4-8", 1_000_000, "2026-09-05T18:56:00.000Z"),   // after run.start, 9m before the first dispatch: THE BUG
+  line("m_in", "claude-opus-4-8", 1_000_000, "2026-09-05T19:05:30.000Z"),    // between the dispatches
+];
+// The CLI billed the three messages that belong to the run: $30.
+const ANCHOR_RECEIPT = { total_cost_usd: 30, modelUsage: { "claude-opus-4-8": { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 3_000_000, costUSD: 30 } } };
+const runLogLine = (iso, event = "run.start", fields = "run_id=r-anchor mode=greenfield") => `MMO: ${iso} INFO   ${event} ${fields}`;
+const RUN_LOG = [runLogLine(RUN_START), runLogLine("2026-09-05T18:53:27.000Z", "phase.start", "run_id=r-anchor phase=requirements_analysis"), runLogLine(RUN_END, "run.end", "run_id=r-anchor outcome=completed")];
+const withRunLog = (fix, lines, where = "sdlc") => {
+  const dir = where === "sdlc" ? join(fix.root, ".sdlc", "runs", "r-anchor") : fix.passDir;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "orchestrator.log"), lines.join("\n") + "\n");
+};
+/** A human turn as the CLI writes it: `type: "user"` with a string content. */
+const uLine = (ts, text, extra = {}) => JSON.stringify({ type: "user", timestamp: ts, message: { role: "user", content: text }, ...extra });
+/** The run's command turn: the slash command and its args, as the CLI records a `/mmo:pass` invocation. */
+const commandTurn = (ts = COMMAND_TS, runId = "r-anchor") =>
+  uLine(ts, `<command-message>mmo:pass is running…</command-message>\n<command-name>/mmo:pass</command-name>\n<command-args>--auth=vendor --policy=check-anchor --study=x${runId ? ` --run-id=${runId}` : ""} brief.md</command-args>`);
+const anchorRun = (lines = ANCHOR_LINES, receipt = ANCHOR_RECEIPT) => mkRun({ policy: ANCHOR_POLICY, manifest: ANCHOR_MANIFEST, telemetry: ANCHOR_TELEMETRY, transcripts: { "sess-a.jsonl": lines }, receipt });
+const AGREES = /claude-opus-4-8: in 0=0 · cached 0=0 · cache_write 0=0 · out 3000000≤3000000 → agrees/;
+
+// ── Exact window: the command turn opens it ─────────────────────────────────
+
+test("the window opens at the run's command turn and closes at the end of the session file: exact, and the receipt verifies", () => {
+  const fix = anchorRun([commandTurn(), ...ANCHOR_LINES]);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /window 2026-09-05T18:51:15\.673Z → end of session\n/);
+    assert.match(r.stdout, /opens at the run's command turn 2026-09-05T18:51:15\.673Z in .*sess-a\.jsonl \(exact: the invocation the CLI bills begins there\)/);
+    assert.match(r.stdout, /closes at the end of the session file: run\.end 2026-09-05T19:06:30\.000Z in .*\.sdlc\/runs\/r-anchor\/orchestrator\.log and no later human turn \(exact\)/);
+    assert.match(r.stdout, /scan pinned to session sess-a/);
+    // m_old (18:40) belongs to whatever ran before the command turn.
+    assert.match(r.stdout, /counted 3 unique API message\(s\)/);
+    assert.match(r.stdout, /1 outside window/);
+    assert.match(r.stdout, AGREES);
+    assert.match(r.stdout, /= \$30 \[receipt \(transcript agrees, \+0\.0%\)\]/);
+    assert.match(r.stdout, /→ true total \$30\.5/);
+    assert.doesNotMatch(r.stdout, /approximate/);
+    assert.doesNotMatch(r.stderr, /NOTE: run\.start is/); // 12 minutes, well under the stale-log note's hour
+  } finally { fix.rm(); }
+});
+
+test("the window closes at the next human turn after run.end: a later prompt on the same session, and its messages, are excluded", () => {
+  const fix = anchorRun([commandTurn(), ...ANCHOR_LINES, uLine(NEXT_TURN, "thanks — now summarise what you did"), line("m_after", "claude-opus-4-8", 1_000_000, "2026-09-05T19:21:00.000Z")]);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /window 2026-09-05T18:51:15\.673Z → 2026-09-05T19:20:00\.000Z\n/);
+    assert.match(r.stdout, /closes at the next human turn 2026-09-05T19:20:00\.000Z after run\.end 2026-09-05T19:06:30\.000Z in .*orchestrator\.log \(exact: that turn starts the next invocation and is excluded\)/);
+    assert.match(r.stdout, /counted 3 unique API message\(s\)/);
+    assert.match(r.stdout, /2 outside window/);
+    assert.match(r.stdout, /= \$30 \[receipt \(transcript agrees, \+0\.0%\)\]/);
+    assert.doesNotMatch(r.stdout, /approximate/);
+  } finally { fix.rm(); }
+});
+
+test("no run.end line but no human turn after the command turn: the session file ends with this invocation, still exact", () => {
+  const fix = anchorRun([commandTurn(), ...ANCHOR_LINES]);
+  try {
+    withRunLog(fix, [runLogLine(RUN_START)]);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /closes at the end of the session file: no run\.end line in .*orchestrator\.log, and no human turn after the window opens \(exact\)/);
+    assert.match(r.stdout, /= \$30 \[receipt \(transcript agrees, \+0\.0%\)\]/);
+    assert.doesNotMatch(r.stdout, /approximate/);
+  } finally { fix.rm(); }
+});
+
+test("no run.end line and a human turn after the command turn: only run.end could place the close, so it falls back to ended_at + 5m and says approximate", () => {
+  const fix = anchorRun([commandTurn(), ...ANCHOR_LINES, uLine(NEXT_TURN, "thanks"), line("m_after", "claude-opus-4-8", 1_000_000, "2026-09-05T19:21:00.000Z")]);
+  try {
+    withRunLog(fix, [runLogLine(RUN_START)]);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /window 2026-09-05T18:51:15\.673Z → 2026-09-05T19:11:00\.000Z \(approximate\)/);
+    assert.match(r.stdout, /closes at the manifest's ended_at 2026-09-05T19:06:00\.000Z \(= last dispatched event\) plus 5 minutes \(approximate: no run\.end line in .*orchestrator\.log, and a human turn after the window opens that only run\.end could place\)/);
+    // The receipt rule is what decides whether the approximate close held — here it did.
+    assert.match(r.stdout, /counted 3 unique API message\(s\)/);
+    assert.match(r.stdout, /= \$30 \[receipt \(transcript agrees, \+0\.0%\)\]/);
+  } finally { fix.rm(); }
+});
+
+test("--run-id picks this run's command turn: a turn naming another run is never this run's, wherever it sits", () => {
+  const fix = anchorRun([commandTurn("2026-09-05T18:30:00.000Z", "other-run"), commandTurn(), ...ANCHOR_LINES]);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /opens at the run's command turn 2026-09-05T18:51:15\.673Z/);
+    assert.match(r.stdout, /counted 3 unique API message\(s\)/);
+  } finally { fix.rm(); }
+});
+
+test("a command turn naming this run id outranks a later one naming none (no receipt: transcript-priced, unverified, exact window)", () => {
+  const fix = anchorRun([commandTurn("2026-09-05T18:30:00.000Z"), commandTurn("2026-09-05T18:35:00.000Z", null), ...ANCHOR_LINES], null);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /opens at the run's command turn 2026-09-05T18:30:00\.000Z/);
+    assert.match(r.stdout, /counted 4 unique API message\(s\)/);
+    assert.match(r.stdout, /= \$40 \[transcript \(no receipt; unverified\)\]/);
+    assert.match(r.stderr, /no receipt at/);
+  } finally { fix.rm(); }
+});
+
+test("the manifest records the window it measured: anchors, exactness and the pinned session", () => {
+  const fix = anchorRun([commandTurn(), ...ANCHOR_LINES]);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.write();
+    assert.equal(r.status, 0, r.stderr);
+    const m = JSON.parse(readFileSync(join(fix.passDir, "manifest.json"), "utf-8"));
+    const o = m.orchestrator_overhead;
+    assert.deepEqual(o.window, { start: COMMAND_TS, end: null, start_anchor: "command turn", end_anchor: "end of session", exact: true, session_id: "sess-a" });
+    assert.equal(o.cost_source, "receipt (transcript agrees, +0.0%)");
+    assert.equal(o.cost_usd, 30);
+    assert.equal(o.transcript_cost_usd, 30);
+    assert.equal(o.receipt_cost_usd, 30);
+    assert.equal(o.output_tokens, 3_000_000);
+    assert.equal(m.true_total_cost_usd, 30.5);
+    assert.equal(m.totals.dispatched_cost_usd, 0.5); // the dispatched figure never grows (this manifest uses the totals.* spelling)
+  } finally { fix.rm(); }
+});
+
+// ── The exact receipt rule ──────────────────────────────────────────────────
+
+test("SHORT: a bucket below the receipt means billed messages are missing from the tree — refused, exit 3, nothing written", () => {
+  // Real-shaped usage: cache reads carry the evidence, so a missing message shows as a cache_read shortfall.
+  const full = (id, ts, cached) => JSON.stringify({ type: "assistant", timestamp: ts, message: { id, model: "claude-opus-4-8", stop_reason: "end_turn", usage: { input_tokens: 10, cache_read_input_tokens: cached, cache_creation_input_tokens: 0, output_tokens: 1000 } } });
+  const receipt = { total_cost_usd: 1, modelUsage: { "claude-opus-4-8": { inputTokens: 30, cacheReadInputTokens: 6_000_000, cacheCreationInputTokens: 0, outputTokens: 3000, costUSD: 1 } } };
+  const fix = anchorRun([commandTurn(), full("a", "2026-09-05T18:52:00.000Z", 1_000_000), full("b", "2026-09-05T18:56:00.000Z", 2_000_000)], receipt);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.write();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stdout, /claude-opus-4-8: in 20<30 · cached 3000000<6000000 · cache_write 0=0 · out 2000≤3000 → short of the receipt/);
+    assert.match(r.stderr, /BELOW the CLI's own receipt \(claude-opus-4-8 input: transcript 20 < receipt 30; claude-opus-4-8 input_cached: transcript 3000000 < receipt 6000000/);
+    assert.match(r.stderr, /has no tolerance to widen/);
+    assert.doesNotMatch(r.stdout, /true total/);
+    assert.equal(JSON.parse(readFileSync(join(fix.passDir, "manifest.json"), "utf-8")).orchestrator_overhead, undefined);
+  } finally { fix.rm(); }
+});
+
+test("two invocations on one session: the receipt covers only the last leg, which verifies; the whole window is written transcript-priced and labelled so", () => {
+  const [mOld, mSetup, mPre, mIn] = ANCHOR_LINES;
+  const lastLeg = { total_cost_usd: 10, modelUsage: { "claude-opus-4-8": { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 1_000_000, costUSD: 10 } } };
+  const fix = anchorRun([commandTurn(), mOld, mSetup, mPre, uLine("2026-09-05T18:58:00.000Z", "Continue the run from where it stopped."), mIn], lastLeg);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /claude-opus-4-8: in 0=0 · cached 0=0 · cache_write 0=0 · out 3000000>1000000 → over the receipt/);
+    assert.match(r.stdout, /last invocation \(from the human turn at 2026-09-05T18:58:00\.000Z, 1 earlier turn\(s\) in the window\):/);
+    assert.match(r.stdout, /claude-opus-4-8: in 0=0 · cached 0=0 · cache_write 0=0 · out 1000000≤1000000 → agrees/);
+    assert.match(r.stdout, /transcript \$10 vs receipt \$10 → \+0\.0%; the last invocation agrees with the receipt/);
+    assert.match(r.stdout, /= \$30 \[transcript \(receipt covers only the last invocation, verified \+0\.0%; 1 earlier invocation\(s\) unverified\)\]/);
+    assert.match(r.stderr, /NOTE: the receipt bills only the last invocation/);
+  } finally { fix.rm(); }
+});
+
+test("two invocations, and the receipt matches neither the whole window nor the last leg: refused, exit 3", () => {
+  const [mOld, mSetup, mPre, mIn] = ANCHOR_LINES;
+  const wrong = { total_cost_usd: 20, modelUsage: { "claude-opus-4-8": { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 2_000_000, costUSD: 20 } } };
+  const fix = anchorRun([commandTurn(), mOld, mSetup, mPre, uLine("2026-09-05T18:58:00.000Z", "Continue."), mIn], wrong);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stderr, /the receipt matches neither the whole window nor its last invocation/);
+    assert.match(r.stderr, /no number is guessed/);
+  } finally { fix.rm(); }
+});
+
+test("ABOVE with a single human turn: nothing explains the extra messages — refused, exit 3, no guess", () => {
+  const four = { total_cost_usd: 20, modelUsage: { "claude-opus-4-8": { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 2_000_000, costUSD: 20 } } };
+  const fix = anchorRun([commandTurn(), ...ANCHOR_LINES], four);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stderr, /the window holds messages the receipt never billed \(claude-opus-4-8 output: transcript 3000000 > receipt 2000000\) and no continuation turn explains them: the session file .*sess-a\.jsonl carries 1 human turn\(s\) inside the window/);
+  } finally { fix.rm(); }
+});
+
+test("a receipt for another session cannot referee this run: exit 3", () => {
+  const fix = anchorRun([commandTurn(), ...ANCHOR_LINES], { ...ANCHOR_RECEIPT, session_id: "sess-b" });
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stderr, /is for session sess-b, but the run's command turn \(2026-09-05T18:51:15\.673Z\) is in session sess-a \(.*sess-a\.jsonl\), and session sess-b holds no command turn for run 'r-anchor'/);
+  } finally { fix.rm(); }
+});
+
+test("a receipt model the transcript never recorded is a NOTE, not a mismatch: its dollars are inside the booked total", () => {
+  const receipt = { total_cost_usd: 30.02, modelUsage: { ...ANCHOR_RECEIPT.modelUsage, "claude-haiku-4-5": { inputTokens: 200, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 50, costUSD: 0.02 } } };
+  const fix = anchorRun([commandTurn(), ...ANCHOR_LINES], receipt);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /NOTE: the receipt also bills claude-haiku-4-5 \(250 tokens, \$0\.02\) for calls the transcript does not record/);
+    assert.match(r.stdout, /= \$30\.02 \[receipt \(transcript agrees, -0\.1%\)\]/);
+  } finally { fix.rm(); }
+});
+
+test("rate drift: the receipt's own tokens at the policy card no longer reproduce its dollars — booked, and the NOTE names the gap", () => {
+  const receipt = { total_cost_usd: 33, modelUsage: { "claude-opus-4-8": { ...ANCHOR_RECEIPT.modelUsage["claude-opus-4-8"], costUSD: 33 } } };
+  const fix = anchorRun([commandTurn(), ...ANCHOR_LINES], receipt);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /NOTE: rate drift — the receipt's own 'claude-opus-4-8' tokens priced at the policy card come to \$30, but the receipt bills \$33 for them \(-9\.1%\)/);
+    assert.match(r.stdout, /= \$33 \[receipt \(transcript agrees, -9\.1%\)\]/);
+  } finally { fix.rm(); }
+});
+
+test("--receipt-tolerance is gone: the check is exact and the flag is an error", () => {
+  const fix = anchorRun([commandTurn(), ...ANCHOR_LINES]);
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run(["--receipt-tolerance", "0.1"]);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /--receipt-tolerance no longer exists: the receipt check is exact per token bucket and has no tolerance to widen/);
+  } finally { fix.rm(); }
+});
+
+// ── Approximate windows: no command turn in the tree ────────────────────────
+
+test("no command turn: the window opens at run.start minus 5 minutes, says approximate, and the receipt still verifies it", () => {
+  const fix = anchorRun();
+  try {
+    withRunLog(fix, [runLogLine(RUN_START), runLogLine("2026-09-05T18:53:27.000Z", "phase.start", "run_id=r-anchor phase=requirements_analysis")]);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /window 2026-09-05T18:48:03\.107Z → 2026-09-05T19:11:00\.000Z \(approximate\)/);
+    assert.match(r.stdout, /opens at run\.start 2026-09-05T18:53:03\.107Z in .*\.sdlc\/runs\/r-anchor\/orchestrator\.log minus 5 minutes \(approximate: no run command turn found in/);
+    assert.match(r.stdout, /closes at the manifest's ended_at 2026-09-05T19:06:00\.000Z \(= last dispatched event\) plus 5 minutes \(approximate: no run\.end line in .*orchestrator\.log, and the scan is not pinned to a session file\)/);
+    assert.match(r.stdout, /counted 3 unique API message\(s\)/);
+    assert.match(r.stdout, /1 outside window/);
+    assert.match(r.stdout, AGREES);
+    assert.match(r.stdout, /= \$30 \[receipt \(transcript agrees, \+0\.0%\)\]/);
+    assert.doesNotMatch(r.stderr, /NOTE: run\.start is/);
+  } finally { fix.rm(); }
+});
+
+test("no command turn and a run.end line: closes at run.end plus 5 minutes, approximate because no session file is pinned", () => {
+  const fix = anchorRun();
+  try {
+    withRunLog(fix, RUN_LOG);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /window 2026-09-05T18:48:03\.107Z → 2026-09-05T19:11:30\.000Z \(approximate\)/);
+    assert.match(r.stdout, /closes at run\.end 2026-09-05T19:06:30\.000Z in .*orchestrator\.log plus 5 minutes \(approximate: the scan is not pinned to a session file, so no human turn can bound it\)/);
+    assert.match(r.stdout, /= \$30 \[receipt \(transcript agrees, \+0\.0%\)\]/);
+  } finally { fix.rm(); }
+});
+
+test("without a run.start line the window falls back to the manifest's started_at, says so, and the receipt check exposes the gap", () => {
+  const fix = anchorRun();
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stdout, /window 2026-09-05T19:00:00\.000Z → 2026-09-05T19:11:00\.000Z \(approximate\)/);
+    assert.match(r.stdout, /opens at the manifest's started_at 2026-09-05T19:05:00\.000Z \(= first dispatched event\) minus 5 minutes \(approximate: no run command turn found in .* and no run\.start line in .*\.sdlc\/runs\/r-anchor\/orchestrator\.log\)/);
+    // Only m_in survives: m_pre (9m before the dispatch) and m_setup are outside the old window.
+    assert.match(r.stdout, /counted 1 unique API message\(s\)/);
+    assert.match(r.stdout, /3 outside window/);
+    assert.match(r.stdout, /out 1000000≤3000000 → short of the receipt/);
+    assert.match(r.stderr, /BELOW the CLI's own receipt/);
+    assert.match(r.stderr, /a run log with no run\.start line/);
+  } finally { fix.rm(); }
+});
+
+test("a reused run id: the LAST run.start at or before the first dispatch wins, and the earlier run's messages stay outside", () => {
+  const fix = anchorRun();
+  try {
+    // Yesterday's run under the same id, appended first; its message must not be swept in.
+    const yesterday = line("m_yesterday", "claude-opus-4-8", 1_000_000, "2026-09-04T19:00:00.000Z");
+    writeFileSync(join(fix.root, "transcripts", "sess-a.jsonl"), [yesterday, ...ANCHOR_LINES].join("\n") + "\n");
+    withRunLog(fix, [runLogLine("2026-09-04T18:53:03.000Z"), runLogLine("2026-09-04T19:30:00.000Z", "run.end", "run_id=r-anchor outcome=completed"), runLogLine(RUN_START)]);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /opens at run\.start 2026-09-05T18:53:03\.107Z/);
+    assert.match(r.stdout, /counted 3 unique API message\(s\)/);
+    assert.match(r.stdout, /2 outside window/);
+  } finally { fix.rm(); }
+});
+
+test("a run.start stamped after the first dispatch cannot be this run's: ignored, fallback to started_at, refused by the receipt", () => {
+  const fix = anchorRun();
+  try {
+    withRunLog(fix, [runLogLine("2026-09-05T19:10:00.000Z")]);
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stdout, /opens at the manifest's started_at 2026-09-05T19:05:00\.000Z \(= first dispatched event\) minus 5 minutes/);
+    assert.match(r.stderr, /BELOW the CLI's own receipt/);
+  } finally { fix.rm(); }
+});
+
+test("brownfield shape: the run log inside the pass directory itself is the second place looked", () => {
+  const fix = anchorRun();
+  try {
+    withRunLog(fix, [runLogLine(RUN_START)], "pass");
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /opens at run\.start 2026-09-05T18:53:03\.107Z in .*\/pass\/orchestrator\.log minus 5 minutes/);
+    assert.match(r.stdout, /counted 3 unique API message\(s\)/);
+  } finally { fix.rm(); }
+});
+
+test("a run.start more than an hour before the first dispatch is used and flagged; the messages it sweeps in fail the receipt, nothing is guessed", () => {
+  const fix = anchorRun();
+  try {
+    withRunLog(fix, [runLogLine("2026-09-05T17:00:00.000Z")]);
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stderr, /NOTE: run\.start is 125 minutes before the first dispatched event/);
+    // m_old (18:40) is now inside; all four count and the transcript sits over the receipt.
+    assert.match(r.stdout, /counted 4 unique API message\(s\)/);
+    assert.match(r.stderr, /the window holds messages the receipt never billed \(claude-opus-4-8 output: transcript 4000000 > receipt 3000000\)/);
+    assert.match(r.stderr, /the scan is not pinned to a session file, so its human turns cannot be read/);
+  } finally { fix.rm(); }
+});
+
+// ── Unit pins on the exported helpers ───────────────────────────────────────
+
+test("runStartFromLog reads the line format the loggers emit, with or without the MMO: prefix, and ignores other events", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mmo-runstart-"));
+  try {
+    const p = join(dir, "orchestrator.log");
+    const notAfter = Date.parse("2026-09-05T19:05:00Z");
+    writeFileSync(p, ["MMO: 2026-09-05T18:53:27.211Z INFO   phase.start run_id=x phase=requirements_analysis", "MMO: 2026-09-05T18:53:03.107Z INFO   run.start run_id=x mode=greenfield", ""].join("\n"));
+    assert.deepEqual(runStartFromLog(p, notAfter), { ms: Date.parse("2026-09-05T18:53:03.107Z"), iso: "2026-09-05T18:53:03.107Z" });
+    writeFileSync(p, "2026-09-05T18:53:03.107Z INFO   run.start run_id=x\n"); // MMO_LOG_PREFIX=""
+    assert.equal(runStartFromLog(p, notAfter).iso, "2026-09-05T18:53:03.107Z");
+    writeFileSync(p, "MMO: 2026-09-05T18:53:03.107Z INFO   run.started run_id=x\n"); // not the event
+    assert.equal(runStartFromLog(p, notAfter), null);
+    assert.equal(runStartFromLog(join(dir, "missing.log"), notAfter), null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("runEndFromLog: the first lifecycle marker after run.start must be run.end; another run.start, or nothing, is null", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mmo-runend-"));
+  try {
+    const p = join(dir, "orchestrator.log");
+    const startMs = Date.parse(RUN_START);
+    writeFileSync(p, [runLogLine("2026-09-04T19:30:00.000Z", "run.end", "run_id=x outcome=completed"), runLogLine(RUN_START), runLogLine("2026-09-05T18:53:27.000Z", "phase.start", "run_id=x phase=a"), runLogLine(RUN_END, "run.end", "run_id=x outcome=completed"), runLogLine("2026-09-05T20:00:00.000Z", "run.end", "run_id=x outcome=completed"), ""].join("\n"));
+    assert.deepEqual(runEndFromLog(p, startMs), { ms: Date.parse(RUN_END), iso: RUN_END }); // the first run.end AFTER run.start; yesterday's is ignored
+    writeFileSync(p, [runLogLine(RUN_START), runLogLine("2026-09-05T19:30:00.000Z"), runLogLine("2026-09-05T20:00:00.000Z", "run.end", "run_id=x outcome=completed"), ""].join("\n"));
+    assert.equal(runEndFromLog(p, startMs), null); // a second run.start came first: that run.end is not this run's
+    writeFileSync(p, runLogLine(RUN_START) + "\n");
+    assert.equal(runEndFromLog(p, startMs), null);
+    assert.equal(runEndFromLog(join(dir, "missing.log"), startMs), null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("humanTurns: real prompts only — the CLI's bookkeeping lines are not turns, the run command and its --run-id are read", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mmo-turns-"));
+  try {
+    const p = join(dir, "abc-123.jsonl");
+    writeFileSync(p, [
+      line("m1", "claude-opus-4-8", 1, "2026-09-05T18:52:00.000Z"),                                   // assistant: never a turn
+      uLine("2026-09-05T18:58:00.000Z", "Continue."),                                                  // a plain prompt
+      commandTurn(),                                                                                    // the run command, out of order on purpose
+      uLine("2026-09-05T18:53:00.000Z", "[Request interrupted]", { isMeta: true }),                    // CLI bookkeeping
+      uLine("2026-09-05T18:53:10.000Z", "tool output", { toolUseResult: { stdout: "x" } }),           // tool result envelope
+      JSON.stringify({ type: "user", timestamp: "2026-09-05T18:53:20.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "ok" }] } }),
+      JSON.stringify({ type: "user", timestamp: "2026-09-05T19:30:00.000Z", sessionId: "abc-123", message: { role: "user", content: [{ type: "text", text: "<command-name>/ai-sdlc-measured</command-name>\n<command-args>--run-id=v37-x</command-args>" }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "no timestamp" } }),
+      "not json",
+      "",
+    ].join("\n"));
+    const turns = humanTurns(p);
+    assert.deepEqual(turns.map((t) => [t.iso, t.command, t.run_id, t.session_id]), [
+      [COMMAND_TS, true, "r-anchor", "abc-123"],
+      ["2026-09-05T18:58:00.000Z", false, null, "abc-123"],
+      ["2026-09-05T19:30:00.000Z", true, "v37-x", "abc-123"],
+    ]);
+    assert.deepEqual(humanTurns(join(dir, "missing.jsonl")), []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("compareBuckets: equal deterministic buckets with output at or below the receipt agree; anything else names the bucket", () => {
+  const T = (input, input_cached, input_cache_write, output) => ({ input, input_cached, input_cache_write, output, input_cache_write_1h: 0 });
+  const R = (input, input_cached, input_cache_write, output, cost_usd = 1) => ({ input, input_cached, input_cache_write, output, cost_usd });
+  let c = compareBuckets({ opus: T(10, 100, 5, 40) }, { opus: R(10, 100, 5, 50) });
+  assert.deepEqual([c.ok, c.above, c.short, c.unrecorded], [true, [], [], []]);
+  assert.deepEqual(c.lines, ["opus: in 10=10 · cached 100=100 · cache_write 5=5 · out 40≤50 → agrees"]);
+  c = compareBuckets({ opus: T(10, 100, 5, 60) }, { opus: R(10, 100, 5, 50) });
+  assert.deepEqual([c.ok, c.above], [false, ["opus output: transcript 60 > receipt 50"]]);
+  c = compareBuckets({ opus: T(10, 90, 5, 40) }, { opus: R(10, 100, 5, 50) });
+  assert.deepEqual([c.ok, c.short], [false, ["opus input_cached: transcript 90 < receipt 100"]]);
+  assert.match(c.lines[0], /→ short of the receipt$/);
+  // A receipt model the transcript never saw is reported, not a failure; a transcript model the receipt never billed is over.
+  c = compareBuckets({ opus: T(10, 100, 5, 40) }, { opus: R(10, 100, 5, 50), haiku: R(1, 0, 0, 1, 0.01) });
+  assert.deepEqual([c.ok, c.unrecorded], [true, ["haiku"]]);
+  c = compareBuckets({ opus: T(10, 100, 5, 40), sonnet: T(1, 0, 0, 1) }, { opus: R(10, 100, 5, 50) });
+  assert.deepEqual([c.ok, c.above], [false, ["sonnet: 2 tokens in the transcript, none on the receipt"]]);
+  c = compareBuckets({ "(unlabeled)": T(1, 0, 0, 1) }, {});
+  assert.match(c.above[0], /no model name/);
+  // Degenerate case: no input or cache tokens on either side leaves output as the only evidence, so it must match exactly.
+  c = compareBuckets({ opus: T(0, 0, 0, 40) }, { opus: R(0, 0, 0, 50) });
+  assert.deepEqual([c.ok, c.short], [false, ["opus output: transcript 40 < receipt 50 (no input or cache tokens on either side, so output alone must match)"]]);
+  c = compareBuckets({ opus: T(0, 0, 0, 50) }, { opus: R(0, 0, 0, 50) });
+  assert.equal(c.ok, true);
 });

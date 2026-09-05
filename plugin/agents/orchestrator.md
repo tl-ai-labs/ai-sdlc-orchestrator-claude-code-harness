@@ -304,11 +304,12 @@ the logger drops missing fields rather than printing them empty.
    figure by ~100×. The collector reconstructs it from the session transcripts and patches the pass:
    ```
    node "${CLAUDE_PLUGIN_ROOT}/scripts/collect-orchestrator-usage.mjs" <pass-dir> --project-root "$(pwd)"
-   (If a runner kept <pass-dir>/claude-session.json, the collector verifies the transcript
-   figure against Claude Code's own receipt; exit 3 means the two disagree and nothing was
-   written — report that, do not guess a number. A headless <pass-dir>/live-run.log has no
-   receipt line until the session exits, so at this step the figure is transcript-priced and
-   marked UNVERIFIED; the operator re-runs the collector after exit to verify it.)
+   (If a runner kept <pass-dir>/claude-session.json, the collector checks the run's window
+   token bucket by token bucket against Claude Code's own receipt; exit 3 means the window is
+   not the invocation the receipt billed and nothing was written — report that, do not guess a
+   number. A headless <pass-dir>/live-run.log has no receipt line until the session exits, so
+   at this step the figure is transcript-priced and marked provisional; the operator re-runs
+   the collector after exit to verify it.)
    ```
    **Tell the user to re-run it, every run.** You call the collector from inside a session that has
    not ended, so it cannot see this session's own tail and the figure it writes is low. In your final

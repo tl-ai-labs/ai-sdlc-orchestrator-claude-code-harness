@@ -7,7 +7,9 @@ What is kept verbatim: every assistant line's `message.id`, `model`, `stop_reaso
 `usage` (including the `cache_creation` TTL split) and `timestamp`; the telemetry
 events' token counts, cost and provenance; and Claude Code's own end-of-session
 receipt (`claude-session.json`: `total_cost_usd`, `usage`, `modelUsage`).
-What is removed: all message content. The collector never reads it.
+What is removed: all message content, and every non-assistant line — so the fixtures hold
+no human turns. The collector cannot pin a window to them, anchors it from the manifest
+instead, and labels every fixture window approximate.
 
 `manifest.json` is NOT a copy: the source manifests are the orchestrator's own shape
 (`pass_id`, `policy: {name}`, `totals.cost_usd`, no run window). Each fixture manifest is
@@ -25,7 +27,7 @@ The fixtures live here, beside the repo-level test corpus, rather than inside `p
 
 | pass | policy | what it proves |
 |---|---|---|
-| pass1 | receivables-premium (Opus in-session) | 1h cache-write pricing; in-session dispatch is inside the transcript |
+| pass1 | receivables-premium (Opus in-session) | 1h cache-write pricing (the receipt's own dollars imply the $10/M rate). NEGATIVE under the exact receipt rule: with no human turns, the eight-message preamble that preceded the run's own command turn cannot be separated from the run, every bucket sits above the receipt, and the collector refuses (exit 3) rather than book a figure 5.8% high. Without a receipt it still proves that in-session dispatch is inside the transcript |
 | pass2 | receivables-hybrid | NEGATIVE: the committed transcript is missing a subagent file — the receipt cross-check must fail loudly |
 | pass3 | receivables-floor (Gemini-only policy, Opus driver) | the policy cannot yield a Claude driver model; the receipt prices the session anyway |
 
