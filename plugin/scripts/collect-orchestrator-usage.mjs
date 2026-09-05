@@ -43,9 +43,21 @@
  *   4. EXCLUDE: `message.model === "<synthetic>"` lines are error
  *      placeholders fabricated by the CLI, not billed API traffic.
  *   5. WINDOW ANCHOR: run_id is NOT present in transcript metadata (checked
- *      empirically), so the run window is the manifest's
- *      `started_at`/`ended_at` ± 5 minutes slack, applied per-message via
- *      each line's `timestamp`. File-level pruning uses mtime with a LOWER
+ *      empirically). The window OPENS at the driver's own `run.start` line
+ *      in `<project-root>/.sdlc/runs/<run-id>/orchestrator.log` (the
+ *      orchestrator prompt writes it through mmo-log.mjs before any packet
+ *      is dispatched; the LAST such line at or before the manifest's
+ *      `started_at` is used, so a reused run id never reaches back into an
+ *      earlier run's messages) and CLOSES at the manifest's `ended_at`,
+ *      ± 5 minutes slack, applied per-message via each line's `timestamp`.
+ *      The manifest's `started_at` is the FIRST DISPATCHED event, not the
+ *      driver's start: opening the window there dropped every driver message
+ *      before the first dispatch — measured on a real run (v37-agsdk-1,
+ *      2026-09-05) as 7 messages and 22% of the driver's spend, $1.61 priced
+ *      against a $2.12 receipt, which the receipt check then refused. A run
+ *      log without a usable `run.start` line (a run older than that logging,
+ *      a copied pass directory) falls back to `started_at` and says so on the
+ *      window line. File-level pruning uses mtime with a LOWER
  *      bound only (mtime < window start − slack ⇒ the file's last write
  *      predates the run and it cannot contain run messages). There is
  *      deliberately NO mtime upper bound — a session that keeps going after
@@ -152,6 +164,38 @@ const DIST = join(HERE, "..", "mcp", "model-dispatch", "dist");
 
 /** Same slack the report's artifacts window uses; applied per-message. */
 const WINDOW_SLACK_MS = 5 * 60_000;
+
+/**
+ * One run-lifecycle log line, as plugin/scripts/lib/log.mjs renders it:
+ * `MMO: <ISO timestamp> <LEVEL>  run.start run_id=... mode=...`. The prefix
+ * is configurable (MMO_LOG_PREFIX, possibly empty), so it is optional here;
+ * the timestamp and the event name are what anchor the window.
+ */
+const RUN_START_LINE = /^(?:\S+\s+)?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s+[A-Z]+\s+run\.start(?:\s|$)/;
+
+/**
+ * The driver's own start, read from a run-lifecycle log (header, fact 5).
+ * Returns { ms, iso } for the LAST `run.start` line stamped at or before
+ * `notAfterMs` (the manifest's first dispatched event), or null when the
+ * file is missing or holds no such line. "Last at or before" is deliberate:
+ * mmo-log.mjs appends, so a reused run id carries the earlier run's
+ * `run.start` in the same file, and the earlier one must not stretch this
+ * run's window back over the earlier run's messages. A `run.start` AFTER
+ * the first dispatch cannot belong to this run (clock skew, a stale copy)
+ * and is ignored the same way.
+ */
+export function runStartFromLog(logPath, notAfterMs) {
+  if (!logPath || !existsSync(logPath)) return null;
+  let best = null;
+  for (const line of readFileSync(logPath, "utf-8").split("\n")) {
+    const m = RUN_START_LINE.exec(line);
+    if (!m) continue;
+    const ms = Date.parse(m[1]);
+    if (!Number.isFinite(ms) || ms > notAfterMs) continue;
+    if (best == null || ms > best.ms) best = { ms, iso: m[1] };
+  }
+  return best;
+}
 
 // Runs write `policy`/`run_id`; `buildManifest`'s shape says `policy_name`/`pass`.
 // Read both spellings — a manifest key the reader does not recognise otherwise
@@ -499,14 +543,39 @@ export async function main(argv = process.argv.slice(2)) {
     throw new Error(`no manifest.json in ${passDir} — is this a run's pass directory?`);
   }
   const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
-  const windowStartMs = Date.parse(manifest.started_at);
+  const firstDispatchMs = Date.parse(manifest.started_at);
   const windowEndMs = Date.parse(manifest.ended_at);
-  if (!Number.isFinite(windowStartMs) || !Number.isFinite(windowEndMs)) {
+  if (!Number.isFinite(firstDispatchMs) || !Number.isFinite(windowEndMs)) {
     throw new Error(`manifest.json has no parseable started_at/ended_at — cannot anchor the run window`);
   }
+  const projectRoot = resolve(args.projectRoot ?? process.cwd());
+
+  // The window OPENS at the driver's own `run.start`, not at the manifest's
+  // `started_at` (header, fact 5). `started_at` is the first DISPATCHED event;
+  // the driver's setup work before it — preflight, reading the brief, the
+  // requirements phase up to its first packet — is billed to the same session
+  // and was silently dropped when the window opened at the dispatch: 22% of
+  // the driver's spend on a real run, and a receipt check that failed for
+  // it. The prompt logs `run.start` with `--run-id --project-root`, so the
+  // file is `<project-root>/.sdlc/runs/<run-id>/orchestrator.log` in both
+  // modes; brownfield's output directory IS that directory, so the pass
+  // directory's own log is the second place to look. No line → `started_at`,
+  // and the window line below says which anchor was used.
+  const runLogCandidates = [
+    join(projectRoot, ".sdlc", "runs", String(manifestPassId(manifest)), "orchestrator.log"),
+    join(passDir, "orchestrator.log"),
+  ];
+  let runStart = null;
+  for (const p of runLogCandidates) {
+    const found = runStartFromLog(p, firstDispatchMs);
+    if (found) { runStart = { ...found, path: p }; break; }
+  }
+  const windowStartMs = runStart ? runStart.ms : firstDispatchMs;
+  const windowStartLabel = runStart
+    ? `${runStart.iso} (run.start in ${runStart.path})`
+    : `${manifest.started_at} (manifest started_at = first dispatched event; no run.start line in ${runLogCandidates[0]})`;
 
   const { policyMod, routingMod, pricingMod } = await loadDist();
-  const projectRoot = resolve(args.projectRoot ?? process.cwd());
   // Default to the policy the run recorded — pricing overhead under any
   // other policy would attribute dollars the run never saw.
   const policy = args.policyPath
@@ -553,11 +622,20 @@ export async function main(argv = process.argv.slice(2)) {
   // those files belongs to the invocation the receipt bills — including the
   // ones after `ended_at` (the session keeps going: writes the summary, runs
   // this collector). Bounding them would make a complete transcript look
-  // short of its receipt. The lower bound stays: a resumed session id can
-  // carry an earlier run.
+  // short of its receipt. The lower bound stays (opened at run.start, see
+  // above): a resumed session id can carry an earlier run.
   const { tokens, stats, observedModels } = sumTranscriptUsage(files, windowStartMs, sessionScoped ? Number.POSITIVE_INFINITY : effectiveEndMs);
 
-  console.log(`collect-orchestrator-usage: pass '${manifestPassId(manifest)}' window ${manifest.started_at} → ${manifest.ended_at} (±5m)`);
+  console.log(`collect-orchestrator-usage: pass '${manifestPassId(manifest)}' window ${windowStartLabel} → ${manifest.ended_at} (±5m)`);
+  if (runStart && firstDispatchMs - runStart.ms > 60 * 60_000) {
+    // Not an error — a gate left open before the first dispatch does this —
+    // but a stale log under a reused run id looks the same, so say it.
+    console.error(
+      `NOTE: run.start is ${Math.round((firstDispatchMs - runStart.ms) / 60_000)} minutes before the first dispatched ` +
+        `event. The window opens at run.start; if this run reused an earlier run's id, check ${runStart.path} ` +
+        `holds this run's own run.start line (the receipt cross-check below is the referee).`
+    );
+  }
   console.log(`transcripts: ${tDir}${sessionScoped ? ` (scan pinned to session ${receipt.session_id}; no upper time bound)` : ""}`);
   console.log(
     `scanned ${stats.files} file(s), ${stats.lines} line(s): counted ${stats.counted} unique API message(s) ` +
@@ -734,7 +812,8 @@ export async function main(argv = process.argv.slice(2)) {
         `collect-orchestrator-usage FAILED: the transcript-priced overhead ($${transcriptCost}) is ${pct} BELOW the CLI's own ` +
           `receipt ($${receipt.total_cost_usd}), past the ${(args.receiptTolerance * 100).toFixed(0)}% tolerance. The receipt cannot ` +
           `over-report, so the transcript tree is missing billed messages — usually a subagent transcript not copied ` +
-          `alongside the session file, a window that starts too late, or (when the scan is not pinned to the receipt's ` +
+          `alongside the session file, a run log with no run.start line (the window then opens at the first dispatch, ` +
+          `after the driver's setup work), or (when the scan is not pinned to the receipt's ` +
           `session) the session continuing past ended_at + 5m. Nothing was written. Fix the input; do not widen ` +
           `--receipt-tolerance to pass.`
       );

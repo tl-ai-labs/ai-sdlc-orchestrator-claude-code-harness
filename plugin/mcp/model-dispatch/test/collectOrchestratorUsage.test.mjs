@@ -777,3 +777,136 @@ test("both manifest spellings produce identical accounting", () => {
     rmSync(builder.root, { recursive: true, force: true });
   }
 });
+
+// ─── Window anchor: run.start, not the first dispatched event ───────────────
+// The manifest's started_at is the first DISPATCHED event. The driver's own
+// setup work runs minutes before it in the same session; opening the window
+// at the dispatch dropped 22% of a real run's driver spend (v37-agsdk-1,
+// 2026-09-05) and the receipt check refused the figure. The window now opens
+// at the `run.start` line the orchestrator prompt logs through mmo-log.mjs.
+import { runStartFromLog } from "../../../scripts/collect-orchestrator-usage.mjs";
+
+const ANCHOR_POLICY = `
+version: 1
+name: check-anchor
+models:
+  - id: driver
+    adapter: builtin-anthropic
+    model_name: claude-opus-4-8
+    pricing: { input: 1, input_cached: 0.1, output: 10 }
+rules:
+  - default: driver
+`;
+// Timeline (all 2026-09-05Z). run.start 18:53:03; first dispatch 19:05:00;
+// last dispatch 19:06:00. The old window opened at 19:00:00 (dispatch − 5m).
+const RUN_START = "2026-09-05T18:53:03.107Z";
+const ANCHOR_MANIFEST = { pass: "r-anchor", policy_name: "check-anchor", started_at: "2026-09-05T19:05:00.000Z", ended_at: "2026-09-05T19:06:00.000Z", totals: { dispatched_cost_usd: 0.5, models_used: ["gemini-3.5-flash"] } };
+const ANCHOR_TELEMETRY = [{ pass: "r-anchor", phase: "codegen", task_id: "t-1", provenance: "vendor", model: "gemini-3.5-flash", model_id: "worker", cost_usd: 0.5 }];
+// 1,000,000 output tokens at $10/M = $10.00 per message; four candidates:
+const ANCHOR_LINES = [
+  line("m_old", "claude-opus-4-8", 1_000_000, "2026-09-05T18:40:00.000Z"),   // 13m before run.start: outside
+  line("m_setup", "claude-opus-4-8", 1_000_000, "2026-09-05T18:51:30.000Z"), // 1.5m before run.start: inside the slack
+  line("m_pre", "claude-opus-4-8", 1_000_000, "2026-09-05T18:56:00.000Z"),   // after run.start, 9m before the first dispatch: THE BUG
+  line("m_in", "claude-opus-4-8", 1_000_000, "2026-09-05T19:05:30.000Z"),    // between the dispatches
+];
+// The CLI billed the three messages that belong to the run: $30.
+const ANCHOR_RECEIPT = { total_cost_usd: 30, modelUsage: { "claude-opus-4-8": { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 3_000_000, costUSD: 30 } } };
+const runLogLine = (iso, event = "run.start", fields = "run_id=r-anchor mode=greenfield") => `MMO: ${iso} INFO   ${event} ${fields}`;
+const withRunLog = (fix, lines, where = "sdlc") => {
+  const dir = where === "sdlc" ? join(fix.root, ".sdlc", "runs", "r-anchor") : fix.passDir;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "orchestrator.log"), lines.join("\n") + "\n");
+};
+const anchorRun = () => mkRun({ policy: ANCHOR_POLICY, manifest: ANCHOR_MANIFEST, telemetry: ANCHOR_TELEMETRY, transcripts: { "sess-a.jsonl": ANCHOR_LINES }, receipt: ANCHOR_RECEIPT });
+
+test("the window opens at run.start: a driver message before the first dispatch is counted and the receipt verifies", () => {
+  const fix = anchorRun();
+  try {
+    withRunLog(fix, [runLogLine(RUN_START), runLogLine("2026-09-05T18:53:27.000Z", "phase.start", "run_id=r-anchor phase=requirements_analysis")]);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, new RegExp(`window ${RUN_START.replace(/\./g, "\\.")} \\(run\\.start in .*\\.sdlc/runs/r-anchor/orchestrator\\.log\\)`));
+    assert.match(r.stdout, /counted 3 unique API message\(s\)/);
+    assert.match(r.stdout, /1 outside window/);
+    assert.match(r.stdout, /receipt cross-check: transcript \$30 vs receipt \$30 → \+0\.0%/);
+    assert.match(r.stdout, /receipt-verified/);
+    assert.doesNotMatch(r.stderr, /NOTE: run\.start is/); // 12 minutes, well under the stale-log note's hour
+  } finally { fix.rm(); }
+});
+
+test("without a run.start line the window falls back to the manifest's started_at, says so, and the receipt check exposes the gap", () => {
+  const fix = anchorRun();
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stdout, /window 2026-09-05T19:05:00\.000Z \(manifest started_at = first dispatched event; no run\.start line in .*\.sdlc\/runs\/r-anchor\/orchestrator\.log\)/);
+    // Only m_in survives: m_pre (9m before the dispatch) and m_setup are outside the old window.
+    assert.match(r.stdout, /counted 1 unique API message\(s\)/);
+    assert.match(r.stdout, /3 outside window/);
+    assert.match(r.stdout, /transcript \$10 vs receipt \$30 → -66\.7%/);
+    assert.match(r.stderr, /a run log with no run\.start line/);
+  } finally { fix.rm(); }
+});
+
+test("a reused run id: the LAST run.start at or before the first dispatch wins, and the earlier run's messages stay outside", () => {
+  const fix = anchorRun();
+  try {
+    // Yesterday's run under the same id, appended first; its message must not be swept in.
+    const yesterday = line("m_yesterday", "claude-opus-4-8", 1_000_000, "2026-09-04T19:00:00.000Z");
+    writeFileSync(join(fix.root, "transcripts", "sess-a.jsonl"), [yesterday, ...ANCHOR_LINES].join("\n") + "\n");
+    withRunLog(fix, [runLogLine("2026-09-04T18:53:03.000Z"), runLogLine("2026-09-04T19:30:00.000Z", "run.end", "run_id=r-anchor outcome=completed"), runLogLine(RUN_START)]);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, new RegExp(`window ${RUN_START.replace(/\./g, "\\.")} \\(run\\.start`));
+    assert.match(r.stdout, /counted 3 unique API message\(s\)/);
+    assert.match(r.stdout, /2 outside window/);
+  } finally { fix.rm(); }
+});
+
+test("a run.start stamped after the first dispatch cannot be this run's: ignored, fallback to started_at", () => {
+  const fix = anchorRun();
+  try {
+    withRunLog(fix, [runLogLine("2026-09-05T19:10:00.000Z")]);
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stdout, /manifest started_at = first dispatched event; no run\.start line/);
+  } finally { fix.rm(); }
+});
+
+test("brownfield shape: the run log inside the pass directory itself is the second place looked", () => {
+  const fix = anchorRun();
+  try {
+    withRunLog(fix, [runLogLine(RUN_START)], "pass");
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /\(run\.start in .*\/pass\/orchestrator\.log\)/);
+    assert.match(r.stdout, /counted 3 unique API message\(s\)/);
+  } finally { fix.rm(); }
+});
+
+test("a run.start more than an hour before the first dispatch is used, and flagged for the stale-log case", () => {
+  const fix = anchorRun();
+  try {
+    withRunLog(fix, [runLogLine("2026-09-05T17:00:00.000Z")]);
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /NOTE: run\.start is 125 minutes before the first dispatched event/);
+    // m_old (18:40) is now inside; all four count and the transcript sits over the receipt (the floor).
+    assert.match(r.stdout, /counted 4 unique API message\(s\)/);
+  } finally { fix.rm(); }
+});
+
+test("runStartFromLog reads the line format the loggers emit, with or without the MMO: prefix, and ignores other events", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mmo-runstart-"));
+  try {
+    const p = join(dir, "orchestrator.log");
+    const notAfter = Date.parse("2026-09-05T19:05:00Z");
+    writeFileSync(p, ["MMO: 2026-09-05T18:53:27.211Z INFO   phase.start run_id=x phase=requirements_analysis", "MMO: 2026-09-05T18:53:03.107Z INFO   run.start run_id=x mode=greenfield", ""].join("\n"));
+    assert.deepEqual(runStartFromLog(p, notAfter), { ms: Date.parse("2026-09-05T18:53:03.107Z"), iso: "2026-09-05T18:53:03.107Z" });
+    writeFileSync(p, "2026-09-05T18:53:03.107Z INFO   run.start run_id=x\n"); // MMO_LOG_PREFIX=""
+    assert.equal(runStartFromLog(p, notAfter).iso, "2026-09-05T18:53:03.107Z");
+    writeFileSync(p, "MMO: 2026-09-05T18:53:03.107Z INFO   run.started run_id=x\n"); // not the event
+    assert.equal(runStartFromLog(p, notAfter), null);
+    assert.equal(runStartFromLog(join(dir, "missing.log"), notAfter), null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
