@@ -11,7 +11,7 @@ The AI-SDLC Orchestrator plugin ships in two modes:
   one Gate 0 confirmation screen, run the pipeline with a non-destructive write contract that
   guarantees off-limits files stay untouched.
 
-Both modes share the same install (SETUP.md), same policies (`opus-only` / `opus-plus-flash`),
+Both modes share the same install (SETUP.md), same policies (e.g. `opus-only` / `opus-plus-flash`),
 same MCP dispatch layer. What differs is what happens after the setup check completes.
 
 This doc walks brownfield end-to-end. For the greenfield equivalent see [/mmo:greenfield's operating

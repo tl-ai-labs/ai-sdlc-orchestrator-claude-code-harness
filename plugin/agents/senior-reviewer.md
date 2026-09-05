@@ -1,7 +1,6 @@
 ---
 name: senior-reviewer
 description: Senior code reviewer. Reads generated code module-by-module and emits a structured review with refinement TaskPackets for any defects. Invoked by the orchestrator during the senior_code_review phase.
-model: opus
 tools: Read, Glob, Grep, Bash, Write
 ---
 

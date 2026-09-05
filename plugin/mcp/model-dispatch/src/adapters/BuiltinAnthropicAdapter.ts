@@ -123,9 +123,15 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
         .trim();
 
       const usage = resp.usage as any;
+      // Cache WRITES get their own bucket. They used to be folded into
+      // `input` and priced at the fresh rate — a ~20% undercount on the
+      // written tokens, since Anthropic bills cache writes at a premium
+      // (computeCostUsd prices this bucket at input × 1.25 unless the
+      // policy declares an explicit input_cache_write rate).
       const attemptTokens = {
-        input: (usage?.input_tokens ?? 0) + (usage?.cache_creation_input_tokens ?? 0),
+        input: usage?.input_tokens ?? 0,
         input_cached: usage?.cache_read_input_tokens ?? 0,
+        input_cache_write: usage?.cache_creation_input_tokens ?? 0,
         output: usage?.output_tokens ?? estimateTokens(text),
       };
       const stopReason = resp.stop_reason as string | undefined;
@@ -194,9 +200,10 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
       (acc, a) => ({
         input: acc.input + a.tokens.input,
         input_cached: acc.input_cached + a.tokens.input_cached,
+        input_cache_write: acc.input_cache_write + (a.tokens.input_cache_write ?? 0),
         output: acc.output + a.tokens.output,
       }),
-      { input: 0, input_cached: 0, output: 0 },
+      { input: 0, input_cached: 0, input_cache_write: 0, output: 0 },
     );
     const totalCost = attempts.reduce((s, a) => s + a.cost_usd, 0);
     const totalLatency = attempts.reduce((s, a) => s + a.latency_ms, 0);

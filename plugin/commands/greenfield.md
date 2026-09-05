@@ -65,11 +65,14 @@ If several exist, list them and ask which.
 
 **b. A brief the user names.** If the user has a brief elsewhere, ask for the path and read it.
 
-**c. A brief that ships with the plugin.** Offer the three shipped examples, described in one line
+**c. A brief that ships with the plugin.** Offer the four shipped examples, described in one line
 each so the choice is meaningful. Say plainly how long each takes, because the difference is
-minutes versus hours and the user is paying for it. All three paths are inside the installed
+minutes versus hours and the user is paying for it. All four paths are inside the installed
 plugin, not the working directory — the user is typically standing in an empty folder, where no
 repository file exists:
+- `${CLAUDE_PLUGIN_ROOT}/examples/unit-convert/brief.md` — one endpoint converting Celsius to
+  Fahrenheit, three responses, no database. The shortest brief here, and the only one with no
+  recorded pass in the repo, so a run against it cannot be mistaken for a replay of one.
 - `${CLAUDE_PLUGIN_ROOT}/examples/quick-demo/brief.md` — a one-endpoint ping service on Express,
   no database. The one to pick to see the pipeline end to end: minutes, not hours, and a fraction
   of the cost.
@@ -139,7 +142,20 @@ empty, setup wasn't run for this project — stop and tell the user to run setup
 ([SETUP.md](../../SETUP.md), §5b). Do not proceed to spend anything without a policy the user
 has explicitly picked or explicitly kept as the shipped default.
 
-Load `${CLAUDE_PLUGIN_ROOT}/config/policies/<resolved-name>.yaml`.
+Resolve the policy through the `load_policy` MCP tool, passing `policy_name: <resolved-name>` and
+`project_root: $(pwd)`. Do **not** read the preset YAML from
+`${CLAUDE_PLUGIN_ROOT}/config/policies/` yourself: the loader's precedence puts a repo-local
+`<project root>/routing-policy.yaml` ahead of the named preset, and reading the preset file
+directly is exactly the bug that made greenfield preview one policy while the run priced under
+another. Passing `project_root` here also fixes it for the rest of the run: the server remembers
+the first root a caller supplies and reuses it for any later call that omits one, so the preview
+and every billed dispatch resolve through the same loader. Keep passing it on each
+`execute_with_model` anyway — the fallback is a safety net, not a licence to drop the argument.
+
+The plan preview must state which policy file won and where it came from — one line, e.g.
+`Policy: project override (routing-policy.yaml)` or `Policy: preset opus-plus-flash` — so a
+surprise override is visible before anything is billed. To tell the two apart, check whether
+`<project root>/routing-policy.yaml` exists: if it does, the loader used it.
 
 Report, in a short list:
 - which model handles the judgment phases — requirements, design, task planning, senior review,
@@ -189,6 +205,10 @@ The run records tokens and cost in one of two modes. Present the choice; do not 
   reports. Requires `ANTHROPIC_API_KEY`. Use this whenever the numbers will be shown to anyone.
 - **Estimated** — the judgment-phase tokens are estimated from character counts. No API key needed;
   a Claude Code subscription covers the run. The mechanical-phase numbers are still vendor-reported.
+  This mode also requires `CLAUDE_CODE_SUBAGENT_MODEL` to have been exported before `claude`
+  launched, set to the policy's driver model — the orchestrator's run-start check stops the run
+  otherwise and prints the exact export line, because the driver subagents execute whatever that
+  variable names while the policy only prices the work.
 
 If `ANTHROPIC_API_KEY` is set, recommend vendor and say why: the numbers reconcile against the
 console. If it is absent, recommend estimated and say what is lost: the judgment-phase figures are

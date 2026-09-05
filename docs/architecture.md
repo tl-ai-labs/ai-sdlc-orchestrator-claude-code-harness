@@ -31,7 +31,7 @@ Additional plugin content:
 | [plugin/skills/pipeline/](../plugin/skills/pipeline/) | Skill body loaded by the orchestrator. |
 | [plugin/skills/brownfield-guide/](../plugin/skills/brownfield-guide/) | The shared seven-step brownfield manual. Every brownfield entry point (`brownfield.md` and the seven job commands) points here; step 4 branches on the `intent` / `seed_description` handover. |
 | [plugin/hooks/hooks.json](../plugin/hooks/hooks.json) | `PostToolUse` hook matching the MCP tool name under both install routes. |
-| [plugin/config/policies/](../plugin/config/policies/) | Shipped policy YAMLs (`opus-only`, `opus-plus-flash`). |
+| [plugin/config/policies/](../plugin/config/policies/) | Shipped policy YAMLs. The directory listing is the authoritative preset set (`opus-plus-flash` is the default; the loader's not-found error prints the live list). |
 | [plugin/policy-console/](../plugin/policy-console/) | Single-page HTML console + tiny http server, used at setup to pick or author the per-project policy. |
 | `.sdlc/project.json` | Per-project state file. Fields: `default_policy` (name of the policy every run in this folder uses when `--policy` is not passed), `off_limits_default` (constant paths never touched by brownfield writes — merged with Gate 0 additions), `last_updated_at`, `schema_version: 2`. Written by `setup-policy.mjs` and consumed by every task command. |
 
@@ -79,7 +79,7 @@ Policies live under [plugin/config/policies/](../plugin/config/policies/) as YAM
 
 Two pre-rename spellings still work, each warning once to stderr instead of failing (MMO-D8): the env var `SDLC_SELECT` (read when `MMO_SELECT` is unset) and the adapter id `mcp:gemini-flash-server` (accepted anywhere `mcp:model-dispatch` is).
 
-`simulate_policy` replays events against a different policy using the current run's slot choices, so a what-if on a slotted policy prices the tier this install would actually dispatch to.
+`simulate_policy` replays events against a different policy using the current run's slot choices, so a what-if on a slotted policy prices the tier this install would actually dispatch to. It takes the same policy arguments as its siblings — `policy_name`, `project_root`, `policy_path` — and resolves them through the same loader, so a project with a repo-local `routing-policy.yaml` simulates against the policy its runs actually use (the handler used to drop `project_root`, silently pricing the shipped preset instead). Replayed events are priced by the same `computeCostUsd` the live path uses, on the same disjoint buckets the event stores (`input_tokens` is already the fresh count), so a what-if cannot disagree with the dollars the run logged for the same tokens. It used to subtract `input_tokens_cached` from `input_tokens` before pricing — a second subtraction that under-priced every cache-hit event and sent cache-heavy replays negative — and it never priced the 1-hour cache-write tier.
 
 ## 4. Adapters
 

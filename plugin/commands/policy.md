@@ -117,7 +117,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --policy=<name> --project-
 
 No browser. The script validates `<name>` against files in `plugin/config/policies/`, writes it to
 `.sdlc/project.json.default_policy`, and exits. Fails if `<name>` doesn't exist on disk — offer
-`/mmo:policy change` to author it, or list the shipped presets (`opus-only`, `opus-plus-flash`).
+`/mmo:policy change` to author it, or list the shipped presets (the `.yaml` filenames under
+`plugin/config/policies/` — read the directory rather than reciting names, so the list can
+never go stale).
 
 # Notes
 

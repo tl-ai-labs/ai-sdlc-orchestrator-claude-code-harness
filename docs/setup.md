@@ -30,10 +30,20 @@ The pipeline reaches four surfaces. You need at least one Anthropic surface for 
 | Variable | Type | Default | Required when | Description |
 |---|---|---|---|---|
 | `ANTHROPIC_API_KEY` | string | — | `--auth=vendor` | API key from [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys). Not needed under `--auth=estimated`, which uses the Claude Code subscription. |
+| `CLAUDE_CODE_SUBAGENT_MODEL` | string | — | `--auth=estimated` | The model the five driver subagents actually **execute** on. Must be set **before `claude` launches** (an export inside the session runs in a child shell and never reaches the CLI process) and must equal the policy's driver `model_name`. In a terminal, set it with `export`; from the desktop app, put it in the `env` block of `~/.claude/settings.json`, because Claude Code launched from the app inherits no login shell and never sees a shell export, and it does not read an `env` block from a project's `.claude/settings.json` at all. That user file is machine-wide — it pins the driver model for every session on this machine, including runs unrelated to this one, so remove the entry when you are done — print that with `node plugin/scripts/driver-model-check.mjs --project-root "$(pwd)" --print-only` plus the run's policy arguments. Without it the driver tier runs on whatever the session's model is while the report prices the policy's, which misattributes every driver dollar. Irrelevant under `--auth=vendor`, where every call dispatches through the server. |
 
-**Verify:** `verify-setup.mjs`. Under `vendor` an unset key is a blocking pre-flight halt; under `estimated` it is inert.
+**Verify:** `verify-setup.mjs`. Under `vendor` an unset key is a blocking pre-flight halt; under `estimated` it is inert. Under `estimated` the orchestrator additionally runs `plugin/scripts/driver-model-check.mjs` at run start and halts — printing the exact export line — when `CLAUDE_CODE_SUBAGENT_MODEL` is unset or does not match the policy's driver model. The driver agent files deliberately carry no `model:` frontmatter pin: a pin would silently override the policy, executing one model while the pricing block priced another.
 
-### Gemini as a model — AI Studio (API key)
+### Anthropic via Claude subscription — the `claude-cli` adapter
+
+A policy model whose `adapter:` is `claude-cli` (the `opus-plus-sonnet-max` policy's mechanical tier is the shipped example) is dispatched through the local `claude -p` subprocess instead of the Anthropic API. The subscription's OAuth session backs the request, so `ANTHROPIC_API_KEY` is not involved on this path even under `--auth=vendor`.
+
+| Requirement | Description |
+|---|---|
+| `claude` binary on PATH | The adapter probes `claude --version` at startup and refuses the model with an actionable error if the binary is missing. |
+| Logged-in Claude Code | A Claude Pro / Max / Team subscription session (`/login`). The CLI surfaces its own auth errors; the plugin does not probe OAuth state itself. |
+
+Cost on this path is vendor-correct without a key: the CLI reports `total_cost_usd` on every call and the adapter copies it into the event verbatim rather than re-deriving from token counts. Each call spawns a fresh `claude` process, which re-sends ~17k tokens of session context; that overhead shows up as cache-write tokens in the telemetry and is billed at the reduced cache-write rate.
 
 | Variable | Type | Default | Required when | Description |
 |---|---|---|---|---|
@@ -148,7 +158,7 @@ On the plugin route, [SETUP.md](../SETUP.md) §5b puts the choice to you. Four o
 
 | Option | What happens | When to pick it |
 |---|---|---|
-| **Open the browser to author or customize a policy** | Starts `plugin/policy-console/` (a single HTML page served by a tiny Node http server) on the first free port from 3000, opens the browser, watches `plugin/config/policies/` via `fs.watch`. Clicking Save writes a new YAML and the script auto-detects the write. | Any non-preset policy — different thinking budgets per phase, custom model per task-type, a policy that pins a region. |
+| **Open the browser to author or customize a policy** | Starts `plugin/policy-console/` (a single HTML page served by a tiny Node http server) on the first free port from 3000, opens the browser, watches `plugin/config/policies/` via `fs.watch`. Clicking Save writes a new YAML and the script auto-detects the write. The save lands inside the installed plugin's `config/policies/`, which `/plugin update` replaces wholesale — to keep a custom policy across updates, copy it to `<project root>/routing-policy.yaml`, which the loader prefers automatically. | Any non-preset policy — different thinking budgets per phase, custom model per task-type, a policy that pins a region. |
 | **`opus-plus-flash`** (recommended) | Silent set. Claude Opus for judgment phases, Gemini 3.5 Flash for mechanical (codegen, tests, docs). | The cost-efficient default. |
 | **`opus-only`** | Silent set. Claude Opus for every phase. | Single-model baseline, or when Gemini access is unavailable. |
 | **Skip** | Leaves `default_policy` unset. `/mmo:greenfield` and `/mmo:brownfield` refuse to start until a policy is picked. | Almost never. Prefer picking `opus-plus-flash` and changing later. |

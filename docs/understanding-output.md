@@ -74,13 +74,16 @@ That gives you what changed *while the worker held the directory*. It is not pro
 
 ### Costs
 
-Three lines:
-
 - **SDLC task cost** — the same number as "SDLC task total" above. Repeated here for the cost-focused reader.
-- **Runner overhead** — the cost of phases that aren't SDLC-productive per se: the orchestrator's planning turns, file reads, debug loops, shell operations. These are legitimate work the orchestrator does, but they're distinct from the code-producing SDLC phases.
-- **Total session cost** — SDLC + overhead. If the manifest has a session-level cost figure from Claude Code, that is used as the authoritative total; otherwise the total is the arithmetic sum.
+- **Runner overhead** — the cost of *dispatched* phases that aren't SDLC-productive per se: preflight, retries, shell-adjacent packets. Despite the name, this is **not** the orchestrator's own loop — that never passes through telemetry at all.
+- **Session total — dispatched work only** — SDLC + runner overhead. Every dollar above this line came through the MCP server (or was logged to it by the direct tier).
 
-The two-line breakdown exists so the total is not surprising. On a pass where the orchestrator does a lot of debugging (e.g., a test failure forces multiple retries), the overhead line can be a meaningful fraction of the total. That is real cost.
+What happens next depends on whether the orchestrator-overhead collector has run:
+
+- **Before the collector**: the report prints an `EXCLUDES ORCHESTRATOR OVERHEAD` caveat under the total — the orchestrator session's own reasoning, file reads, and re-sent conversation are missing, and on measured runs that overhead exceeded the dispatched figure by ~100×. The caveat includes the exact command to fix it.
+- **After the collector** (`node plugin/scripts/collect-orchestrator-usage.mjs <pass-dir>`): two more lines appear — **Orchestrator overhead (transcript-measured)** and **True total (dispatched + orchestrator)**. The true total is the only figure that compares architectures fairly. On estimated-mode runs the report also prints the estimator-overlap note (driver-tier judgment work exists both as estimated events and inside the transcripts, so the true total is conservative by up to the estimated subtotal). When the run kept Claude Code's own result json (`claude-session.json`, or `--receipt`), a **receipt cross-check** line shows the transcript-priced figure against the CLI's own and the tool refuses (exit 3) if the transcript sits more than 5% below it; the manifest's `orchestrator_overhead` block records `cost_source`, `receipt_cost_usd` and the in-session dispatch that was subtracted so it is counted once.
+
+The report's header also carries a **Scope** line stating which of the two states the numbers are in. The dispatched breakdown exists so the total is not surprising; the scope labeling exists so the total is not *misread*. Full method in [methodology.md](methodology.md#the-orchestrators-own-cost-and-the-transcript-collector).
 
 ### Methodology
 
@@ -115,7 +118,9 @@ One JSON object per line. Key fields:
 }
 ```
 
-Fields the report reads: `phase`, `input_tokens`, `input_tokens_cached`, `output_tokens`, `cost_usd`, `success`. Everything else is available for downstream analysis.
+Fields the report reads: `phase`, `input_tokens`, `input_tokens_cached`, `input_tokens_cache_write`, `output_tokens`, `cost_usd`, `success`. Everything else is available for downstream analysis. `input_tokens_cache_write` is the cache-*write* bucket — prompt tokens written into the vendor's cache, billed at a premium over fresh input (1.25× unless the policy names an explicit rate) — kept separate from `input_tokens` precisely so that premium prices correctly.
+
+One line is special: after the post-run collector has run, the file gains a single `tier: "orchestrator"` event (`provenance: "transcript"`, phase `orchestrator_overhead`) holding the orchestrator session's own transcript-measured usage. Every dispatched aggregation — report tables, manifest totals, breakdowns — partitions that line out; it surfaces only in the report's overhead/true-total lines and the manifest's `orchestrator_overhead` block.
 
 `model` is the vendor's model name and `model_id` is the policy leaf that dispatched. They are usually redundant, and there is one case where they are not: a policy can offer two ways of reaching the same model — Gemini as a completion call or as an Antigravity agent — and both carry `"model": "gemini-3.5-flash"`. `model_id` (`flash-completion` or `flash-agsdk-worker`) is the only field that says which, and a `routing.select` object alongside it records the choice that led there. Group by `model_id`, not `model`, when the distinction matters. See [methodology.md](methodology.md#two-doors-to-the-mechanical-tier-and-how-the-report-tells-them-apart).
 
@@ -132,8 +137,10 @@ jq -r 'select(.phase=="codegen") | .cost_usd' examples/workforce-ops/passes/pass
 
 Aggregated form of the telemetry. Useful fields:
 
-- `total_cost_usd`, `total_input_tokens`, `total_output_tokens`
-- `phase_breakdown`, `module_breakdown`, `task_type_breakdown` — sub-rollups
+- `total_cost_usd`, `total_input_tokens`, `total_output_tokens`, `total_input_tokens_cache_write` — dispatched work only, always
+- `phase_breakdown`, `module_breakdown`, `task_type_breakdown` — sub-rollups (dispatched only)
+- `orchestrator_overhead` — present only after the collector has run: the transcript-measured cost and token buckets of the orchestrator's own session, kept in its own labeled block so it never blends into the dispatched figures
+- `true_total_cost_usd` — `total_cost_usd` + the overhead block's cost; the architecture-comparison number
 - `duration_sec`
 - `pass`, `policy_name`
 

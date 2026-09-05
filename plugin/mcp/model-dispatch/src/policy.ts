@@ -1,14 +1,21 @@
 /**
  * Policy loader & validator. Precedence:
- *   1. --policy=<name> (handled upstream)
- *   2. <projectRoot>/routing-policy.yaml
- *   3. plugin/config/policies/<name>.yaml
+ *   1. explicit policy_path — an upstream caller that wants a specific file
+ *      (e.g. an explicit --policy flag resolved to its preset path) routes it
+ *      through loadPolicyFromPath, which bypasses this loader's search
+ *   2. <projectRoot>/routing-policy.yaml — the repo-local override
+ *   3. plugin/config/policies/<name>.yaml — the shipped preset for policyName
+ *
+ * Inside loadPolicy itself the override at (2) always beats the name at (3):
+ * passing policy_name + project_root together means "use the project's file
+ * if it has one, else this preset".
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { Policy, ModelConfig } from "./types.js";
+import { KNOWN_ADAPTER_IDS } from "./adapters/index.js";
 
 const PLUGIN_POLICY_DIR = resolve(
   dirname(new URL(import.meta.url).pathname),
@@ -36,11 +43,32 @@ export function loadPolicy(opts: {
   if (!existsSync(presetPath)) {
     throw new Error(
       `Policy '${name}' not found at ${presetPath}. ` +
-        `Available: opus-only, opus-plus-flash. ` +
-        `Add your own by dropping a YAML in ${PLUGIN_POLICY_DIR}.`
+        `Available: ${shippedPresetNames()}. ` +
+        // Point at the repo-local override, not the plugin dir: the plugin
+        // cache is wiped by every /plugin update, so a YAML dropped there
+        // silently disappears. routing-policy.yaml lives in the project.
+        `Add your own as <projectRoot>/routing-policy.yaml (a YAML in ` +
+        `${PLUGIN_POLICY_DIR} is lost on every plugin update).`
     );
   }
   return validatePolicy(parseYaml(readFileSync(presetPath, "utf-8")));
+}
+
+/**
+ * The "Available:" list is read from disk on demand, never hardcoded — a
+ * hardcoded list already went stale once (it said two presets while seven
+ * shipped). Failure to read the directory degrades the message, not the error.
+ */
+function shippedPresetNames(): string {
+  try {
+    const names = readdirSync(PLUGIN_POLICY_DIR)
+      .filter((f) => f.endsWith(".yaml"))
+      .map((f) => f.slice(0, -".yaml".length))
+      .sort();
+    return names.length > 0 ? names.join(", ") : `(none found in ${PLUGIN_POLICY_DIR})`;
+  } catch {
+    return `(could not list ${PLUGIN_POLICY_DIR})`;
+  }
 }
 
 export function loadPolicyFromPath(path: string): Policy {
@@ -129,6 +157,18 @@ function validateSelect(raw: any, modelIds: Set<string>): Set<string> {
 function validateModel(m: any) {
   for (const key of ["id", "adapter", "model_name", "pricing"]) {
     if (!(key in m)) throw new Error(`Policy model: missing '${key}'`);
+  }
+  // The adapter id must be one the registry can actually construct. Without
+  // this check a typo'd `adapter:` passed validation and only failed when
+  // createAdapter ran mid-run — after the premium phases were already billed.
+  // KNOWN_ADAPTER_IDS is derived from the registry's own keys, so it can
+  // never drift from what createAdapter accepts.
+  if (!KNOWN_ADAPTER_IDS.has(m.adapter)) {
+    throw new Error(
+      `Policy model '${m.id}': unknown adapter '${m.adapter}'. ` +
+        `Known adapters: ${[...KNOWN_ADAPTER_IDS].join(", ")}. ` +
+        `Register new adapters in adapters/index.ts.`
+    );
   }
   for (const k of ["input", "input_cached", "output"]) {
     if (typeof m.pricing[k] !== "number") {

@@ -1,0 +1,186 @@
+/**
+ * Guards the report's true-cost rendering — the reader-facing half of the
+ * orchestrator-overhead fix. Quiet failures this pins against:
+ *   - the collector's `tier: "orchestrator"` event lands in "Runner overhead"
+ *     and silently blends the two spends (the exact bug class the collector
+ *     exists to prevent);
+ *   - a dispatched-only total renders without its scope caveat, and a reader
+ *     compares architectures from a number that undercounts one door ~100×;
+ *   - the report recomputes the true total instead of preferring the
+ *     manifest's, and the two files disagree;
+ *   - the Markdown branch drops any of the above.
+ *
+ * The report runs as a real subprocess against a fixture pass directory,
+ * because what is being tested is what a person sees. $0, offline.
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const REPORT = join(ROOT, "tools", "report.mjs");
+
+/** One dispatched telemetry event, minimal fields the report reads. */
+const event = (task_id, phase, cost, over = {}) => ({
+  task_id,
+  phase,
+  model: "m",
+  input_tokens: 1000,
+  output_tokens: 500,
+  cost_usd: cost,
+  provenance: "vendor",
+  success: true,
+  ...over,
+});
+
+/** The collector's overhead event, as collect-orchestrator-usage.mjs writes it. */
+const orchEvent = (cost, over = {}) => ({
+  task_id: "orchestrator-overhead-p1",
+  phase: "orchestrator_overhead",
+  model: "driver",
+  input_tokens: 100_000,
+  input_tokens_cached: 900_000,
+  input_tokens_cache_write: 300_000,
+  output_tokens: 50_000,
+  cost_usd: cost,
+  provenance: "transcript",
+  tier: "orchestrator",
+  success: true,
+  ...over,
+});
+
+/** Build a pass directory, run the report over it, return stdout. */
+function report({ events, manifest = {}, receipts = [], markdown = false }) {
+  const dir = mkdtempSync(join(tmpdir(), "report-truecost-"));
+  try {
+    writeFileSync(
+      join(dir, "manifest.json"),
+      JSON.stringify({ policy_name: "p", started_at: "2026-08-31T09:00:00Z", ...manifest })
+    );
+    writeFileSync(join(dir, "telemetry.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    if (receipts.length) {
+      mkdirSync(join(dir, "delegation"), { recursive: true });
+      for (const r of receipts) {
+        writeFileSync(join(dir, "delegation", `worker-delegation-${r.task_id}.json`), JSON.stringify(r, null, 2));
+      }
+    }
+    return execFileSync("node", markdown ? [REPORT, dir, "--markdown"] : [REPORT, dir], { encoding: "utf8" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Minimal delegation receipt (shape from buildDelegationRecord). */
+const receipt = (task_id, phase) => ({
+  schema: "delegation-record/1",
+  task_id,
+  phase,
+  model_id: "flash-agsdk-worker",
+  model_name: "gemini-3.5-flash",
+  started_at: "2026-08-31T09:00:00.000Z",
+  duration_ms: 90_000,
+  success: true,
+  cost_usd: 0.01,
+  tokens: {},
+  tool_calls: { count: 7, truncated: false, sample: [] },
+  files: { added: [], modified: [], removed: [], unchanged: 9, scanned: 9, truncated: false, unreadable: [] },
+});
+
+test("before the collector runs, every total is labeled dispatched-only and the report says how to fix it", () => {
+  const out = report({ events: [event("tp_1", "codegen", 0.1)] });
+  assert.match(out, /Scope: dispatched work only — excludes orchestrator overhead/);
+  assert.match(out, /— dispatched work only/);
+  assert.match(out, /EXCLUDES ORCHESTRATOR OVERHEAD/);
+  // The exact remediation — a reader can paste it.
+  assert.match(out, /collect-orchestrator-usage\.mjs/);
+  assert.doesNotMatch(out, /True total/);
+});
+
+test("the orchestrator event never blends into dispatched aggregations", () => {
+  const out = report({
+    events: [event("tp_1", "codegen", 0.1), event("tp_2", "planning", 0.02), orchEvent(3.7)],
+    manifest: {
+      total_cost_usd: 0.12,
+      orchestrator_overhead: { cost_usd: 3.7, input_tokens: 100_000, input_tokens_cached: 900_000, input_tokens_cache_write: 300_000, output_tokens: 50_000, events: 1, provenance: "transcript" },
+      true_total_cost_usd: 3.82,
+    },
+  });
+  // Model calls counts dispatched events only (2, not 3) — the overhead
+  // event is a reconstruction, not a call this run dispatched.
+  assert.match(out, /Model calls\s+2\b/);
+  // Runner overhead is the dispatched planning event alone; the $3.70 must
+  // not be inside it (that bucket is where an unpartitioned event lands).
+  assert.match(out, /Runner overhead\s+\$0\.0200/);
+  // The overhead phase never appears as an SDLC/overhead table row.
+  assert.doesNotMatch(out, /orchestrator_overhead\s+\S+\s+\d/);
+});
+
+test("with the collector's output present, Costs renders three labeled numbers and prefers the manifest's true total", () => {
+  const out = report({
+    events: [event("tp_1", "codegen", 0.1), orchEvent(3.7)],
+    manifest: {
+      total_cost_usd: 0.05,
+      orchestrator_overhead: { cost_usd: 3.7, input_tokens: 100_000, input_tokens_cached: 900_000, input_tokens_cache_write: 300_000, output_tokens: 50_000, events: 1, provenance: "transcript" },
+      // Deliberately NOT total + overhead of this fixture's events: the
+      // manifest is the collector's authoritative figure and must win over
+      // any recomputation.
+      true_total_cost_usd: 9.99,
+    },
+  });
+  assert.match(out, /Scope: dispatched work \+ orchestrator overhead/);
+  assert.match(out, /— dispatched work only\s+\$0\.0500/);
+  assert.match(out, /Orchestrator overhead \(transcript-measured\)\s+\$3\.7000/);
+  assert.match(out, /True total \(dispatched \+ orchestrator\)\s+\$9\.9900/);
+});
+
+test("telemetry-only overhead (manifest not yet patched) still renders a true total from the events", () => {
+  const out = report({ events: [event("tp_1", "codegen", 0.1), orchEvent(2)] });
+  // sessionCost falls back to the dispatched sum (0.1); true total = 2.1.
+  assert.match(out, /Orchestrator overhead \(transcript-measured\)\s+\$2\.0000/);
+  assert.match(out, /True total \(dispatched \+ orchestrator\)\s+\$2\.1000/);
+});
+
+test("the delegation table warns hard against door comparisons until the collector has run, then softens", () => {
+  const base = { events: [event("tp_1", "codegen", 0.1), event("tp_2", "codegen", 0.05)], receipts: [receipt("tp_2", "codegen")] };
+  const before = report(base);
+  assert.match(before, /Do not compare architectures/);
+  const after = report({ ...base, events: [...base.events, orchEvent(2)] });
+  assert.match(after, /only the true total there compares architectures fairly/);
+  assert.doesNotMatch(after, /Do not compare architectures/);
+});
+
+test("the Markdown branch carries the same scope, three numbers, and warning", () => {
+  const out = report({
+    events: [event("tp_1", "codegen", 0.1), orchEvent(3.7)],
+    manifest: {
+      total_cost_usd: 0.05,
+      orchestrator_overhead: { cost_usd: 3.7, input_tokens: 100_000, input_tokens_cached: 900_000, input_tokens_cache_write: 300_000, output_tokens: 50_000, events: 1, provenance: "transcript" },
+      true_total_cost_usd: 3.75,
+    },
+    markdown: true,
+  });
+  assert.match(out, /\*\*Scope: dispatched work \+ orchestrator overhead\*\*/);
+  assert.match(out, /\| Orchestrator overhead \(transcript-measured\) \| \$3\.7000 \|/);
+  assert.match(out, /\*\*True total \(dispatched \+ orchestrator\)\*\* \| \*\*\$3\.7500\*\*/);
+});
+
+test("Markdown without the collector carries the dispatched-only caveat and the command", () => {
+  const out = report({ events: [event("tp_1", "codegen", 0.1)], markdown: true });
+  assert.match(out, /\*\*Scope: dispatched work only — excludes orchestrator overhead\*\*/);
+  assert.match(out, /Excludes orchestrator overhead/);
+  assert.match(out, /collect-orchestrator-usage\.mjs/);
+});
+
+test("tokens-in includes the cache-write bucket for column continuity", () => {
+  const out = report({
+    events: [event("tp_1", "codegen", 0.1, { input_tokens: 1000, input_tokens_cache_write: 500 })],
+  });
+  // 1000 fresh + 500 cache-write render as 1.5K in the tokens column —
+  // cache writes are billed input, and older reports counted them here.
+  assert.match(out, /codegen.*1\.5K \/ 500/);
+});

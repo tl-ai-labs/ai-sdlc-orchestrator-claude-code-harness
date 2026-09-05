@@ -4,7 +4,9 @@
  * runs (ticket §7.1, §10.1).
  *
  * Testing shape: subprocess-based, piping the Claude Code hook input shape
- * on stdin and asserting the exit code + stderr. Exit 0 = allow, 1 = deny.
+ * on stdin and asserting the exit code + stderr. Exit 0 = allow, 2 = deny
+ * (Claude Code's blocking hook exit code — 1 is a NON-blocking hook error
+ * that would let the write proceed, which is the bug these tests pin).
  * Fail-open: bad or missing contract → allow.
  */
 import { test } from "node:test";
@@ -78,7 +80,7 @@ test("denies a path that hits off_limits — even if it also matches allowlist",
   });
   try {
     const r = await runHook(dir, { tool_input: { file_path: ".env.production" } });
-    assert.equal(r.code, 1, "off_limits must deny even when allowlist would match");
+    assert.equal(r.code, 2, "off_limits must deny even when allowlist would match");
     assert.match(r.stderr, /off-limits/, "reason must name the rule class");
   } finally { cleanup(dir); }
 });
@@ -90,7 +92,7 @@ test("denies a path that is not in the allowlist (allowlist-default-deny)", asyn
   });
   try {
     const r = await runHook(dir, { tool_input: { file_path: "docs/README.md" } });
-    assert.equal(r.code, 1, "not-in-allowlist must deny in strict mode");
+    assert.equal(r.code, 2, "not-in-allowlist must deny in strict mode");
     assert.match(r.stderr, /not in the confirmed allowlist/i);
   } finally { cleanup(dir); }
 });
@@ -150,7 +152,7 @@ test("cross-repo write: denies an absolute path that resolves outside cwd's cont
     // cwd=repoA, target=absolute path in repoB. Upfront cwd-anchored escape
     // check fires: target is outside repoA's contracted tree → deny.
     const r = await runHook(repoA, { tool_input: { file_path: absTargetInB } });
-    assert.equal(r.code, 1, `escape must deny; stderr=${r.stderr}`);
+    assert.equal(r.code, 2, `escape must deny; stderr=${r.stderr}`);
     assert.match(r.stderr, /OUTSIDE the calling session's contracted repo|Cross-project writes/,
       "must be labeled as a category error, not just out-of-scope");
   } finally { cleanup(repoA); cleanup(repoB); }
@@ -171,7 +173,7 @@ test("cross-repo write with contract on BOTH sides: escape from A's contract is 
     // Relative path that escapes repoA when resolved against repoA.
     const escapingRelative = "../../../../etc/passwd";
     const r = await runHook(repoA, { tool_input: { file_path: escapingRelative } });
-    assert.equal(r.code, 1, `escape must deny; stderr=${r.stderr}`);
+    assert.equal(r.code, 2, `escape must deny; stderr=${r.stderr}`);
     assert.match(r.stderr, /OUTSIDE the contract's repo root|Cross-project writes/,
       "escape must be labeled as a category error, not just out-of-scope");
   } finally { cleanup(repoA); }
@@ -181,7 +183,7 @@ test("pre-contract safety net: denies .env write even when no contract exists", 
   const dir = makeRepo(undefined); // no contract
   try {
     const r = await runHook(dir, { tool_input: { file_path: ".env" } });
-    assert.equal(r.code, 1, "always-off-limits path must deny even without a contract");
+    assert.equal(r.code, 2, "always-off-limits path must deny even without a contract");
     assert.match(r.stderr, /always-off-limits/, "must name the safety-net rule");
   } finally { cleanup(dir); }
 });
@@ -190,7 +192,7 @@ test("pre-contract safety net: denies .mcp.json write even when no contract exis
   const dir = makeRepo(undefined);
   try {
     const r = await runHook(dir, { tool_input: { file_path: ".mcp.json" } });
-    assert.equal(r.code, 1, "MCP config write is refused pre-contract");
+    assert.equal(r.code, 2, "MCP config write is refused pre-contract");
     assert.match(r.stderr, /always-off-limits/);
   } finally { cleanup(dir); }
 });
@@ -217,8 +219,86 @@ test("target-anchored contract resolution: absolute target inside a contracted r
     const absTarget = join(contracted, "src", "should-not-be-written.ts");
     mkdirSync(join(contracted, "src"), { recursive: true });
     const r = await runHook(neutralCwd, { tool_input: { file_path: absTarget } });
-    assert.equal(r.code, 1, "target-anchored contract must be found and enforced");
+    assert.equal(r.code, 2, "target-anchored contract must be found and enforced");
     assert.match(r.stderr, /not in the confirmed allowlist/i,
       "allowlist-default-deny must trigger against the target's contract");
   } finally { cleanup(neutralCwd); cleanup(contracted); }
 });
+
+/*
+ * The run's own output directory. `.sdlc/**` sits in OFF_LIMITS_DEFAULT to stop
+ * the model hand-editing plugin state, and off-limits is evaluated before the
+ * allowlist — so before the carve-out an active contract refused the run the
+ * artifacts agents/orchestrator.md contractually requires it to write there.
+ * Once denials became blocking (exit 2) that stopped being cosmetic: a
+ * brownfield run failed at its first direct-tier write, and provenance.json —
+ * the file /mmo:revert restores from — was refused with it.
+ */
+const RUN_DIR_CONTRACT = {
+  schema_version: 1,
+  active: true,
+  strict: true,
+  run_id: "run-1",
+  allowlist: ["src/**"],
+  off_limits: [".env", ".sdlc/**", "dist/**"],
+};
+
+for (const artifact of ["requirements.md", "change_plan.md", "provenance.json"]) {
+  test(`the run's own .sdlc/runs/<run-id>/ artifact "${artifact}" is allowed under an active contract`, async () => {
+    const dir = makeRepo(RUN_DIR_CONTRACT);
+    try {
+      const r = await runHook(dir, { tool_input: { file_path: `.sdlc/runs/run-1/${artifact}` } });
+      assert.equal(r.code, 0, `${artifact} is auto-allowlisted; blocking it breaks the run that must write it`);
+    } finally { cleanup(dir); }
+  });
+}
+
+test("the carve-out is scoped to this run — another run's evidence directory stays denied", async () => {
+  const dir = makeRepo(RUN_DIR_CONTRACT);
+  try {
+    const r = await runHook(dir, { tool_input: { file_path: ".sdlc/runs/run-2/provenance.json" } });
+    assert.equal(r.code, 2, "a run must never write another run's evidence");
+  } finally { cleanup(dir); }
+});
+
+test("the carve-out does not open the rest of .sdlc — the contract file itself stays denied", async () => {
+  const dir = makeRepo(RUN_DIR_CONTRACT);
+  try {
+    const r = await runHook(dir, { tool_input: { file_path: ".sdlc/local/write-contract.json" } });
+    assert.equal(r.code, 2, "the contract must not be rewritable by the run it governs");
+  } finally { cleanup(dir); }
+});
+
+test("a contract with no run_id gets no carve-out", async () => {
+  const dir = makeRepo({ ...RUN_DIR_CONTRACT, run_id: undefined });
+  try {
+    const r = await runHook(dir, { tool_input: { file_path: ".sdlc/runs/run-1/requirements.md" } });
+    assert.equal(r.code, 2, "without a run_id there is no run directory to auto-allowlist");
+  } finally { cleanup(dir); }
+});
+
+/*
+ * The pre-contract safety net fires with no run context at all — in greenfield
+ * and in any repository that merely has the plugin installed. Since denials
+ * became blocking it must hold only paths that are unsafe to write anywhere;
+ * build output is not.
+ */
+for (const secret of [".env", ".env.production", ".mcp.json", ".git/config", ".claude/settings.local.json"]) {
+  test(`pre-contract safety net still denies "${secret}"`, async () => {
+    const dir = makeRepo(undefined);
+    try {
+      const r = await runHook(dir, { tool_input: { file_path: secret } });
+      assert.equal(r.code, 2, `${secret} is unsafe to write with no contract to scope it`);
+    } finally { cleanup(dir); }
+  });
+}
+
+for (const buildPath of ["dist/bundle.js", "build/out.css", ".next/server/page.js", "node_modules/react/index.js", ".sdlc/runs/run-1/manifest.json"]) {
+  test(`pre-contract safety net allows "${buildPath}" — build output and plugin state are not secrets`, async () => {
+    const dir = makeRepo(undefined);
+    try {
+      const r = await runHook(dir, { tool_input: { file_path: buildPath } });
+      assert.equal(r.code, 0, `${buildPath} must not be hard-blocked in every repo the plugin is installed in`);
+    } finally { cleanup(dir); }
+  });
+}

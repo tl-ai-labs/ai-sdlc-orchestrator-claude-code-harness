@@ -67,6 +67,29 @@ test("every other field is carried through untouched", () => {
   assert.equal(out.input_tokens, 9560);
 });
 
+test("an event with no provenance stamp defaults to \"estimated\"", () => {
+  // Direct-tier events are char-count estimates by construction — vendor-
+  // measured numbers only ever arrive via execute_with_model, which never
+  // routes through this normalizer. A model that forgets the stamp must not
+  // make the report disown the whole run's cost label as "unknown"
+  // (tools/report.mjs keys the label off this field).
+  const src = modelSuppliedEvent();
+  delete src.provenance;
+  const out = normalizeDirectTierEvent(src, new Date());
+  assert.equal(out.provenance, "estimated");
+});
+
+test("an explicit provenance stamp is passed through untouched", () => {
+  // The default only fills ABSENCE. A caller that stamped deliberately
+  // (e.g. the orchestrator-overhead collector writing "transcript" events)
+  // must not be silently re-labeled as an estimate.
+  const out = normalizeDirectTierEvent(
+    modelSuppliedEvent({ provenance: "transcript" }),
+    new Date(),
+  );
+  assert.equal(out.provenance, "transcript");
+});
+
 test("does not mutate the caller's event object", () => {
   const src = modelSuppliedEvent();
   normalizeDirectTierEvent(src, new Date());
