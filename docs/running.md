@@ -157,7 +157,15 @@ In interactive mode each gate prints the artifact and waits for your input; appr
 
 ## After the pass finishes
 
-Print a summary of the results:
+The pass's `total_cost_usd` is dispatched work only. Once the `claude` session has exited, measure the orchestrator's own loop and add it:
+
+```bash
+node plugin/scripts/collect-orchestrator-usage.mjs examples/workforce-ops/passes/pass1 --project-root "$PWD"
+```
+
+`--project-root` is the directory `claude` was started in; the run's `.sdlc/runs/<run-id>/orchestrator.log` lives under it. The collector finds the run's own invocation in the session transcript and prices it. When the run kept Claude Code's own result beside the manifest (`claude-session.json`, or the `live-run.log` of a `--output-format stream-json` run), it checks that figure token for token against the receipt: a match books the receipt's dollars as verified, a mismatch exits 3 and writes nothing. Run it again after every `--resume`; it replaces its earlier figure rather than adding to it.
+
+Then print a summary of the results:
 
 ```bash
 node tools/report.mjs examples/workforce-ops/passes/pass1
