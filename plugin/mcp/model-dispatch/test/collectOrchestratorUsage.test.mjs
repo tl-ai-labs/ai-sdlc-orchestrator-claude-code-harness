@@ -724,3 +724,56 @@ test("a headless capture with no result line yet is 'not final': transcript-pric
     assert.match(r2.stderr, /neither a JSON object nor a stream-json capture/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+/*
+ * The manifest is written by the orchestrator from a prose spec, and its keys
+ * drifted from `buildManifest`'s shape: real runs write `policy`/`run_id`
+ * where the builder says `policy_name`/`pass`. A reader that knows only one
+ * spelling does not fail — it silently reprices the run under whatever the
+ * loader falls back to. Same class as the `?? 0` case above, with a policy
+ * standing in for the zero.
+ */
+function fixtureWithManifestKeys(keys) {
+  const fix = makeFixture();
+  const path = join(fix.passDir, "manifest.json");
+  const manifest = JSON.parse(readFileSync(path, "utf-8"));
+  delete manifest.pass;
+  delete manifest.policy_name;
+  writeFileSync(path, JSON.stringify({ ...manifest, ...keys }, null, 2));
+  return fix;
+}
+
+test("a manifest in the shape real runs write is priced under the policy it names", () => {
+  const fix = fixtureWithManifestKeys({ run_id: "run-20260905T112215Z", policy: "check-collect" });
+  try {
+    const r = run(fix);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /pass 'run-20260905T112215Z'/);
+
+    const orch = readTelemetry(fix).at(-1);
+    assert.equal(orch.tier, "orchestrator");
+    // The policy the manifest named — not a fallback the run never chose.
+    assert.equal(orch.routing.policy_name, "check-collect");
+    assert.equal(orch.pass, "run-20260905T112215Z");
+    assert.equal(orch.task_id, "orchestrator-overhead-run-20260905T112215Z");
+  } finally { rmSync(fix.root, { recursive: true, force: true }); }
+});
+
+test("both manifest spellings produce identical accounting", () => {
+  const drifted = fixtureWithManifestKeys({ run_id: "p-test", policy: "check-collect" });
+  const builder = fixtureWithManifestKeys({ pass: "p-test", policy_name: "check-collect" });
+  try {
+    assert.equal(run(drifted).code, 0);
+    assert.equal(run(builder).code, 0);
+
+    const a = readTelemetry(drifted).at(-1);
+    const b = readTelemetry(builder).at(-1);
+    for (const key of ["cost_usd", "input_tokens", "input_tokens_cached", "output_tokens", "task_id", "pass"]) {
+      assert.deepEqual(a[key], b[key], `${key} differs between manifest spellings`);
+    }
+    assert.equal(a.routing.policy_name, b.routing.policy_name);
+  } finally {
+    rmSync(drifted.root, { recursive: true, force: true });
+    rmSync(builder.root, { recursive: true, force: true });
+  }
+});

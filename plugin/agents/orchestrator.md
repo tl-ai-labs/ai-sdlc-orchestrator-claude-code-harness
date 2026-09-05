@@ -310,6 +310,14 @@ the logger drops missing fields rather than printing them empty.
    receipt line until the session exits, so at this step the figure is transcript-priced and
    marked UNVERIFIED; the operator re-runs the collector after exit to verify it.)
    ```
+   **Tell the user to re-run it, every run.** You call the collector from inside a session that has
+   not ended, so it cannot see this session's own tail and the figure it writes is low. In your final
+   message and in the final report, print the command above with `<pass-dir>` and `$(pwd)` already
+   resolved to this run's real paths, under the heading **Provisional — re-run after closing this
+   session**. A template the reader has to fill in is not enough: an interactive session writes no
+   receipt file, so re-running after exit is the only way they reach the better number, and a wrong
+   path is the first thing that goes wrong.
+
    Run it in every auth mode (vendor and estimated alike). **Fail-open**: if it exits non-zero (for
    example, no transcripts found where it looked), say so in the final report and present the cost as
    *dispatched work only — excludes orchestrator overhead*; never block the run on it. When it succeeds,

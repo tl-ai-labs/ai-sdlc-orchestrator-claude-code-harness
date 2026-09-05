@@ -190,7 +190,9 @@ const fmtDuration = (sec) => {
 
 // ─── render ───────────────────────────────────────────────────────────
 const passName = manifest.pass_name ?? manifest.pass ?? basename(passDir);
-const policy = manifest.policy_name ?? "—";
+// Runs write `policy`; `buildManifest`'s shape says `policy_name`. Read both,
+// or the header renders "—" for every real run.
+const policy = manifest.policy ?? manifest.policy_name ?? "—";
 const started = manifest.started_at ?? "—";
 const duration = fmtDuration(manifest.duration_sec ?? manifest.total_wall_clock_sec ?? 0);
 

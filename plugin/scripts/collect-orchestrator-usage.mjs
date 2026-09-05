@@ -115,8 +115,8 @@
  *                       current directory. This determines the transcript
  *                       location hash, so it must be the directory `claude`
  *                       ran in.
- *   --policy            policy name to price with. Defaults to the
- *                       manifest's `policy_name` — the policy the run
+ *   --policy            policy name to price with. Defaults to the manifest's
+ *                       `policy` (or `policy_name`) — the policy the run
  *                       actually used.
  *   --policy-path       explicit policy file; beats --policy and the
  *                       repo-local override, mirroring the server's loader.
@@ -152,6 +152,12 @@ const DIST = join(HERE, "..", "mcp", "model-dispatch", "dist");
 
 /** Same slack the report's artifacts window uses; applied per-message. */
 const WINDOW_SLACK_MS = 5 * 60_000;
+
+// Runs write `policy`/`run_id`; `buildManifest`'s shape says `policy_name`/`pass`.
+// Read both spellings — a manifest key the reader does not recognise otherwise
+// resolves to undefined and reprices the whole run under a fallback preset.
+export const manifestPolicyName = (manifest) => manifest.policy ?? manifest.policy_name;
+export const manifestPassId = (manifest) => manifest.run_id ?? manifest.pass;
 
 function parseArgs(argv) {
   const args = {
@@ -505,7 +511,7 @@ export async function main(argv = process.argv.slice(2)) {
   // other policy would attribute dollars the run never saw.
   const policy = args.policyPath
     ? policyMod.loadPolicyFromPath(resolve(args.policyPath))
-    : policyMod.loadPolicy({ policyName: args.policy ?? manifest.policy_name, projectRoot });
+    : policyMod.loadPolicy({ policyName: args.policy ?? manifestPolicyName(manifest), projectRoot });
   const overrides = routingMod.parseSelectOverrides(process.env.MMO_SELECT);
 
   // Claude Code's own accounting for the driver session, when a runner kept
@@ -551,7 +557,7 @@ export async function main(argv = process.argv.slice(2)) {
   // carry an earlier run.
   const { tokens, stats, observedModels } = sumTranscriptUsage(files, windowStartMs, sessionScoped ? Number.POSITIVE_INFINITY : effectiveEndMs);
 
-  console.log(`collect-orchestrator-usage: pass '${manifest.pass}' window ${manifest.started_at} → ${manifest.ended_at} (±5m)`);
+  console.log(`collect-orchestrator-usage: pass '${manifestPassId(manifest)}' window ${manifest.started_at} → ${manifest.ended_at} (±5m)`);
   console.log(`transcripts: ${tDir}${sessionScoped ? ` (scan pinned to session ${receipt.session_id}; no upper time bound)` : ""}`);
   console.log(
     `scanned ${stats.files} file(s), ${stats.lines} line(s): counted ${stats.counted} unique API message(s) ` +
@@ -807,10 +813,10 @@ export async function main(argv = process.argv.slice(2)) {
   const provenance = "transcript";
   const event = {
     ts: new Date().toISOString(),
-    pass: manifest.pass,
+    pass: manifestPassId(manifest),
     phase: "orchestrator_overhead",
     task_type: "orchestrator_overhead",
-    task_id: `orchestrator-overhead-${manifest.pass}`,
+    task_id: `orchestrator-overhead-${manifestPassId(manifest)}`,
     module: "orchestrator",
     model: derived.modelName,
     model_id: derived.modelId,
