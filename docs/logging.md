@@ -74,7 +74,7 @@ Greppable by the `MMO:` prefix, parseable as logfmt after it.
 | Sink | Path | When |
 |---|---|---|
 | stderr | — | Always. Never stdout — stdout is the MCP stdio JSON-RPC transport, and one stray byte corrupts the framing. |
-| Run log — orchestrator prompt | `.sdlc/runs/<run-id>/orchestrator.log` in both modes (every `mmo-log.mjs` call passes `--run-id`). The post-run collector reads this file's `run.start` line to open the run window, so keep `--project-root` the same for the prompt's log calls and for `collect-orchestrator-usage.mjs`. | Once a run id exists |
+| Run log — orchestrator prompt | `.sdlc/runs/<run-id>/orchestrator.log` in both modes (every `mmo-log.mjs` call passes `--run-id`). The post-run collector reads this file's `run.start` and `run.end` lines to find the run's own command turn in the session transcript (where the window opens) and the first human turn after the run (where it closes); without them the window is approximate and labelled so. Keep `--project-root` the same for the prompt's log calls and for `collect-orchestrator-usage.mjs`. | Once a run id exists |
 | Run log — MCP server | `<output_dir>/orchestrator.log`, beside the run's `telemetry.jsonl`; in brownfield that is the same `.sdlc/runs/<run-id>/` file | Once a run directory exists |
 | Pre-run fallback | `.sdlc/local/debug.log` | Events before a run directory exists: policy load, credential discovery, env bootstrap |
 
