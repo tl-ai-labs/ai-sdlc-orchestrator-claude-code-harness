@@ -171,11 +171,33 @@ const trueTotalLabel = inSessionSubtracted != null ? "True total (dispatched −
 // Whether the overhead figure was checked against Claude Code's own receipt.
 const receiptCost = manifest.orchestrator_overhead?.receipt_cost_usd ?? null;
 const costSource = manifest.orchestrator_overhead?.cost_source ?? null;
+// The collector's cost_source vocabulary, matched by prefix:
+//   "receipt (transcript agrees…)"   every token bucket in the window equals the receipt's: verified, the receipt's dollars booked
+//   "receipt-only"                   no transcript message fell in the window; the receipt's dollars stand alone
+//   "transcript (receipt covers only the last invocation…)"   a --resume continuation: only the last leg was verified
+//   "transcript (receipt pending…)"  the headless capture has no result line yet
+//   "transcript (no receipt…)"       nothing to verify against
+//   "transcript (receipt-verified…)" / "transcript"   written by the collector BEFORE the exact rule (a 5% tolerance,
+//                                    receipt as a floor): say so, and ask for a re-collect rather than call it verified
+const receiptUSD = receiptCost != null ? `$${receiptCost.toFixed(4)}` : "n/a";
 const verifiedLine = costSource == null
   ? null
-  : receiptCost != null
-    ? `Verified against Claude Code's own receipt ($${receiptCost.toFixed(4)}; ${costSource})`
-    : "UNVERIFIED — no receipt was found beside the manifest (transcript-priced); re-run the collector after a headless session exits, or keep its claude -p result";
+  : costSource.startsWith("receipt-only")
+    ? `Booked from Claude Code's own receipt (${receiptUSD}); no transcript message fell inside the window to cross-check it`
+  : costSource.startsWith("receipt")
+    ? `Verified against Claude Code's own receipt (${receiptUSD}; ${costSource})`
+  : costSource.startsWith("transcript (receipt covers only")
+    ? `PARTLY VERIFIED — ${costSource}; the receipt (${receiptUSD}) bills only the last invocation, the earlier ones are transcript-priced`
+  : costSource.startsWith("transcript (receipt pending")
+    ? `PROVISIONAL — ${costSource}; the headless capture has no result line yet, re-run the collector after the session exits`
+  : costSource.startsWith("transcript (receipt-verified") || costSource === "transcript"
+    ? `COLLECTED UNDER THE OLD RULE — ${costSource}; that check allowed a 5% shortfall and any excess, re-run the collector to verify exactly`
+    : `UNVERIFIED — ${costSource}; no receipt was found beside the manifest, re-run the collector after a headless session exits, or keep its claude -p result`;
+// The window the collector measured, when the manifest records one (written since the command-turn anchor).
+const win = manifest.orchestrator_overhead?.window ?? null;
+const windowLine = win == null
+  ? null
+  : `Window ${win.start} → ${win.end ?? "end of session"} (${win.exact ? "exact" : "approximate"}: opens at ${win.start_anchor}, closes at ${win.end_anchor}${win.session_id ? `; session ${win.session_id}` : ""})`;
 const trueTotal = manifest.true_total_cost_usd ?? (hasOverhead ? sessionCost + orchCost : null);
 const collectorCmd = `node plugin/scripts/collect-orchestrator-usage.mjs ${passDir}`;
 
@@ -491,6 +513,7 @@ if (asMarkdown) {
     }
     console.log(`| **${trueTotalLabel}** | **${fmtUSD(trueTotal)}** |\n`);
     if (verifiedLine) console.log(`_${verifiedLine}._\n`);
+    if (windowLine) console.log(`_${windowLine}._\n`);
     console.log(`_${totalNote}. The overhead line is the run's own loop, reconstructed from session transcripts by collect-orchestrator-usage.mjs; only the true total compares architectures fairly._\n`);
     if (inSessionSubtracted == null && (runMode === "estimated" || runMode === "mixed")) {
       console.log(`_Estimator overlap: this run's estimated direct-tier events describe in-session work the transcript-measured overhead also contains, so the true total is conservative (double-counts up to ${fmtUSD(estimatedCost)})._\n`);
@@ -518,6 +541,7 @@ if (asMarkdown) {
     console.log(`  ${"─".repeat(24 + 6 + 7 + 22 + 11)}`);
     console.log(`  ${trueTotalLabel.padEnd(59)}${fmtUSD(trueTotal).padStart(11)}`);
     if (verifiedLine) console.log(`    ${verifiedLine}.`);
+    if (windowLine) console.log(`    ${windowLine}.`);
     console.log(`  ${modeHint === totalNote ? "" : "  " + totalNote}`);
     console.log(`    The overhead line is the run's own loop, reconstructed from session`);
     console.log(`    transcripts by collect-orchestrator-usage.mjs; only the true total`);

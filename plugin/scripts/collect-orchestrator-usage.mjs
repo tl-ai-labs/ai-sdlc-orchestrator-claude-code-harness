@@ -16,7 +16,9 @@
  * two spends are never blended silently.
  *
  * Method, and the facts it rests on (verified against a real 52,985-line
- * session transcript before this tool was written):
+ * session transcript before this tool was written, and re-verified for the
+ * window and receipt rules against four real sessions across two CLI
+ * versions in September 2026):
  *
  *   1. WHERE: transcripts live in ~/.claude/projects/<hash>/*.jsonl where
  *      <hash> is the absolute project path with `/` and whitespace replaced
@@ -42,16 +44,47 @@
  *      bound rather than a guess.
  *   4. EXCLUDE: `message.model === "<synthetic>"` lines are error
  *      placeholders fabricated by the CLI, not billed API traffic.
- *   5. WINDOW ANCHOR: run_id is NOT present in transcript metadata (checked
- *      empirically), so the run window is the manifest's
- *      `started_at`/`ended_at` ± 5 minutes slack, applied per-message via
- *      each line's `timestamp`. File-level pruning uses mtime with a LOWER
- *      bound only (mtime < window start − slack ⇒ the file's last write
- *      predates the run and it cannot contain run messages). There is
- *      deliberately NO mtime upper bound — a session that keeps going after
- *      the run would push mtime past the window and silently drop the run's
- *      own messages. This diverges from report.mjs's artifacts listing,
- *      which bounds mtime on both ends for a different purpose.
+ *   5. WINDOW: run_id is NOT present in transcript metadata (checked
+ *      empirically), but the run's own COMMAND TURN is: the `"type": "user"`
+ *      line whose text invokes `/mmo:pass`, `/mmo:greenfield` or
+ *      `/mmo:brownfield` (any plugin prefix; the orchestration runner's
+ *      `ai-sdlc-*` command names too), carrying this run's `--run-id` or no
+ *      run id at all. Claude Code bills PER INVOCATION, and an invocation
+ *      begins at its human turn, so the window OPENS at that turn's own
+ *      timestamp — exact, not approximate. The turn chosen is the latest one
+ *      at or before the driver's `run.start` line in
+ *      `<project-root>/.sdlc/runs/<run-id>/orchestrator.log` (else at or
+ *      before the first dispatched event), preferring a turn in the receipt's
+ *      own session and a turn naming this run id. The window CLOSES at the
+ *      first human turn after the driver's `run.end` line (that turn starts
+ *      the next invocation and is excluded), or at the end of the session
+ *      file when no human turn follows — both exact, because assistant
+ *      messages only ever follow a human turn. Lines with `isMeta: true`,
+ *      `toolUseResult`, or a `tool_result` content block are the CLI's own
+ *      bookkeeping, not human turns. Subagent files hold no human turns and
+ *      are not scanned for them.
+ *      FALLBACKS, each APPROXIMATE and said so: no command turn → the window
+ *      opens at `run.start` minus 5 minutes (the driver's setup runs for a
+ *      couple of seconds before it logs run.start), else at the manifest's
+ *      `started_at` minus 5 minutes — `started_at` is the FIRST DISPATCHED
+ *      event, not the driver's start, and opening the window there dropped
+ *      7 messages and 22% of the driver's spend on a real run (v37-agsdk-1,
+ *      2026-09-05). No `run.end`, or no pinned session file to read human
+ *      turns from → the window closes at `run.end` plus 5 minutes, else at
+ *      `ended_at` plus 5 minutes. An approximate window is labelled
+ *      "approximate window" in cost_source and `window.exact = false` in the
+ *      manifest, and the receipt rule (8) is what decides whether it was
+ *      right — a wrong window fails that rule; it never writes a guess.
+ *      `run.start`/`run.end` are read as the LAST run.start at or before the
+ *      first dispatch (a reused run id appends to the same log) and the first
+ *      lifecycle marker after it, which must be run.end. File-level pruning
+ *      uses mtime with a LOWER bound only (mtime < anchor − slack ⇒ the
+ *      file's last write predates the run and it cannot contain run
+ *      messages). There is deliberately NO mtime upper bound — a session
+ *      that keeps going after the run would push mtime past the window and
+ *      silently drop the run's own messages. This diverges from report.mjs's
+ *      artifacts listing, which bounds mtime on both ends for a different
+ *      purpose.
  *   6. PRICE: at one model's rate — the policy's DERIVED DRIVER MODEL (same
  *      derivation the run-start driver-model check uses), else the model the
  *      session demonstrably ran if the policy prices it anywhere, else the
@@ -73,22 +106,39 @@
  *      end-of-session result (`claude -p --output-format json`, a runner's
  *      `claude-session.json`, or the last "result" line of a stream-json
  *      `live-run.log`; `--receipt <file>` overrides discovery and must
- *      exist). Its `modelUsage[model].costUSD` is what Anthropic's price
- *      table multiplied. The receipt is the FLOOR, not the target: the CLI
- *      accounts per invocation, so a session file can hold messages it never
- *      billed (measured: exactly the first 8 messages of a real run, a
- *      preamble) and those are inside the run's own window. A transcript
- *      priced AT OR ABOVE the receipt is written, with the receipt recorded
- *      beside it. A transcript more than --receipt-tolerance (5%) BELOW it
- *      is refused with exit 3 and nothing written: the receipt cannot
- *      over-report, so the tree is missing billed messages. With a receipt
- *      but no transcript lines in the window, the receipt's dollars are used
- *      verbatim ("receipt-only"). When the receipt names a session id and a
- *      file carries it, the scan is pinned to that session with no upper
- *      time bound — the invocation the receipt bills keeps running after
- *      `ended_at`. Both numbers are always printed. At run-end a headless
- *      live-run.log has no result line yet (the CLI writes it on exit): the
- *      figure is written transcript-priced and marked unverified, and a
+ *      exist). Its `modelUsage[model]` is what Anthropic's price table
+ *      multiplied. The decision is PER TOKEN BUCKET, PER MODEL, and EXACT —
+ *      there is no dollar tolerance: for every model the transcript
+ *      recorded, its input, cache_read and cache_write totals must EQUAL the
+ *      receipt's, and its output must be AT MOST the receipt's (a message
+ *      with no terminal line under-reports output; nothing over-reports).
+ *      When a model has NO input or cache tokens on either side, the three
+ *      buckets prove nothing and output must equal the receipt exactly —
+ *      only synthetic transcripts ever hit that case.
+ *      Measured on four real sessions: all three buckets equal exactly
+ *      whenever the window is the receipt's invocation, and only then.
+ *      AGREE → the receipt's own dollars are booked, labelled
+ *      "receipt (transcript agrees, ±x%)" with the transcript figure kept
+ *      beside it; the receipt's tokens priced at the policy card are compared
+ *      to its dollars and a rate-drift NOTE says when the card is stale.
+ *      SHORT (any of the three below the receipt) → exit 3, nothing written:
+ *      the receipt cannot over-report, so the tree is missing billed
+ *      messages (a subagent file not copied, a window that opened late).
+ *      ABOVE (any bucket over the receipt) → the window holds messages the
+ *      receipt never billed. Claude Code bills per invocation and a runner's
+ *      `--resume` continuations each restart the bill, so when the pinned
+ *      session file carries two or more human turns inside the window the
+ *      LAST invocation alone is checked with the same exact rule: agreement
+ *      writes the whole-window transcript figure as "transcript (receipt
+ *      covers only the last invocation, verified; N earlier invocation(s)
+ *      unverified)"; anything else is exit 3. A receipt model the transcript
+ *      never recorded at all (the CLI's own side calls) is a NOTE — its
+ *      dollars are inside the booked total. A receipt naming a session other
+ *      than the command turn's is exit 3. With a receipt but no transcript
+ *      lines in the window, the receipt's dollars are used verbatim
+ *      ("receipt-only"). At run-end a headless live-run.log has no result
+ *      line yet (the CLI writes it on exit): the figure is written
+ *      transcript-priced and labelled "receipt pending; provisional", and a
  *      re-run after the session exits verifies it. Re-running is idempotent.
  *   9. IN-SESSION DISPATCH: packets the session executed itself (provenance
  *      `estimated` or `apportioned_from_measured_total`), and a `claude-cli`
@@ -99,7 +149,7 @@
  *      (real vendor calls, never rewritten by any repair), restricted to
  *      models the manifest's `totals.models_used` names, classified by the
  *      event's `model_id` when present, and never applied to a claude-cli
- *      worker whose session was not scanned (receipt-priced figures, or a
+ *      worker whose session was not scanned (receipt-booked figures, or a
  *      scan pinned to the driver's session). Measured +21% over the receipt
  *      without it.
  *
@@ -107,7 +157,7 @@
  * Usage:
  *   node collect-orchestrator-usage.mjs <pass-dir> [--project-root <dir>]
  *        [--policy <name>] [--policy-path <file>]
- *        [--transcripts-dir <dir>] [--receipt <file>] [--receipt-tolerance <0..1>] [--dry-run]
+ *        [--transcripts-dir <dir>] [--receipt <file>] [--dry-run]
  *
  *   <pass-dir>          the run's output dir (holds manifest.json +
  *                       telemetry.jsonl), e.g. examples/<study>/passes/<run>
@@ -130,28 +180,211 @@
  *                       the headless recipe) whose last "result" line is read.
  *                       Defaults to <pass-dir>/claude-session.json, then
  *                       <pass-dir>/live-run.log, whichever exists.
- *   --receipt-tolerance fraction the transcript-priced overhead may differ
- *                       from the receipt before this tool refuses (0.05).
  *   --dry-run           print everything, write nothing.
  *
  * Exit codes: 0 = event written (or --dry-run). 1 = bad arguments, missing
  * manifest, or no billable assistant messages found in the run window (the
  * run WAS driven by a session, so an empty window means the wrong
- * project-root/transcripts-dir — nothing is written). 3 = the transcript
- * sum and the receipt disagree beyond tolerance — nothing is written.
+ * project-root/transcripts-dir — nothing is written). 3 = the transcript and
+ * the receipt disagree — the transcript is short of the receipt, or over it
+ * with no continuation turn to account for the excess, or the receipt names
+ * a session other than the command turn's — nothing is written.
  */
 
 import { readdirSync, readFileSync, renameSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { deriveDriverModel, IN_SESSION_ADAPTERS } from "./driver-model-check.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = join(HERE, "..", "mcp", "model-dispatch", "dist");
 
-/** Same slack the report's artifacts window uses; applied per-message. */
+/**
+ * Slack for the APPROXIMATE anchors only (header, fact 5): a fallback start
+ * opens this much before run.start / started_at, a fallback end closes this
+ * much after run.end / ended_at, and the mtime prune reaches this much
+ * further back. An exact anchor — the command turn, the next human turn, the
+ * end of the session file — never carries slack: it is a real event, not an
+ * estimate of one.
+ */
 const WINDOW_SLACK_MS = 5 * 60_000;
+
+/**
+ * One run-lifecycle log line, as plugin/scripts/lib/log.mjs renders it:
+ * `MMO: <ISO timestamp> <LEVEL>  run.start run_id=... mode=...`. The prefix
+ * is configurable (MMO_LOG_PREFIX, possibly empty), so it is optional here;
+ * the timestamp and the event name are what anchor the window. One builder
+ * for both markers, so run.start and run.end can never drift apart.
+ */
+const runMarkerLine = (event) =>
+  new RegExp(`^(?:\\S+\\s+)?(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2}))\\s+[A-Z]+\\s+${event.replace(".", "\\.")}(?:\\s|$)`);
+const RUN_START_LINE = runMarkerLine("run.start");
+const RUN_END_LINE = runMarkerLine("run.end");
+
+/**
+ * The text of a human turn that starts a run. Claude Code records a slash
+ * command as `<command-name>/mmo:pass</command-name>` (with the plugin's
+ * install name as the prefix, which need not be `mmo`; the orchestration
+ * runner's commands are `ai-sdlc-measured`, `ai-sdlc-pass1`, ...); a `-p`
+ * prompt on an older CLI is the bare command line. Both shapes are accepted.
+ */
+const MMO_COMMAND = /<command-name>\/(?:[\w-]+:)?(?:pass|greenfield|brownfield|ai-sdlc-[\w-]+)<\/command-name>|^\s*\/(?:[\w-]+:)?(?:pass|greenfield|brownfield|ai-sdlc-[\w-]+)(?:\s|$)/;
+/** `--run-id=<id>` or `--run-id <id>` inside the command turn's text; stops at whitespace or the closing tag. */
+const RUN_ID_FLAG = /--run-id(?:=|\s+)([^\s<]+)/;
+
+/**
+ * The driver's own start, read from a run-lifecycle log (header, fact 5).
+ * Returns { ms, iso } for the LAST `run.start` line stamped at or before
+ * `notAfterMs` (the manifest's first dispatched event), or null when the
+ * file is missing or holds no such line. "Last at or before" is deliberate:
+ * mmo-log.mjs appends, so a reused run id carries the earlier run's
+ * `run.start` in the same file, and the earlier one must not stretch this
+ * run's window back over the earlier run's messages. A `run.start` AFTER
+ * the first dispatch cannot belong to this run (clock skew, a stale copy)
+ * and is ignored the same way.
+ */
+export function runStartFromLog(logPath, notAfterMs) {
+  if (!logPath || !existsSync(logPath)) return null;
+  let best = null;
+  for (const line of readFileSync(logPath, "utf-8").split("\n")) {
+    const m = RUN_START_LINE.exec(line);
+    if (!m) continue;
+    const ms = Date.parse(m[1]);
+    if (!Number.isFinite(ms) || ms > notAfterMs) continue;
+    if (best == null || ms > best.ms) best = { ms, iso: m[1] };
+  }
+  return best;
+}
+
+/**
+ * The driver's own end for the run that started at `runStartMs`, read from
+ * the same log (header, fact 5). Returns { ms, iso } for the FIRST lifecycle
+ * marker after run.start — but only if that marker is a `run.end`. When the
+ * next marker is another `run.start` (the run was resumed or the id reused
+ * and this run never logged its end), there is no run.end that belongs to
+ * this run and null is returned; a later run.end would be another run's,
+ * and closing this window there would sweep that run's messages in.
+ */
+export function runEndFromLog(logPath, runStartMs) {
+  if (!logPath || !existsSync(logPath)) return null;
+  let first = null;
+  for (const line of readFileSync(logPath, "utf-8").split("\n")) {
+    for (const [event, re] of [["run.end", RUN_END_LINE], ["run.start", RUN_START_LINE]]) {
+      const m = re.exec(line);
+      if (!m) continue;
+      const ms = Date.parse(m[1]);
+      if (!Number.isFinite(ms) || ms <= runStartMs) continue;
+      if (first == null || ms < first.ms) first = { ms, iso: m[1], event };
+    }
+  }
+  return first && first.event === "run.end" ? { ms: first.ms, iso: first.iso } : null;
+}
+
+/**
+ * The human turns of one top-level session file, oldest first (header,
+ * fact 5). A human turn is a `"type": "user"` line that is not the CLI's own
+ * bookkeeping: `isMeta: true` lines are the CLI's expansion of a slash
+ * command (same timestamp as the turn, not a turn), `toolUseResult` lines and
+ * lines whose content holds a `tool_result` block are tool output handed
+ * back to the model. Each turn reports whether its text is a run command
+ * (MMO_COMMAND) and which `--run-id` it names, if any. The session id is the
+ * line's own `sessionId` field, else the file's basename — the CLI names the
+ * file after the session. Lines without a parseable timestamp cannot anchor
+ * anything and are skipped.
+ */
+export function humanTurns(file) {
+  const turns = [];
+  let lines;
+  try { lines = readFileSync(file, "utf-8").split("\n"); } catch { return turns; }
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (obj?.type !== "user" || obj.isMeta === true || obj.toolUseResult !== undefined) continue;
+    const content = obj.message?.content;
+    let text;
+    if (typeof content === "string") text = content;
+    else if (Array.isArray(content)) {
+      if (content.some((b) => b?.type === "tool_result")) continue;
+      text = content.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n");
+    } else continue;
+    const ms = Date.parse(obj.timestamp);
+    if (!Number.isFinite(ms)) continue;
+    turns.push({
+      ms,
+      iso: String(obj.timestamp),
+      file,
+      session_id: obj.sessionId ?? basename(file, ".jsonl"),
+      command: MMO_COMMAND.test(text),
+      run_id: RUN_ID_FLAG.exec(text)?.[1] ?? null,
+    });
+  }
+  return turns.sort((a, b) => a.ms - b.ms);
+}
+
+/**
+ * The exact receipt rule (header, fact 8), per model. `perModel` is the
+ * transcript's per-model token buckets; `receiptModels` the receipt's
+ * `modelUsage`. For every model the transcript recorded: input, cache_read
+ * and cache_write must EQUAL the receipt's, output must be AT MOST the
+ * receipt's. Why this is exact: every billed message carries at least one
+ * non-zero count among input / cache_read / cache_write (a message with all
+ * three at zero was never sent), and those three are identical on every
+ * duplicate line of a message, so equal totals across all three mean the
+ * same set of messages — a missing message lowers a bucket, an extra message
+ * raises one, and the two cannot cancel across all three at once on any
+ * transcript this tool has seen. Output alone may fall short: a message with
+ * no terminal line books a partial snapshot. A receipt model with NO
+ * transcript messages at all is the CLI's own side call (recorded on the
+ * receipt, never in the transcript) and is reported, not failed; a
+ * transcript model with no receipt entry is over the receipt.
+ */
+export function compareBuckets(perModel, receiptModels) {
+  const above = [];
+  const short = [];
+  const unrecorded = [];
+  const lines = [];
+  const names = [...new Set([...Object.keys(perModel), ...Object.keys(receiptModels)])].sort();
+  for (const name of names) {
+    const T = perModel[name];
+    const R = receiptModels[name];
+    if (!T) { unrecorded.push(name); continue; }
+    if (name === "(unlabeled)") {
+      above.push(`${T.input + T.input_cached + T.input_cache_write + T.output} tokens on transcript messages with no model name — they cannot be matched to any receipt model`);
+      continue;
+    }
+    if (!R) {
+      above.push(`${name}: ${T.input + T.input_cached + T.input_cache_write + T.output} tokens in the transcript, none on the receipt`);
+      continue;
+    }
+    // Output may sit BELOW the receipt (an interrupted message has no terminal
+    // line, so its output_tokens never reach the transcript) — but only while
+    // the three deterministic buckets (input, cache_read, cache_write) can
+    // still prove the window holds every billed message. When those three are
+    // zero on BOTH sides they prove nothing (every real billed message writes
+    // a non-zero input or cache bucket, so this only happens on synthetic
+    // transcripts), and output is the sole remaining evidence: it must then
+    // match the receipt exactly, and a shortfall is a missing message.
+    const inputless = T.input + T.input_cached + T.input_cache_write === 0 && R.input + R.input_cached + R.input_cache_write === 0;
+    const cells = [];
+    for (const [key, label] of [["input", "in"], ["input_cached", "cached"], ["input_cache_write", "cache_write"], ["output", "out"]]) {
+      const t = T[key], r = R[key];
+      if (key === "output") {
+        cells.push(`${label} ${t}${t <= r ? "≤" : ">"}${r}`);
+        if (t > r) above.push(`${name} output: transcript ${t} > receipt ${r}`);
+        else if (t < r && inputless) short.push(`${name} output: transcript ${t} < receipt ${r} (no input or cache tokens on either side, so output alone must match)`);
+      } else {
+        cells.push(`${label} ${t}${t === r ? "=" : t < r ? "<" : ">"}${r}`);
+        if (t > r) above.push(`${name} ${key}: transcript ${t} > receipt ${r}`);
+        else if (t < r) short.push(`${name} ${key}: transcript ${t} < receipt ${r}`);
+      }
+    }
+    const verdict = above.some((a) => a.startsWith(`${name} `)) ? "over the receipt" : short.some((s) => s.startsWith(`${name} `)) ? "short of the receipt" : "agrees";
+    lines.push(`${name}: ${cells.join(" · ")} → ${verdict}`);
+  }
+  return { ok: above.length === 0 && short.length === 0, above, short, unrecorded, lines };
+}
 
 // Runs write `policy`/`run_id`; `buildManifest`'s shape says `policy_name`/`pass`.
 // Read both spellings — a manifest key the reader does not recognise otherwise
@@ -167,7 +400,6 @@ function parseArgs(argv) {
     policyPath: undefined,
     transcriptsDir: undefined,
     receipt: undefined,
-    receiptTolerance: 0.05,
     dryRun: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -179,16 +411,16 @@ function parseArgs(argv) {
     else if (a === "--policy-path" || a.startsWith("--policy-path=")) args.policyPath = eat("--policy-path");
     else if (a === "--transcripts-dir" || a.startsWith("--transcripts-dir=")) args.transcriptsDir = eat("--transcripts-dir");
     else if (a === "--receipt" || a.startsWith("--receipt=")) args.receipt = eat("--receipt");
-    else if (a === "--receipt-tolerance" || a.startsWith("--receipt-tolerance=")) {
-      const v = Number(eat("--receipt-tolerance"));
-      if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error("--receipt-tolerance must be a fraction between 0 and 1 (default 0.05)");
-      args.receiptTolerance = v;
-    }
+    // The former --receipt-tolerance is gone on purpose: the receipt rule is
+    // exact per token bucket (header, fact 8), so there is no fraction to
+    // widen. Name it explicitly so an old invocation fails loudly, not
+    // silently as "unknown argument".
+    else if (a === "--receipt-tolerance" || a.startsWith("--receipt-tolerance=")) throw new Error("--receipt-tolerance no longer exists: the receipt check is exact per token bucket and has no tolerance to widen");
     else if (a.startsWith("--")) throw new Error(`unknown argument '${a}'`);
     else if (args.passDir === undefined) args.passDir = a;
     else throw new Error(`unexpected extra positional '${a}' (pass dir already given: ${args.passDir})`);
   }
-  if (!args.passDir) throw new Error("usage: collect-orchestrator-usage.mjs <pass-dir> [--project-root <dir>] [--policy <name>] [--policy-path <file>] [--transcripts-dir <dir>] [--receipt <file>] [--receipt-tolerance <0..1>] [--dry-run]");
+  if (!args.passDir) throw new Error("usage: collect-orchestrator-usage.mjs <pass-dir> [--project-root <dir>] [--policy <name>] [--policy-path <file>] [--transcripts-dir <dir>] [--receipt <file>] [--dry-run]");
   return args;
 }
 
@@ -262,15 +494,21 @@ export function candidateTranscripts(dir, windowStartMs) {
 
 /**
  * Sum billable usage across transcript files, deduped by message.id and
- * windowed per-message. Returns token buckets + scan stats + the observed
- * model → unique-message-count map.
+ * windowed per-message: a message counts when
+ * windowStartMs <= timestamp < windowEndMs, no slack — the anchors already
+ * carry whatever slack they deserve (header, fact 5). Returns token buckets
+ * + scan stats + the observed model → unique-message-count map + the same
+ * buckets per model (what the receipt rule compares).
  */
 export function sumTranscriptUsage(files, windowStartMs, windowEndMs) {
   const seen = new Set();
-  /** Per message id: the output figure booked, and whether it came from the
-   *  terminal (stop_reason) line. See the streaming note below. */
+  /** Per message id: the output figure booked, whether it came from the
+   *  terminal (stop_reason) line, and the model it was booked under. See the
+   *  streaming note below. */
   const outputById = new Map();
   const observedModels = {};
+  const perModel = {};
+  const bucketFor = (model) => (perModel[model] ??= { input: 0, input_cached: 0, input_cache_write: 0, input_cache_write_1h: 0, output: 0 });
   // `input_cache_write` stays the TOTAL written (what the report and every
   // earlier consumer read); the two TTL buckets are the disjoint split used
   // for pricing. When a line carries no `cache_creation` split (older CLI),
@@ -292,7 +530,7 @@ export function sumTranscriptUsage(files, windowStartMs, windowEndMs) {
       if (msg.model === "<synthetic>") { stats.synthetic++; continue; }
       if (obj.timestamp) {
         const t = Date.parse(obj.timestamp);
-        if (Number.isFinite(t) && (t < windowStartMs - WINDOW_SLACK_MS || t > windowEndMs + WINDOW_SLACK_MS)) {
+        if (Number.isFinite(t) && (t < windowStartMs || t >= windowEndMs)) {
           stats.outside_window++;
           continue;
         }
@@ -315,16 +553,18 @@ export function sumTranscriptUsage(files, windowStartMs, windowEndMs) {
           // and never over a value already taken from a terminal line.
           if (!prev?.terminal && (terminal || out > prev.out)) {
             tokens.output += out - prev.out;
-            outputById.set(msg.id, { out, terminal });
+            bucketFor(prev.model).output += out - prev.out;
+            outputById.set(msg.id, { out, terminal, model: prev.model });
           }
           continue;
         }
         seen.add(msg.id);
-        outputById.set(msg.id, { out, terminal });
       }
       stats.counted++;
       const model = msg.model ?? "(unlabeled)";
+      if (msg.id) outputById.set(msg.id, { out, terminal, model });
       observedModels[model] = (observedModels[model] ?? 0) + 1;
+      const pm = bucketFor(model);
       tokens.input += usage.input_tokens ?? 0;
       tokens.input_cached += usage.cache_read_input_tokens ?? 0;
       const cw = usage.cache_creation_input_tokens ?? 0;
@@ -338,9 +578,14 @@ export function sumTranscriptUsage(files, windowStartMs, windowEndMs) {
       tokens.input_cache_write_1h += cw1h;
       tokens.input_cache_write_5m += cw - cw1h;
       tokens.output += out;
+      pm.input += usage.input_tokens ?? 0;
+      pm.input_cached += usage.cache_read_input_tokens ?? 0;
+      pm.input_cache_write += cw;
+      pm.input_cache_write_1h += cw1h;
+      pm.output += out;
     }
   }
-  return { tokens, stats, observedModels };
+  return { tokens, stats, observedModels, perModel };
 }
 
 /**
@@ -490,6 +735,16 @@ export function filesForSession(files, sessionId) {
   return mine.length > 0 ? mine : files;
 }
 
+/** Sum a receipt's per-model buckets into one set of totals. */
+const sumReceiptModels = (models) =>
+  Object.values(models).reduce(
+    (a, m) => ({ input: a.input + m.input, input_cached: a.input_cached + m.input_cached, input_cache_write: a.input_cache_write + m.input_cache_write, output: a.output + m.output }),
+    { input: 0, input_cached: 0, input_cache_write: 0, output: 0 }
+  );
+
+const fmtPct = (delta) => `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(1)}%`;
+const isoOf = (ms) => new Date(ms).toISOString();
+
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const passDir = resolve(args.passDir);
@@ -499,14 +754,40 @@ export async function main(argv = process.argv.slice(2)) {
     throw new Error(`no manifest.json in ${passDir} — is this a run's pass directory?`);
   }
   const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
-  const windowStartMs = Date.parse(manifest.started_at);
-  const windowEndMs = Date.parse(manifest.ended_at);
-  if (!Number.isFinite(windowStartMs) || !Number.isFinite(windowEndMs)) {
+  const firstDispatchMs = Date.parse(manifest.started_at);
+  const lastDispatchMs = Date.parse(manifest.ended_at);
+  if (!Number.isFinite(firstDispatchMs) || !Number.isFinite(lastDispatchMs)) {
     throw new Error(`manifest.json has no parseable started_at/ended_at — cannot anchor the run window`);
+  }
+  const passId = String(manifestPassId(manifest));
+  const projectRoot = resolve(args.projectRoot ?? process.cwd());
+
+  // ── The driver's own lifecycle markers ──────────────────────────────────
+  // The prompt logs `run.start` / `run.end` with `--run-id --project-root`,
+  // so the file is `<project-root>/.sdlc/runs/<run-id>/orchestrator.log` in
+  // both modes; brownfield's output directory IS that directory, so the pass
+  // directory's own log is the second place to look. run.start bounds the
+  // search for the command turn (the turn precedes it) and is the fallback
+  // opening anchor; run.end is where the closing human turn is looked for
+  // and the fallback closing anchor (header, fact 5). run.end is only ever
+  // read from the log that holds this run's run.start: a run.end in some
+  // other file cannot be shown to be this run's.
+  const runLogCandidates = [
+    join(projectRoot, ".sdlc", "runs", passId, "orchestrator.log"),
+    join(passDir, "orchestrator.log"),
+  ];
+  let runStart = null;
+  for (const p of runLogCandidates) {
+    const found = runStartFromLog(p, firstDispatchMs);
+    if (found) { runStart = { ...found, path: p }; break; }
+  }
+  let runEnd = null;
+  if (runStart) {
+    const found = runEndFromLog(runStart.path, runStart.ms);
+    if (found) runEnd = { ...found, path: runStart.path };
   }
 
   const { policyMod, routingMod, pricingMod } = await loadDist();
-  const projectRoot = resolve(args.projectRoot ?? process.cwd());
   // Default to the policy the run recorded — pricing overhead under any
   // other policy would attribute dollars the run never saw.
   const policy = args.policyPath
@@ -517,7 +798,7 @@ export async function main(argv = process.argv.slice(2)) {
   // Claude Code's own accounting for the driver session, when a runner kept
   // it (a `claude -p --output-format json` result, or `claude-session.json`
   // beside the manifest). It is the referee: transcript arithmetic that
-  // disagrees with it beyond tolerance is wrong, and is not written.
+  // disagrees with it is wrong, and is not written (header, fact 8).
   // Discovery order: --receipt, then the runner convention (claude-session.json),
   // then the headless recipe's stream capture (live-run.log, whose last line is
   // the CLI's result event). The first that exists wins.
@@ -537,36 +818,169 @@ export async function main(argv = process.argv.slice(2)) {
     );
   }
 
-  // The declared window runs to ended_at + slack, which is in the future when
-  // the run-end step invokes this. Reading it as-is silently reports a partial
-  // measurement as a complete one, so clamp to now and say how much of the
-  // window was unobservable.
-  const collectedAtMs = Date.now();
-  const unobservableMs = Math.max(0, windowEndMs + WINDOW_SLACK_MS - collectedAtMs);
-  const effectiveEndMs = Math.min(windowEndMs, collectedAtMs - WINDOW_SLACK_MS);
-
+  // ── Candidate transcript files ──────────────────────────────────────────
+  // Pruned by mtime against the earliest anchor the window could open at:
+  // the command turn precedes run.start by seconds and every run message is
+  // written after it, so a file whose last write predates run.start (else
+  // the first dispatch) minus the slack cannot hold this run.
   const tDir = args.transcriptsDir ? resolve(args.transcriptsDir) : transcriptsDirFor(projectRoot);
-  const candidates = candidateTranscripts(tDir, windowStartMs);
-  const files = filesForSession(candidates, receipt?.session_id);
-  const sessionScoped = Boolean(receipt?.session_id) && files.some((f) => f.split("/").pop().startsWith(receipt.session_id) || f.includes(`/${receipt.session_id}/`));
-  // When the scan is pinned to the receipt's own session, every message in
-  // those files belongs to the invocation the receipt bills — including the
-  // ones after `ended_at` (the session keeps going: writes the summary, runs
-  // this collector). Bounding them would make a complete transcript look
-  // short of its receipt. The lower bound stays: a resumed session id can
-  // carry an earlier run.
-  const { tokens, stats, observedModels } = sumTranscriptUsage(files, windowStartMs, sessionScoped ? Number.POSITIVE_INFINITY : effectiveEndMs);
+  const candidates = candidateTranscripts(tDir, runStart ? runStart.ms : firstDispatchMs);
+  const topLevel = candidates.filter((f) => dirname(f) === tDir);
+  const turnsByFile = new Map(topLevel.map((f) => [f, humanTurns(f)]));
 
-  console.log(`collect-orchestrator-usage: pass '${manifestPassId(manifest)}' window ${manifest.started_at} → ${manifest.ended_at} (±5m)`);
-  console.log(`transcripts: ${tDir}${sessionScoped ? ` (scan pinned to session ${receipt.session_id}; no upper time bound)` : ""}`);
+  // ── The command turn: where the invocation, and so the window, begins ───
+  // Candidates: run commands at or before run.start (else the first
+  // dispatch) that name this run id or none. Preference, in order: a turn
+  // in the receipt's own session (the receipt says which invocation it
+  // bills), a turn naming this run id, then the latest. Two concurrent runs
+  // of the same project with no receipt are the one case this cannot tell
+  // apart — such runs are unverified anyway, and the docs say so.
+  const commandBoundMs = runStart ? runStart.ms : firstDispatchMs;
+  let commandTurn = null;
+  for (const turns of turnsByFile.values()) {
+    for (const t of turns) {
+      if (!t.command || t.ms > commandBoundMs) continue;
+      if (t.run_id != null && t.run_id !== passId) continue;
+      const rank = (receipt?.session_id && t.session_id === receipt.session_id ? 2 : 0) + (t.run_id === passId ? 1 : 0);
+      if (!commandTurn || rank > commandTurn.rank || (rank === commandTurn.rank && t.ms > commandTurn.ms)) commandTurn = { ...t, rank };
+    }
+  }
+  if (commandTurn && receipt?.session_id && commandTurn.session_id !== receipt.session_id) {
+    // The receipt bills one session; the run's command turn is in another.
+    // Either the receipt was copied from a different run or the receipt's
+    // session file is not in this tree. Neither can be verified.
+    console.error(
+      `collect-orchestrator-usage FAILED: the receipt ${receipt.path} is for session ${receipt.session_id}, but the ` +
+        `run's command turn (${commandTurn.iso}) is in session ${commandTurn.session_id} (${commandTurn.file}), and ` +
+        `session ${receipt.session_id} holds no command turn for run '${passId}'. A receipt for another session cannot ` +
+        `referee this run. Nothing was written.`
+    );
+    return 3;
+  }
+
+  // ── Pin the scan to one session ─────────────────────────────────────────
+  // With a command turn, the files are that turn's session file plus its
+  // subagent files; the receipt's session id does the same job without one.
+  // Unpinned (no command turn, no receipt session in the tree — a copied
+  // tree, tests) the scan takes every candidate, and the receipt rule below
+  // is what catches a stray session.
+  let files;
+  let pinned;
+  let pinnedId;
+  let mainFile;
+  if (commandTurn) {
+    pinnedId = commandTurn.session_id;
+    files = candidates.filter((f) => f === commandTurn.file || basename(f).startsWith(pinnedId) || f.includes(`/${pinnedId}/`));
+    pinned = true;
+    mainFile = commandTurn.file;
+  } else {
+    files = filesForSession(candidates, receipt?.session_id);
+    pinned = Boolean(receipt?.session_id) && files.some((f) => basename(f).startsWith(receipt.session_id) || f.includes(`/${receipt.session_id}/`));
+    pinnedId = pinned ? receipt.session_id : null;
+    mainFile = pinned ? (topLevel.find((f) => basename(f).startsWith(receipt.session_id)) ?? null) : null;
+  }
+  const mainTurns = mainFile ? (turnsByFile.get(mainFile) ?? humanTurns(mainFile)) : [];
+
+  // ── Opening anchor ──────────────────────────────────────────────────────
+  let windowStartMs;
+  let startAnchor;
+  let startExact;
+  let startLine;
+  if (commandTurn) {
+    windowStartMs = commandTurn.ms;
+    startAnchor = "command turn";
+    startExact = true;
+    startLine = `opens at the run's command turn ${commandTurn.iso} in ${commandTurn.file} (exact: the invocation the CLI bills begins there)`;
+  } else if (runStart) {
+    windowStartMs = runStart.ms - WINDOW_SLACK_MS;
+    startAnchor = "run.start - 5m";
+    startExact = false;
+    startLine = `opens at run.start ${runStart.iso} in ${runStart.path} minus 5 minutes (approximate: no run command turn found in ${tDir})`;
+  } else {
+    windowStartMs = firstDispatchMs - WINDOW_SLACK_MS;
+    startAnchor = "manifest started_at - 5m";
+    startExact = false;
+    startLine = `opens at the manifest's started_at ${manifest.started_at} (= first dispatched event) minus 5 minutes (approximate: no run command turn found in ${tDir} and no run.start line in ${runLogCandidates[0]})`;
+  }
+
+  // ── Closing anchor ──────────────────────────────────────────────────────
+  // Exact when a pinned session file can be read: the first human turn after
+  // run.end starts the next invocation (excluded), and no such turn means the
+  // session file ends with this invocation. Without run.end the session file
+  // is still exact when no human turn follows the opening at all. Otherwise
+  // approximate: run.end (else ended_at) plus the slack.
+  let windowEndMs;
+  let endAnchor;
+  let endExact;
+  let endLine;
+  if (runEnd && mainFile) {
+    const next = mainTurns.find((t) => t.ms > runEnd.ms);
+    if (next) {
+      windowEndMs = next.ms;
+      endAnchor = "next human turn after run.end";
+      endExact = true;
+      endLine = `closes at the next human turn ${next.iso} after run.end ${runEnd.iso} in ${runEnd.path} (exact: that turn starts the next invocation and is excluded)`;
+    } else {
+      windowEndMs = Number.POSITIVE_INFINITY;
+      endAnchor = "end of session";
+      endExact = true;
+      endLine = `closes at the end of the session file: run.end ${runEnd.iso} in ${runEnd.path} and no later human turn (exact)`;
+    }
+  } else if (runEnd) {
+    windowEndMs = runEnd.ms + WINDOW_SLACK_MS;
+    endAnchor = "run.end + 5m";
+    endExact = false;
+    endLine = `closes at run.end ${runEnd.iso} in ${runEnd.path} plus 5 minutes (approximate: the scan is not pinned to a session file, so no human turn can bound it)`;
+  } else if (mainFile && !mainTurns.some((t) => t.ms > windowStartMs)) {
+    windowEndMs = Number.POSITIVE_INFINITY;
+    endAnchor = "end of session";
+    endExact = true;
+    endLine = `closes at the end of the session file: no run.end line in ${runLogCandidates[0]}, and no human turn after the window opens (exact)`;
+  } else {
+    windowEndMs = lastDispatchMs + WINDOW_SLACK_MS;
+    endAnchor = "manifest ended_at + 5m";
+    endExact = false;
+    endLine =
+      `closes at the manifest's ended_at ${manifest.ended_at} (= last dispatched event) plus 5 minutes (approximate: no run.end line in ${runLogCandidates[0]}` +
+      (mainFile ? ", and a human turn after the window opens that only run.end could place)" : ", and the scan is not pinned to a session file)");
+  }
+  const windowExact = startExact && endExact;
+  const finiteEnd = Number.isFinite(windowEndMs);
+
+  // A window that closes in the future (the run-end step invokes this from
+  // inside the session) cannot be observed past now. Reading it as-is would
+  // silently report a partial measurement as a complete one, so clamp to now
+  // and say how much of the window was unobservable.
+  const collectedAtMs = Date.now();
+  const unobservableMs = finiteEnd ? Math.max(0, windowEndMs - collectedAtMs) : 0;
+  const effectiveEndMs = finiteEnd ? Math.min(windowEndMs, collectedAtMs) : windowEndMs;
+
+  const { tokens, stats, observedModels, perModel } = sumTranscriptUsage(files, windowStartMs, effectiveEndMs);
+
+  console.log(
+    `collect-orchestrator-usage: pass '${passId}' window ${isoOf(windowStartMs)} → ${finiteEnd ? isoOf(windowEndMs) : "end of session"}` +
+      (windowExact ? "" : " (approximate)")
+  );
+  console.log(`  ${startLine}`);
+  console.log(`  ${endLine}`);
+  if (runStart && firstDispatchMs - runStart.ms > 60 * 60_000) {
+    // Not an error — a gate left open before the first dispatch does this —
+    // but a stale log under a reused run id looks the same, so say it.
+    console.error(
+      `NOTE: run.start is ${Math.round((firstDispatchMs - runStart.ms) / 60_000)} minutes before the first dispatched ` +
+        `event. If this run reused an earlier run's id, check ${runStart.path} holds this run's own run.start line ` +
+        `(the receipt cross-check below is the referee).`
+    );
+  }
+  console.log(`transcripts: ${tDir}${pinned ? ` (scan pinned to session ${pinnedId}${finiteEnd ? "" : "; no upper time bound"})` : ""}`);
   console.log(
     `scanned ${stats.files} file(s), ${stats.lines} line(s): counted ${stats.counted} unique API message(s) ` +
       `(${stats.duplicates} duplicate content-block line(s) skipped, ${stats.synthetic} synthetic, ${stats.outside_window} outside window)`
   );
   console.log(`observed_models ${JSON.stringify(observedModels)}`);
   if (receipt) {
-    const perModel = Object.fromEntries(Object.entries(receipt.models).map(([k, v]) => [k, v.cost_usd]));
-    console.log(`receipt: ${receipt.path} → $${receipt.total_cost_usd} ${JSON.stringify(perModel)}`);
+    const perModelCost = Object.fromEntries(Object.entries(receipt.models).map(([k, v]) => [k, v.cost_usd]));
+    console.log(`receipt: ${receipt.path} → $${receipt.total_cost_usd} ${JSON.stringify(perModelCost)}`);
   }
   if (unobservableMs > 0) {
     console.error(
@@ -641,8 +1055,9 @@ export async function main(argv = process.argv.slice(2)) {
   if (receipt && driver && receiptNames.length > 0 && !receiptNames.includes(derived.modelName)) {
     console.error(
       `WARNING: the receipt bills ${JSON.stringify(receiptNames)} but the overhead is priced at the policy's ` +
-        `'${derived.modelName}' rate. The cross-check below compares dollars, so a rate for the wrong model shows ` +
-        `up as a gap; if it does, pass --policy-path for a policy that prices the model the receipt names.`
+        `'${derived.modelName}' rate. The receipt rule below compares token buckets per model, so this only ` +
+        `affects the transcript-priced figure kept beside the receipt; pass --policy-path for a policy that ` +
+        `prices the model the receipt names to make that figure meaningful.`
     );
   }
   const mismatched = observedNames.filter((m) => m !== derived.modelName);
@@ -655,29 +1070,35 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   // ── Price the transcript (5-minute and 1-hour cache writes at their own rates) ──
-  const priceTokens = {
-    input: tokens.input,
-    input_cached: tokens.input_cached,
-    output: tokens.output,
-    input_cache_write: tokens.input_cache_write_5m,
-    input_cache_write_1h: tokens.input_cache_write_1h,
-  };
-  const transcriptCost = driver ? pricingMod.computeCostUsd(priceTokens, driver.pricing) : null;
+  const priceOf = (t) => ({
+    input: t.input,
+    input_cached: t.input_cached,
+    output: t.output,
+    input_cache_write: t.input_cache_write_5m,
+    input_cache_write_1h: t.input_cache_write_1h,
+  });
+  const transcriptCost = driver ? pricingMod.computeCostUsd(priceOf(tokens), driver.pricing) : null;
+  const approxTag = windowExact ? "" : "; approximate window";
 
-  // ── Cross-check against the receipt ─────────────────────────────────────
+  // ── The receipt rule ────────────────────────────────────────────────────
   let cost;
   let costSource;
+  /** Book the receipt's own dollars and tokens (the 1-hour cache-write share
+   *  comes from the transcript, capped at the receipt's total write count). */
+  const bookReceipt = () => {
+    const rm = sumReceiptModels(receipt.models);
+    tokens.input = rm.input;
+    tokens.input_cached = rm.input_cached;
+    tokens.input_cache_write = rm.input_cache_write;
+    tokens.input_cache_write_1h = Math.min(rm.input_cache_write, receipt.cache_write_1h ?? tokens.input_cache_write_1h);
+    tokens.input_cache_write_5m = Math.max(0, tokens.input_cache_write - tokens.input_cache_write_1h);
+    tokens.output = rm.output;
+    cost = pricingMod.round6(receipt.total_cost_usd);
+  };
   if (receiptOnly) {
     // No transcript reachable, but the CLI's own accounting is. Its dollars
     // are authoritative; only attribution is lost, and that is said.
-    const rm = Object.values(receipt.models);
-    tokens.input = rm.reduce((a, m) => a + m.input, 0);
-    tokens.input_cached = rm.reduce((a, m) => a + m.input_cached, 0);
-    tokens.input_cache_write = rm.reduce((a, m) => a + m.input_cache_write, 0);
-    tokens.input_cache_write_1h = receipt.cache_write_1h ?? 0;
-    tokens.input_cache_write_5m = Math.max(0, tokens.input_cache_write - tokens.input_cache_write_1h);
-    tokens.output = rm.reduce((a, m) => a + m.output, 0);
-    cost = pricingMod.round6(receipt.total_cost_usd);
+    bookReceipt();
     costSource = "receipt-only";
     // Label the figure with what the receipt says ran, not what the policy
     // would have priced: the two differ exactly when the policy was not the
@@ -692,28 +1113,13 @@ export async function main(argv = process.argv.slice(2)) {
         `carries the session's own accounting — its $${cost} is used verbatim. Attribution to ` +
         `phases is not possible without the transcript.`
     );
-  } else if (receipt && transcriptCost == null) {
-    // The policy prices no Claude model, so the transcript cannot be priced
-    // for a cross-check; the receipt's own dollars are the only figure and
-    // are used verbatim. The transcript still supplies the token attribution.
-    cost = pricingMod.round6(receipt.total_cost_usd);
-    costSource = "receipt (no policy rate to cross-check against)";
   } else if (receipt) {
-    // The receipt is the FLOOR, not the target. Claude Code accounts per
-    // invocation, so a session file can hold messages the receipt never
-    // billed (a preamble before the run, another invocation on the same
-    // session id — measured: exactly the first 8 messages of a real run,
-    // zero residual) and the window includes them by the run's own
-    // definition. A transcript ABOVE the receipt is therefore complete and
-    // is written — this tool never under-reports. A transcript BELOW it is
-    // missing data (a subagent file not in the tree, a wrong window) and is
-    // refused: that is the silent failure this check exists to catch.
-    const delta = (transcriptCost - receipt.total_cost_usd) / receipt.total_cost_usd;
-    const pct = `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(1)}%`;
-    const rm = Object.values(receipt.models).reduce(
-      (a, m) => ({ input: a.input + m.input, input_cached: a.input_cached + m.input_cached, input_cache_write: a.input_cache_write + m.input_cache_write, output: a.output + m.output }),
-      { input: 0, input_cached: 0, input_cache_write: 0, output: 0 }
-    );
+    const rm = sumReceiptModels(receipt.models);
+    const delta = transcriptCost == null ? null : (transcriptCost - receipt.total_cost_usd) / receipt.total_cost_usd;
+    const pct = delta == null ? null : fmtPct(delta);
+    // What the receipt's dollars imply the cache-write rate was, given the
+    // policy card's other three rates — the diagnostic that found the 1-hour
+    // tier. Informational; the decision is the bucket rule below.
     let implied = "";
     if (driver && rm.input_cache_write > 0) {
       const pr = driver.pricing;
@@ -722,38 +1128,124 @@ export async function main(argv = process.argv.slice(2)) {
       implied = `; receipt implies a cache-write rate of $${rate.toFixed(2)}/M (5-minute card $${(pr.input * 1.25).toFixed(2)}, 1-hour $${(pr.input * 2).toFixed(2)})`;
     }
     console.log(
-      `receipt cross-check: transcript $${transcriptCost} vs receipt $${receipt.total_cost_usd} → ${pct} ` +
-        `(fails below −${(args.receiptTolerance * 100).toFixed(0)}%)${implied}`
+      `receipt cross-check: transcript ${transcriptCost == null ? "(no policy rate)" : `$${transcriptCost}`} vs receipt $${receipt.total_cost_usd}` +
+        `${pct ? ` → ${pct}` : ""} (informational; the decision is per token bucket)${implied}`
     );
     console.log(
       `  tokens transcript in ${tokens.input} · cached ${tokens.input_cached} · cache_write ${tokens.input_cache_write} · out ${tokens.output}` +
         ` | receipt in ${rm.input} · cached ${rm.input_cached} · cache_write ${rm.input_cache_write} · out ${rm.output}`
     );
-    if (delta < -(args.receiptTolerance + 1e-9)) {
+    const cmp = compareBuckets(perModel, receipt.models);
+    for (const l of cmp.lines) console.log(`  ${l}`);
+    if (cmp.unrecorded.length > 0) {
+      const detail = cmp.unrecorded.map((m) => `${m} (${receipt.models[m].input + receipt.models[m].input_cached + receipt.models[m].input_cache_write + receipt.models[m].output} tokens, $${receipt.models[m].cost_usd ?? "?"})`).join(", ");
       console.error(
-        `collect-orchestrator-usage FAILED: the transcript-priced overhead ($${transcriptCost}) is ${pct} BELOW the CLI's own ` +
-          `receipt ($${receipt.total_cost_usd}), past the ${(args.receiptTolerance * 100).toFixed(0)}% tolerance. The receipt cannot ` +
+        `NOTE: the receipt also bills ${detail} for calls the transcript does not record — the CLI's own side calls ` +
+          `(session titles, summaries). Their dollars are inside the receipt total and are booked with it.`
+      );
+    }
+    if (cmp.short.length > 0) {
+      // The receipt cannot over-report: a bucket below it means billed
+      // messages are missing from the tree or from the window.
+      console.error(
+        `collect-orchestrator-usage FAILED: the transcript is BELOW the CLI's own receipt (${cmp.short.join("; ")}` +
+          `${pct ? `; priced $${transcriptCost} vs receipt $${receipt.total_cost_usd}, ${pct}` : ""}). The receipt cannot ` +
           `over-report, so the transcript tree is missing billed messages — usually a subagent transcript not copied ` +
-          `alongside the session file, a window that starts too late, or (when the scan is not pinned to the receipt's ` +
-          `session) the session continuing past ended_at + 5m. Nothing was written. Fix the input; do not widen ` +
-          `--receipt-tolerance to pass.`
+          `alongside the session file, a run log with no run.start line (the window then opens near the first dispatch, ` +
+          `after the driver's setup work), or a window that closed before the invocation did. Nothing was written. ` +
+          `Fix the input; the check is exact and has no tolerance to widen.`
       );
       return 3;
     }
-    cost = transcriptCost;
-    if (delta > args.receiptTolerance) {
-      costSource = `transcript (${pct} over the receipt; the receipt is the floor)`;
-      console.error(
-        `NOTE: the transcript is ${pct} over the receipt: the window holds messages the receipt did not bill — a ` +
-          `preamble before the run, or another invocation on the same session id. The transcript figure is written ` +
-          `because those messages are inside the run's own window; the receipt is the floor, not the target.`
-      );
+    if (cmp.above.length > 0) {
+      // The window holds messages the receipt never billed. The one honest
+      // explanation is another invocation on the same session inside the
+      // window — a runner's `--resume` continuation, whose receipt covers
+      // only the last leg. That leaves a human turn behind, so check the
+      // last invocation alone with the same exact rule.
+      const turnsInWindow = mainTurns.filter((t) => t.ms >= windowStartMs && t.ms < windowEndMs);
+      if (turnsInWindow.length >= 2) {
+        const last = turnsInWindow[turnsInWindow.length - 1];
+        const lastInv = sumTranscriptUsage(files, last.ms, effectiveEndMs);
+        const cmpLast = compareBuckets(lastInv.perModel, receipt.models);
+        console.log(`  last invocation (from the human turn at ${last.iso}, ${turnsInWindow.length - 1} earlier turn(s) in the window):`);
+        for (const l of cmpLast.lines) console.log(`    ${l}`);
+        if (!cmpLast.ok) {
+          console.error(
+            `collect-orchestrator-usage FAILED: the receipt matches neither the whole window nor its last invocation. ` +
+              `Whole window: ${cmp.above.join("; ")}. Last invocation (from ${last.iso}): ` +
+              `${[...cmpLast.above, ...cmpLast.short].join("; ") || "no bucket differs"}. Nothing was written; no number is guessed.`
+          );
+          return 3;
+        }
+        if (transcriptCost == null) {
+          console.error(
+            `collect-orchestrator-usage FAILED: the receipt covers only the last of ${turnsInWindow.length} invocations in the ` +
+              `window, and the policy prices no Claude model, so the earlier invocations cannot be priced from the transcript. ` +
+              `Pass --policy-path for a policy that prices '${derived.modelName}'. Nothing was written.`
+          );
+          return 3;
+        }
+        const lastCost = pricingMod.round6(pricingMod.computeCostUsd(priceOf(lastInv.tokens), driver.pricing));
+        const lastPct = fmtPct((lastCost - receipt.total_cost_usd) / receipt.total_cost_usd);
+        console.log(`    transcript $${lastCost} vs receipt $${receipt.total_cost_usd} → ${lastPct}; the last invocation agrees with the receipt`);
+        cost = transcriptCost;
+        costSource = `transcript (receipt covers only the last invocation, verified ${lastPct}; ${turnsInWindow.length - 1} earlier invocation(s) unverified${approxTag})`;
+        console.error(
+          `NOTE: the receipt bills only the last invocation (from the human turn at ${last.iso}); the ${turnsInWindow.length - 1} ` +
+            `earlier invocation(s) in the window are transcript-priced and unverified. The whole-window transcript figure ` +
+            `($${transcriptCost}) is written. A receipt for each invocation would verify them all.`
+        );
+      } else {
+        console.error(
+          `collect-orchestrator-usage FAILED: the window holds messages the receipt never billed (${cmp.above.join("; ")}) ` +
+            `and no continuation turn explains them: ` +
+            (mainFile
+              ? `the session file ${mainFile} carries ${turnsInWindow.length} human turn(s) inside the window. `
+              : `the scan is not pinned to a session file, so its human turns cannot be read. `) +
+            `Claude Code bills per invocation, so an over-count means the window opened before this invocation (a preamble ` +
+            `under the same session id, a stale run.start, a reused run id) or swept in another run's messages. Nothing was ` +
+            `written; no number is guessed.`
+        );
+        return 3;
+      }
     } else {
-      costSource = `transcript (receipt-verified, ${pct})`;
+      // AGREE: the transcript is the receipt's invocation, message for
+      // message. The receipt's own dollars are booked; the transcript figure
+      // (lower only where output placeholders under-report) is kept beside it.
+      bookReceipt();
+      costSource = transcriptCost == null
+        ? "receipt (transcript agrees; no policy rate for a rate check)"
+        : `receipt (transcript agrees, ${pct})`;
+      // Rate drift: the receipt's own tokens for the priced model, at the
+      // policy card, should reproduce the receipt's dollars for that model.
+      // A gap means the card no longer matches what the CLI charged.
+      const dm = receipt.models[derived.modelName];
+      const tm = perModel[derived.modelName];
+      if (driver && dm && tm && dm.cost_usd != null && dm.cost_usd > 0) {
+        const priced = pricingMod.round6(pricingMod.computeCostUsd({
+          input: dm.input,
+          input_cached: dm.input_cached,
+          output: dm.output,
+          input_cache_write: Math.max(0, dm.input_cache_write - tm.input_cache_write_1h),
+          input_cache_write_1h: Math.min(dm.input_cache_write, tm.input_cache_write_1h),
+        }, driver.pricing));
+        const drift = (priced - dm.cost_usd) / dm.cost_usd;
+        if (Math.abs(drift) > 0.005) {
+          console.error(
+            `NOTE: rate drift — the receipt's own '${derived.modelName}' tokens priced at the policy card come to $${priced}, ` +
+              `but the receipt bills $${dm.cost_usd} for them (${fmtPct(drift)}). The receipt's dollars are booked; the ` +
+              `policy's rates for '${derived.modelName}' (or its cache-write TTL rates) no longer match what the CLI ` +
+              `charged — check the policy's pricing block and its pricing_last_verified date.`
+          );
+        }
+      }
     }
   } else {
     cost = transcriptCost;
-    costSource = "transcript";
+    costSource = receiptPending
+      ? `transcript (receipt pending; provisional${approxTag})`
+      : `transcript (no receipt; unverified${approxTag})`;
     if (!receiptPending) {
       console.error(
         `NOTE: no receipt at ${receiptPath} — dollars are transcript-priced at ${pricingBasis} and UNVERIFIED. ` +
@@ -779,8 +1271,12 @@ export async function main(argv = process.argv.slice(2)) {
     );
     return 1;
   }
+  // A claude-cli worker's own session is inside the overhead only when the
+  // scan was not pinned to the driver's session AND the figure written is the
+  // transcript's: a booked receipt bills the driver's session alone, so the
+  // worker's dollars are not inside it and must stay in the total.
   const inside = inSessionDispatched(readTelemetry(telemetryPath), policy, manifest, dispatched, {
-    claudeCliScanned: !sessionScoped && !receiptOnly && driver != null,
+    claudeCliScanned: !pinned && driver != null && costSource.startsWith("transcript"),
   });
   for (const n of inside.notes) console.error(`NOTE: ${n}`);
   const insideCost = pricingMod.round6(inside.cost);
@@ -872,6 +1368,17 @@ export async function main(argv = process.argv.slice(2)) {
     receipt_path: receipt?.path ?? null,
     dispatched_in_session_cost_usd: insideCost,
     dispatched_in_session_events: inside.count,
+    // The window the figure was measured over, so a reader can tell an exact
+    // invocation-bounded measurement from an approximate one without
+    // re-running the tool (header, fact 5).
+    window: {
+      start: isoOf(windowStartMs),
+      end: finiteEnd ? isoOf(windowEndMs) : null,
+      start_anchor: startAnchor,
+      end_anchor: endAnchor,
+      exact: windowExact,
+      session_id: pinnedId,
+    },
   };
   manifest.true_total_cost_usd = trueTotal;
   const tmpM = `${manifestPath}.tmp-collect`;

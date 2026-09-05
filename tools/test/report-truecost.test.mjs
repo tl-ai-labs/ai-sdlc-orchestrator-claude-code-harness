@@ -184,3 +184,53 @@ test("tokens-in includes the cache-write bucket for column continuity", () => {
   // cache writes are billed input, and older reports counted them here.
   assert.match(out, /codegen.*1\.5K \/ 500/);
 });
+
+// ── The verification line: one sentence per cost_source the collector writes ──
+// The reader must be able to tell a receipt-verified figure from a provisional
+// or partly verified one without opening the manifest, and a figure collected
+// under the old 5%-tolerance rule must never read as verified.
+const overheadWith = (cost_source, extra = {}) => ({
+  cost_usd: 3.7, input_tokens: 100_000, input_tokens_cached: 900_000, input_tokens_cache_write: 300_000, output_tokens: 50_000, events: 1, provenance: "transcript",
+  cost_source, receipt_cost_usd: 3.7, transcript_cost_usd: 3.62, ...extra,
+});
+const withSource = (cost_source, extra = {}, markdown = false) => report({
+  events: [event("tp_1", "codegen", 0.1), orchEvent(3.7)],
+  manifest: { total_cost_usd: 0.05, orchestrator_overhead: overheadWith(cost_source, extra), true_total_cost_usd: 3.75 },
+  markdown,
+});
+
+test("a receipt-agreed figure reads as verified, and the measured window is printed with its anchors", () => {
+  const window = { start: "2026-09-05T18:51:15.673Z", end: null, start_anchor: "command turn", end_anchor: "end of session", exact: true, session_id: "bf2c3ee0" };
+  const out = withSource("receipt (transcript agrees, -2.2%)", { window });
+  assert.match(out, /Verified against Claude Code's own receipt \(\$3\.7000; receipt \(transcript agrees, -2\.2%\)\)\./);
+  assert.match(out, /Window 2026-09-05T18:51:15\.673Z → end of session \(exact: opens at command turn, closes at end of session; session bf2c3ee0\)\./);
+  const md = withSource("receipt (transcript agrees, -2.2%)", { window }, true);
+  assert.match(md, /_Verified against Claude Code's own receipt \(\$3\.7000; receipt \(transcript agrees, -2\.2%\)\)\._/);
+  assert.match(md, /_Window 2026-09-05T18:51:15\.673Z → end of session \(exact: .*\)\._/);
+});
+
+test("an approximate window says so, and a receipt-only figure is booked, not called verified", () => {
+  const window = { start: "2026-09-05T18:48:03.107Z", end: "2026-09-05T19:11:00.000Z", start_anchor: "run.start - 5m", end_anchor: "manifest ended_at + 5m", exact: false, session_id: null };
+  const out = withSource("receipt-only", { window, transcript_cost_usd: null });
+  assert.match(out, /Booked from Claude Code's own receipt \(\$3\.7000\); no transcript message fell inside the window to cross-check it\./);
+  assert.match(out, /Window 2026-09-05T18:48:03\.107Z → 2026-09-05T19:11:00\.000Z \(approximate: opens at run\.start - 5m, closes at manifest ended_at \+ 5m\)\./);
+  assert.doesNotMatch(out, /Verified against/);
+});
+
+test("a receipt that covered only the last --resume leg is PARTLY VERIFIED; pending and absent receipts are provisional and unverified", () => {
+  const partly = withSource("transcript (receipt covers only the last invocation, verified +0.4%; 1 earlier invocation(s) unverified)", { receipt_cost_usd: 1.2 });
+  assert.match(partly, /PARTLY VERIFIED — transcript \(receipt covers only the last invocation, verified \+0\.4%; 1 earlier invocation\(s\) unverified\); the receipt \(\$1\.2000\) bills only the last invocation/);
+  const pending = withSource("transcript (receipt pending; provisional; approximate window)", { receipt_cost_usd: null });
+  assert.match(pending, /PROVISIONAL — transcript \(receipt pending; provisional; approximate window\); the headless capture has no result line yet/);
+  const none = withSource("transcript (no receipt; unverified)", { receipt_cost_usd: null });
+  assert.match(none, /UNVERIFIED — transcript \(no receipt; unverified\); no receipt was found beside the manifest/);
+  assert.doesNotMatch(none, /Window /); // no window block on this manifest → no window line
+});
+
+test("a manifest written by the collector before the exact rule is named as such, never as verified", () => {
+  const old = withSource("transcript (receipt-verified, -2.2%)");
+  assert.match(old, /COLLECTED UNDER THE OLD RULE — transcript \(receipt-verified, -2\.2%\); that check allowed a 5% shortfall and any excess, re-run the collector to verify exactly\./);
+  assert.doesNotMatch(old, /Verified against/);
+  const bare = withSource("transcript", { receipt_cost_usd: null });
+  assert.match(bare, /COLLECTED UNDER THE OLD RULE — transcript;/);
+});
