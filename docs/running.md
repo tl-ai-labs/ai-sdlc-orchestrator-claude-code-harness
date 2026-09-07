@@ -12,7 +12,7 @@ Two policies ship with this repository. Pick one to start.
 
 ### `opus-only` — premium-ceiling baseline
 
-Every phase of the SDLC runs on Claude Opus 4.7. There is no delegation and no cost-saving routing. The number this pass produces is the "what does it cost if I use one top-tier model for everything?" line — for **dispatched work**; use it as a baseline against other policies' dispatched figures, and for anything cross-architecture use the true total (dispatched + transcript-measured orchestrator overhead, see [methodology.md](methodology.md#the-orchestrators-own-cost-and-the-transcript-collector)).
+Every phase of the SDLC runs on Claude Opus 4.7. There is no delegation and no cost-saving routing. The number this pass produces is the "what does it cost if I use one top-tier model for everything?" line.
 
 **Wall-clock:** about 1 – 1.5 hours (depends on model latency and HITL redirections).
 
@@ -80,8 +80,8 @@ Every HITL gate auto-approves. The full transcript lands in `live-run.log`.
 
 ### Arguments
 
-- `--auth=<vendor|estimated>` — **required**. `vendor` dispatches every LLM call via the MCP server so telemetry carries real vendor-reported tokens (needs `ANTHROPIC_API_KEY`); `estimated` uses a char-count heuristic for direct-tier calls (works on a Claude Code subscription without an API key), and additionally requires `CLAUDE_CODE_SUBAGENT_MODEL` exported before `claude` launches, set to the policy's driver model — the driver subagents execute whatever that variable names, and the orchestrator's run-start check stops the run (printing the exact export line) when it is unset or disagrees with what the policy prices. See [setup.md](setup.md#anthropic) and [methodology.md](methodology.md).
-- `--policy=<name>` — routing policy. Resolves in this order: the flag, then `.sdlc/project.json.default_policy` written by `/mmo:setup` or `/mmo:policy change`, then `opus-plus-flash`. Any file under `plugin/config/policies/*.yaml` is a valid name — that listing is the authoritative preset set (a wrong name makes the loader print the live list). The directory sits inside the installed plugin, so a custom YAML dropped there is wiped by every `/plugin update`; put a per-repo policy in `<project root>/routing-policy.yaml` instead, which the loader prefers automatically.
+- `--auth=<vendor|estimated>` — **required**. `vendor` dispatches every LLM call via the MCP server so telemetry carries real vendor-reported tokens (needs `ANTHROPIC_API_KEY`); `estimated` uses a char-count heuristic for direct-tier calls (works on a Claude Code subscription without an API key). See [setup.md](setup.md#anthropic) and [methodology.md](methodology.md).
+- `--policy=<name>` — routing policy. Resolves in this order: the flag, then `.sdlc/project.json.default_policy` written by `/mmo:setup` or `/mmo:policy change`, then `opus-plus-flash`. Shipped presets: `opus-only`, `opus-plus-flash`. Any file under `plugin/config/policies/*.yaml` is a valid name.
 - `--study=<id>` — case-study identifier. Defaults to `workforce-ops`. Change this whenever you run the pipeline on a brief other than the shipped one, so telemetry and packets stay grouped by project. Output lands in `examples/<study-id>/passes/<run-id>/`.
 - `--run-id=<id>` — becomes the pass's directory name under `examples/<study-id>/passes/`. Any string works. Defaults to `pass1`.
 - The remaining positional argument is the path to the brief. Use `examples/workforce-ops/brief.md` to reproduce the Workforce Ops case, or point at any other markdown file — see [Bring your own brief](#bring-your-own-brief) below.
@@ -157,15 +157,7 @@ In interactive mode each gate prints the artifact and waits for your input; appr
 
 ## After the pass finishes
 
-The pass's `total_cost_usd` is dispatched work only. Once the `claude` session has exited, measure the orchestrator's own loop and add it:
-
-```bash
-node plugin/scripts/collect-orchestrator-usage.mjs examples/workforce-ops/passes/pass1 --project-root "$PWD"
-```
-
-`--project-root` is the directory `claude` was started in; the run's `.sdlc/runs/<run-id>/orchestrator.log` lives under it. The collector finds the run's own invocation in the session transcript and prices it. When the run kept Claude Code's own result beside the manifest (`claude-session.json`, or the `live-run.log` of a `--output-format stream-json` run), it checks that figure token for token against the receipt: a match books the receipt's dollars as verified, a mismatch exits 3 and writes nothing. Run it again after every `--resume`; it replaces its earlier figure rather than adding to it.
-
-Then print a summary of the results:
+Print a summary of the results:
 
 ```bash
 node tools/report.mjs examples/workforce-ops/passes/pass1

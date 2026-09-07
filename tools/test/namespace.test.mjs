@@ -61,8 +61,6 @@ const RETIRED_PATTERNS = [
       "plugin/mcp/model-dispatch/src/adapters/index.ts",
       "plugin/mcp/model-dispatch/src/server.ts",
       "docs/architecture.md", // documents the MMO-D8 compat shim by name
-      // Pins that the compat shim still validates; must name the alias to test it.
-      "plugin/mcp/model-dispatch/test/policyResolution.test.mjs",
     ],
   },
 ];
