@@ -177,6 +177,8 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
       session_id: null,
       // The manifest carried its own top-level window, so nothing was rebuilt.
       source: "manifest",
+      // Opened at the first dispatched call, so the overhead is a floor.
+      lower_bound: true,
     });
     assert.deepEqual(overhead, {
       cost_usd: 3.7,
@@ -188,7 +190,7 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
       events: 1,
       provenance: "transcript",
       pricing_basis: "the policy's derived driver model",
-      cost_source: "transcript (no receipt; unverified; approximate window)",
+      cost_source: "transcript (no receipt; unverified; LOWER BOUND — window opens at the first dispatch)",
       transcript_cost_usd: 3.7,
       receipt_cost_usd: null,
       receipt_path: null,
@@ -497,7 +499,7 @@ test("no receipt: transcript-priced at the policy rate, and the tool asks for on
     const r = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", FIX, "--policy-path", join(FIX, "policies", "receivables-premium.yaml"), "--transcripts-dir", join(FIX, "pass1", "transcripts"), "--dry-run"], { encoding: "utf-8", env: { ...process.env, MMO_SELECT: "" } });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /no receipt at .*claude-session\.json/);
-    assert.match(r.stdout, /= \$16\.152465 \[transcript \(no receipt; unverified; approximate window\)\]/);
+    assert.match(r.stdout, /= \$16\.152465 \[transcript \(no receipt; unverified; LOWER BOUND — window opens at the first dispatch\)\]/);
     // 89 dispatched events were apportioned from the session's own total → inside the transcript, subtracted once.
     assert.match(r.stdout, /in-session dispatch: 89 event\(s\) totaling \$3\.739405/);
     assert.equal(num(/→ true total \$([0-9.]+)/, r.stdout), 16.152465);
@@ -733,7 +735,7 @@ test("a headless capture with no result line yet is 'not final': transcript-pric
     const r = spawnSync(process.execPath, args, { encoding: "utf-8", env: ENV });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /has no "result" line yet .* UNVERIFIED/);
-    assert.match(r.stdout, /= \$16\.152465 \[transcript \(receipt pending; provisional; approximate window\)\]/);
+    assert.match(r.stdout, /= \$16\.152465 \[transcript \(receipt pending; provisional; LOWER BOUND — window opens at the first dispatch\)\]/);
     const r2 = spawnSync(process.execPath, [...args, "--receipt", join(passDir, "live-run.log")], { encoding: "utf-8", env: ENV });
     assert.equal(r2.status, 1);
     assert.match(r2.stderr, /neither a JSON object nor a stream-json capture/);
@@ -945,7 +947,7 @@ test("the manifest records the window it measured: anchors, exactness and the pi
     assert.equal(r.status, 0, r.stderr);
     const m = JSON.parse(readFileSync(join(fix.passDir, "manifest.json"), "utf-8"));
     const o = m.orchestrator_overhead;
-    assert.deepEqual(o.window, { start: COMMAND_TS, end: null, start_anchor: "command turn", end_anchor: "end of session", exact: true, session_id: "sess-a", source: "manifest" });
+    assert.deepEqual(o.window, { start: COMMAND_TS, end: null, start_anchor: "command turn", end_anchor: "end of session", exact: true, session_id: "sess-a", source: "manifest", lower_bound: false });
     assert.equal(o.cost_source, "receipt (transcript agrees, +0.0%)");
     assert.equal(o.cost_usd, 30);
     assert.equal(o.transcript_cost_usd, 30);
@@ -1609,6 +1611,33 @@ test("a readable top-level window with no run id anywhere is refused, and nothin
     assert.equal(m.orchestrator_overhead, undefined);
     const lines = readFileSync(join(passDir, "telemetry.jsonl"), "utf-8").trim().split("\n");
     assert.equal(lines.length, 1, "no orchestrator event may be appended");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+// A window that opens at the first dispatched call cannot see what the driver did
+// BEFORE that call — reading the brief, requirements analysis, planning. That is
+// not noise around a true value, it is missing spend, and it runs one way only.
+// Measured 22% low on v37-agsdk-1 and 83% low on a nested-window receivables
+// fixture. Calling that "approximate" invites it into a deck as a measurement,
+// which is the failure this whole script exists to end. It must say LOWER BOUND.
+test("a window opened at the first dispatch is reported as a lower bound, not an approximation", () => {
+  const { root, passDir, tDir } = makeGreenfieldFixture({ closingKey: "finished_at" });
+  try {
+    const res = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root, "--transcripts-dir", tDir], {
+      encoding: "utf-8",
+    });
+    const out = (res.stdout ?? "") + (res.stderr ?? "");
+    assert.equal(res.status, 0, out);
+    assert.match(out, /LOWER BOUND/, `the summary line must say so\n${out}`);
+    assert.match(out, /the real figure is higher/i, `and say which way it is wrong\n${out}`);
+
+    // And in the artifact, so a reader who never saw the console still knows.
+    const m = JSON.parse(readFileSync(join(passDir, "manifest.json"), "utf-8"));
+    assert.equal(m.orchestrator_overhead.window.lower_bound, true);
+    assert.equal(m.orchestrator_overhead.window.start_anchor, "telemetry rebuild started_at - 5m");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

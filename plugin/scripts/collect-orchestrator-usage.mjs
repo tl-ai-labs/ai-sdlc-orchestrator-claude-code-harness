@@ -997,6 +997,10 @@ export async function main(argv = process.argv.slice(2)) {
   let files;
   let pinned;
   let pinnedId;
+  // Set only by the opening-anchor branch that starts at the first dispatched
+  // call: everything the driver did before it is outside the window, so the
+  // overhead can only be under-reported, never over.
+  let overheadIsFloor = false;
   let mainFile;
   if (commandTurn) {
     pinnedId = commandTurn.session_id;
@@ -1029,6 +1033,20 @@ export async function main(argv = process.argv.slice(2)) {
   } else {
     windowStartMs = firstDispatchMs - WINDOW_SLACK_MS;
     startAnchor = rebuilt ? "telemetry rebuild started_at - 5m" : "manifest started_at - 5m";
+    // THIS BRANCH PRODUCES A FLOOR, NOT AN APPROXIMATION.
+    //
+    // started_at is the first DISPATCHED call, so opening the window there drops
+    // every driver message before it — reading the brief, requirements analysis,
+    // planning. That is not noise around a true value, it is missing spend, and
+    // it only ever runs one way: the reported cost is at or below the real one.
+    // Measured: 22% low on v37-agsdk-1 (docs/methodology.md), and 83% low on a
+    // nested-window receivables fixture ($16.15 real, $2.78 reported).
+    //
+    // "approximate" reads as "give or take". A figure that can be a fifth of the
+    // truth must not be quoted that way — it is the same failure this script
+    // exists to end, one order of magnitude smaller. So it is labelled a lower
+    // bound, in the console, in the report line and in the run's own record.
+    overheadIsFloor = true;
     startExact = false;
     startLine = `opens at ${startedAtLabel} minus 5 minutes (approximate: no run command turn found in ${tDir} and no run.start line in ${runLogCandidates[0]})`;
   }
@@ -1089,8 +1107,17 @@ export async function main(argv = process.argv.slice(2)) {
 
   console.log(
     `collect-orchestrator-usage: pass '${passId}' window ${isoOf(windowStartMs)} → ${finiteEnd ? isoOf(windowEndMs) : "end of session"}` +
-      (windowExact ? "" : " (approximate)")
+      (windowExact ? "" : " (approximate)") +
+      (overheadIsFloor ? " — LOWER BOUND" : "")
   );
+  if (overheadIsFloor) {
+    console.log(
+      `  ! the overhead below is a LOWER BOUND, not an estimate: the window opens at the first dispatched call, ` +
+        `so every driver message before it (brief, requirements, planning) is outside it. The real figure is higher — ` +
+        `by 22% on one measured run and by 83% on another. Do not quote it as a measurement. To close the gap, run ` +
+        `the collector where the run's .sdlc/runs/<run-id>/orchestrator.log and the driver's session transcript live.`
+    );
+  }
   console.log(`  ${startLine}`);
   console.log(`  ${endLine}`);
   if (runStart && firstDispatchMs - runStart.ms > 60 * 60_000) {
@@ -1208,7 +1235,7 @@ export async function main(argv = process.argv.slice(2)) {
     input_cache_write_1h: t.input_cache_write_1h,
   });
   const transcriptCost = driver ? pricingMod.computeCostUsd(priceOf(tokens), driver.pricing) : null;
-  const approxTag = windowExact ? "" : "; approximate window";
+  const approxTag = overheadIsFloor ? "; LOWER BOUND — window opens at the first dispatch" : windowExact ? "" : "; approximate window";
 
   // ── The receipt rule ────────────────────────────────────────────────────
   let cost;
@@ -1535,6 +1562,10 @@ export async function main(argv = process.argv.slice(2)) {
       start_anchor: startAnchor,
       end_anchor: endAnchor,
       exact: windowExact,
+      // true when the window opens at the first dispatched call: the overhead is
+      // a floor, and the real driver cost is higher. Recorded so a reader of the
+      // manifest sees it without having watched the run.
+      lower_bound: overheadIsFloor,
       session_id: pinnedId,
       // Which file the anchors were derived from. "manifest" is the model's own
       // file; "telemetry-rebuild" means it carried no top-level window and the
