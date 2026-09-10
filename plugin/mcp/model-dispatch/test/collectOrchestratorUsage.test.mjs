@@ -175,6 +175,8 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
       end_anchor: "manifest ended_at + 5m",
       exact: false,
       session_id: null,
+      // The manifest carried its own top-level window, so nothing was rebuilt.
+      source: "manifest",
     });
     assert.deepEqual(overhead, {
       cost_usd: 3.7,
@@ -943,7 +945,7 @@ test("the manifest records the window it measured: anchors, exactness and the pi
     assert.equal(r.status, 0, r.stderr);
     const m = JSON.parse(readFileSync(join(fix.passDir, "manifest.json"), "utf-8"));
     const o = m.orchestrator_overhead;
-    assert.deepEqual(o.window, { start: COMMAND_TS, end: null, start_anchor: "command turn", end_anchor: "end of session", exact: true, session_id: "sess-a" });
+    assert.deepEqual(o.window, { start: COMMAND_TS, end: null, start_anchor: "command turn", end_anchor: "end of session", exact: true, session_id: "sess-a", source: "manifest" });
     assert.equal(o.cost_source, "receipt (transcript agrees, +0.0%)");
     assert.equal(o.cost_usd, 30);
     assert.equal(o.transcript_cost_usd, 30);
@@ -1237,4 +1239,377 @@ test("compareBuckets: equal deterministic buckets with output at or below the re
   assert.deepEqual([c.ok, c.short], [false, ["opus output: transcript 40 < receipt 50 (no input or cache tokens on either side, so output alone must match)"]]);
   c = compareBuckets({ opus: T(0, 0, 0, 50) }, { opus: R(0, 0, 0, 50) });
   assert.equal(c.ok, true);
+});
+
+// ── The greenfield manifest shape ────────────────────────────────────────
+//
+// `buildManifest` had no caller that wrote a manifest before this change — Phase 9
+// of SKILL.md names it as a SHAPE for the model to imitate and hands the model the
+// write — so the shape drifts per run. (The collector itself is now its first
+// production caller, which is what these tests exercise.) Both greenfield manifests in this repo nest the run window
+// instead of putting it at the top level, and they disagree with each other on
+// the closing key:
+//
+//   examples/quick-demo/passes/agent-path  ->  run.started_at / run.finished_at
+//   examples/quick-demo/passes/model-path  ->  run.started_at / run.ended_at
+//
+// Neither is where this script looked, so every greenfield run died at
+// "no parseable started_at/ended_at" before reading a single transcript line —
+// which is why the orchestrator's cost has never once been booked for a
+// greenfield run, on any plugin version.
+//
+// The window does not need the manifest at all: telemetry.jsonl is written by
+// code, one line per dispatched call, each stamped `ts`. That is the same source
+// buildManifest itself derives started_at/ended_at from (telemetry.ts:158-165).
+// So the manifest stays the FIRST source — no existing run's window can move —
+// and the call log is the fallback when it is absent. One fallback, to the
+// source of truth; it can never need extending, because `ts` is machine-written.
+function makeGreenfieldFixture({ closingKey = "finished_at" } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-gf-"));
+  writeFileSync(join(root, "routing-policy.yaml"), POLICY);
+
+  const now = Date.now();
+  const started = new Date(now - 30 * MIN).toISOString();
+  const ended = new Date(now - 10 * MIN).toISOString();
+  const inWindow = now - 20 * MIN;
+
+  const passDir = join(root, "passes", "p-test");
+  mkdirSync(passDir, { recursive: true });
+
+  // Exactly the shape a real greenfield run writes: window nested under `run`,
+  // nothing at the top level for this script to anchor on.
+  writeFileSync(
+    join(passDir, "manifest.json"),
+    JSON.stringify(
+      {
+        schema: 1,
+        run: { pass: "p-test", policy: "check-collect", started_at: started, [closingKey]: ended, status: "complete" },
+        totals: { cost_usd: 0.05 },
+      },
+      null,
+      2
+    )
+  );
+
+  // Dispatched events carry `ts`, as every real telemetry line does.
+  writeFileSync(
+    join(passDir, "telemetry.jsonl"),
+    [
+      JSON.stringify({ pass: "p-test", phase: "codegen", task_id: "t-1", provenance: "estimated", cost_usd: 0.05, ts: started }),
+      JSON.stringify({ pass: "p-test", phase: "tests", task_id: "t-2", provenance: "estimated", cost_usd: 0.0, ts: ended }),
+    ].join("\n") + "\n"
+  );
+
+  const tDir = join(root, "transcripts");
+  mkdirSync(tDir, { recursive: true });
+  const usage = { input_tokens: 1_000_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 100_000 };
+  writeFileSync(join(tDir, "sess-gf.jsonl"), tLine("msg_GF", "claude-opus-4-8", usage, inWindow) + "\n");
+
+  return { root, passDir, tDir };
+}
+
+for (const closingKey of ["finished_at", "ended_at"]) {
+  test(`a greenfield manifest (run.${closingKey}) anchors from telemetry.jsonl instead of failing`, () => {
+    const { root, passDir, tDir } = makeGreenfieldFixture({ closingKey });
+    try {
+      const res = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root, "--transcripts-dir", tDir], {
+        encoding: "utf-8",
+      });
+      const out = (res.stdout ?? "") + (res.stderr ?? "");
+      assert.doesNotMatch(out, /no parseable started_at\/ended_at/, "must not die on the manifest when the call log can anchor the window");
+      assert.equal(res.status, 0, `expected exit 0, got ${res.status}\n${out}`);
+
+      // The window must be reported under the file it actually came from. Naming
+      // the manifest for a value the manifest never held printed the literal word
+      // "undefined" into the run's own record, and a reader checking the window
+      // against the manifest would find nothing there.
+      assert.doesNotMatch(out, /undefined/, `no anchor may be reported as undefined\n${out}`);
+      assert.match(out, /rebuilt from telemetry\.jsonl with buildManifest/, out);
+      assert.match(out, /opens at the manifest rebuilt from telemetry\.jsonl started_at/, out);
+      assert.match(out, /closes at the manifest rebuilt from telemetry\.jsonl ended_at/, out);
+
+      // The driver's cost was actually booked: 1M input @ $1/M + 100k output @ $5/M = $1.50
+      const manifest = JSON.parse(readFileSync(join(passDir, "manifest.json"), "utf-8"));
+      assert.ok(manifest.orchestrator_overhead, "orchestrator_overhead must be written");
+      assert.equal(manifest.orchestrator_overhead.cost_usd, 1.5);
+
+      // The rebuild exists only to be READ. The file on disk must still be the
+      // model's own — its keys, its nesting, its spelling of the closing key —
+      // with nothing added but the two figures this script books. Writing the
+      // rebuild back would replace the run's own record with a reconstruction,
+      // and the record is the evidence.
+      assert.deepEqual(
+        Object.keys(manifest.run).sort(),
+        ["pass", "policy", "started_at", closingKey, "status"].sort(),
+        "the model-written run block must survive the rebuild untouched"
+      );
+      assert.equal(manifest.run.pass, "p-test");
+      assert.equal(manifest.run.policy, "check-collect");
+      assert.equal(manifest.schema, 1, "the model's own top-level fields must survive too");
+      assert.equal(manifest.started_at, undefined, "the rebuild must not leak its own top-level window into the file");
+
+      // The PERSISTED record must name the file the anchors came from. Fixing only
+      // the console line left `orchestrator_overhead.window.start_anchor` reading
+      // "manifest started_at - 5m" for a key the model's file does not hold — and
+      // that block, not the console, is what tools/report.mjs re-prints later.
+      assert.equal(manifest.orchestrator_overhead.window.source, "telemetry-rebuild");
+      assert.equal(manifest.orchestrator_overhead.window.start_anchor, "telemetry rebuild started_at - 5m");
+      assert.equal(manifest.orchestrator_overhead.window.end_anchor, "telemetry rebuild ended_at + 5m");
+      assert.deepEqual(manifest.totals, { cost_usd: 0.05 }, "the model's own totals block must be untouched");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+import { manifestPolicyName, manifestPassId } from "../../../scripts/collect-orchestrator-usage.mjs";
+
+// The three fields the model can misplace all resolve the same way: the manifest's
+// own top-level spellings first — so no run this script has already priced can move
+// — then the call log, which is machine-written and cannot drift. These assert the
+// ORDER as much as the fallback: a manifest value must always win, or a stale log
+// line could silently reprice a run.
+test("identity: the manifest's own spellings win; the call log answers only when they are absent", () => {
+  const log = [
+    // This is the line THIS SCRIPT writes. It carries a `pass` and a
+    // `routing.policy_name`, so it must never be read back as identity.
+    { tier: "orchestrator", pass: "echo-of-a-previous-run", routing: { policy_name: "echo-of-a-previous-run" } },
+    { pass: "from-log", routing: { policy_name: "policy-from-log" } },
+  ];
+
+  // Manifest wins, both spellings, even with a log present.
+  assert.equal(manifestPolicyName({ policy: "a" }, log), "a");
+  assert.equal(manifestPolicyName({ policy_name: "b" }, log), "b");
+  assert.equal(manifestPassId({ run_id: "r" }, log), "r");
+  assert.equal(manifestPassId({ pass: "p" }, log), "p");
+
+  // Greenfield: the model nested them under `run`, so nothing at the top level.
+  // The DISPATCHED lines answer instead. The orchestrator line sits first in the
+  // log and would win a naive `.find()` — it must be skipped, or the collector's
+  // own previous output becomes its next input.
+  const greenfield = { run: { pass: "p-test", policy: "check-collect" } };
+  assert.equal(manifestPolicyName(greenfield, log), "policy-from-log");
+  assert.equal(manifestPassId(greenfield, log), "from-log");
+
+  // The loop, stated directly: a log holding nothing but this script's own event
+  // yields no identity at all, so a re-run can never re-price from its own echo.
+  const echoOnly = [{ tier: "orchestrator", pass: "echo", routing: { policy_name: "echo" } }];
+  assert.equal(manifestPolicyName(greenfield, echoOnly), undefined);
+  assert.equal(manifestPassId(greenfield, echoOnly), undefined);
+
+  // No manifest key and no log: undefined, never a guess. main() refuses on this.
+  assert.equal(manifestPolicyName(greenfield, []), undefined);
+  assert.equal(manifestPassId(greenfield, []), undefined);
+});
+
+// A manifest with no id and a log with no id: the run cannot be named. Booking the
+// overhead under an invented id would attach real dollars to a run nobody can find,
+// so this stops rather than guessing.
+test("no run id in either the manifest or the call log is refused, and nothing is written", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-noid-"));
+  try {
+    writeFileSync(join(root, "routing-policy.yaml"), POLICY);
+    const passDir = join(root, "passes", "p-test");
+    mkdirSync(passDir, { recursive: true });
+    const started = new Date(Date.now() - 30 * MIN).toISOString();
+    const ended = new Date(Date.now() - 10 * MIN).toISOString();
+
+    // Nested window (so the telemetry anchor is reached) and NO id anywhere.
+    writeFileSync(
+      join(passDir, "manifest.json"),
+      JSON.stringify({ schema: 1, run: { started_at: started, ended_at: ended }, totals: { cost_usd: 0.05 } }, null, 2)
+    );
+    writeFileSync(
+      join(passDir, "telemetry.jsonl"),
+      [
+        JSON.stringify({ phase: "codegen", task_id: "t-1", cost_usd: 0.05, ts: started }),
+        JSON.stringify({ phase: "tests", task_id: "t-2", cost_usd: 0.0, ts: ended }),
+      ].join("\n") + "\n"
+    );
+
+    const res = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root], { encoding: "utf-8" });
+    const out = (res.stdout ?? "") + (res.stderr ?? "");
+    assert.notEqual(res.status, 0, `expected a non-zero exit, got ${res.status}\n${out}`);
+    assert.match(out, /no run id/i, out);
+
+    const after = JSON.parse(readFileSync(join(passDir, "manifest.json"), "utf-8"));
+    assert.equal(after.orchestrator_overhead, undefined, "nothing may be written when the run cannot be named");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+// The rebuild supplies the WINDOW and nothing else. It was briefly allowed to
+// supply the dispatched total too, and that silently swapped an authoritative
+// figure for a re-derivation on any manifest whose window happened to be nested:
+// buildManifest emits no `totals` object, so `totals.dispatched_cost_usd` missed
+// and fell through to the rebuild's own sum of the call log. On the repo's own
+// receivables fixture that reported $22.31 where the manifest says $6.08 — a
+// 3.7x overstatement — and fabricated an in-session subtraction the run never
+// had, because `models_used` is absent from a rebuild and the model filter went
+// with it. Money and identity come from the model's file; only the window may
+// come from the rebuild.
+test("a nested window does not let the rebuild replace the manifest's own dispatched total", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-money-"));
+  try {
+    writeFileSync(join(root, "routing-policy.yaml"), POLICY);
+    const passDir = join(root, "passes", "p-test");
+    mkdirSync(passDir, { recursive: true });
+
+    const now = Date.now();
+    const started = new Date(now - 30 * MIN).toISOString();
+    const ended = new Date(now - 10 * MIN).toISOString();
+
+    // The window is nested (so the rebuild fires) but the manifest carries its
+    // own authoritative dispatched figure, deliberately NOT equal to the sum of
+    // the log — exactly what happens when telemetry is repriced after a run.
+    writeFileSync(
+      join(passDir, "manifest.json"),
+      JSON.stringify(
+        {
+          schema: 1,
+          run: { pass: "p-test", policy: "check-collect", started_at: started, ended_at: ended, status: "complete" },
+          totals: { dispatched_cost_usd: 6.076299, models_used: ["gemini-3.7-flash"] },
+        },
+        null,
+        2
+      )
+    );
+    writeFileSync(
+      join(passDir, "telemetry.jsonl"),
+      [
+        JSON.stringify({ pass: "p-test", phase: "codegen", task_id: "t-1", provenance: "estimated", cost_usd: 22.0, ts: started }),
+        JSON.stringify({ pass: "p-test", phase: "tests", task_id: "t-2", provenance: "estimated", cost_usd: 0.311708, ts: ended }),
+      ].join("\n") + "\n"
+    );
+
+    const tDir = join(root, "transcripts");
+    mkdirSync(tDir, { recursive: true });
+    const usage = { input_tokens: 1_000_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 100_000 };
+    writeFileSync(join(tDir, "sess-m.jsonl"), tLine("msg_M", "claude-opus-4-8", usage, now - 20 * MIN) + "\n");
+
+    const res = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root, "--transcripts-dir", tDir], {
+      encoding: "utf-8",
+    });
+    const out = (res.stdout ?? "") + (res.stderr ?? "");
+    assert.equal(res.status, 0, `expected exit 0, got ${res.status}\n${out}`);
+
+    // The manifest's own figure, not the log's $22.311708.
+    assert.match(out, /dispatched total \$6\.076299/, out);
+    assert.doesNotMatch(out, /dispatched total \$22\.311708/, `the rebuild must not supply the money\n${out}`);
+
+    const m = JSON.parse(readFileSync(join(passDir, "manifest.json"), "utf-8"));
+    assert.equal(m.true_total_cost_usd, 6.076299 + m.orchestrator_overhead.cost_usd);
+    // models_used came from the model's file, so the filter still applies and no
+    // in-session dispatch is invented.
+    assert.equal(m.orchestrator_overhead.dispatched_in_session_cost_usd, 0);
+    assert.equal(m.orchestrator_overhead.dispatched_in_session_events, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+// Three refusals the rebuild path opened up, each pinned so a later edit cannot
+// quietly restore the booking. `log_telemetry` appends the model's event object
+// verbatim — the tool schema is `event: {type:"object"}` with no field validation
+// — so a dispatched line missing a field is a production shape, not a contrived one.
+test("a dispatched line with no cost_usd is refused, not booked as NaN", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-nan-"));
+  try {
+    writeFileSync(join(root, "routing-policy.yaml"), POLICY);
+    const passDir = join(root, "passes", "p-test");
+    mkdirSync(passDir, { recursive: true });
+    const started = new Date(Date.now() - 30 * MIN).toISOString();
+    const ended = new Date(Date.now() - 10 * MIN).toISOString();
+    // Nested window (so the rebuild runs) and no manifest cost the model's file
+    // could supply, so the figure must come from the rebuild's sum of the log.
+    writeFileSync(
+      join(passDir, "manifest.json"),
+      JSON.stringify({ schema: 1, run: { pass: "p-test", policy: "check-collect", started_at: started, ended_at: ended }, totals: { cost_usd: 0.05 } }, null, 2)
+    );
+    writeFileSync(
+      join(passDir, "telemetry.jsonl"),
+      [
+        JSON.stringify({ pass: "p-test", phase: "codegen", task_id: "t-1", cost_usd: 0.05, ts: started }),
+        JSON.stringify({ pass: "p-test", phase: "tests", task_id: "t-2", ts: ended }), // no cost_usd
+      ].join("\n") + "\n"
+    );
+    const res = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root], { encoding: "utf-8" });
+    const out = (res.stdout ?? "") + (res.stderr ?? "");
+    // typeof NaN === "number", so a typeof guard let this through, exit 0, and
+    // JSON.stringify(NaN) wrote a null cost that reads downstream as "absent".
+    assert.doesNotMatch(out, /\$NaN/, `a NaN total must never be reported\n${out}`);
+    assert.notEqual(res.status, 0, `expected a refusal, got exit ${res.status}\n${out}`);
+    const m = JSON.parse(readFileSync(join(passDir, "manifest.json"), "utf-8"));
+    assert.equal(m.true_total_cost_usd, undefined, "nothing may be written when the cost is not a finite number");
+    assert.equal(m.orchestrator_overhead, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatched lines with no ts are refused by name, not by a crash inside the builder", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-nots-"));
+  try {
+    writeFileSync(join(root, "routing-policy.yaml"), POLICY);
+    const passDir = join(root, "passes", "p-test");
+    mkdirSync(passDir, { recursive: true });
+    writeFileSync(
+      join(passDir, "manifest.json"),
+      JSON.stringify({ schema: 1, run: { pass: "p-test", policy: "check-collect" }, totals: { cost_usd: 0.05 } }, null, 2)
+    );
+    writeFileSync(
+      join(passDir, "telemetry.jsonl"),
+      [
+        JSON.stringify({ pass: "p-test", phase: "codegen", task_id: "t-1", cost_usd: 0.05 }),
+        JSON.stringify({ pass: "p-test", phase: "tests", task_id: "t-2", cost_usd: 0.0 }),
+      ].join("\n") + "\n"
+    );
+    const res = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root], { encoding: "utf-8" });
+    const out = (res.stdout ?? "") + (res.stderr ?? "");
+    assert.notEqual(res.status, 0, out);
+    // buildManifest sorts on ts.localeCompare, so an unguarded ts-less line threw
+    // "Cannot read properties of undefined" — naming neither the file nor the field.
+    assert.doesNotMatch(out, /localeCompare|Cannot read properties/, `must not surface the builder's internal crash\n${out}`);
+    assert.match(out, /no dispatched event with a parseable ts/, out);
+    assert.match(out, /2 dispatched line\(s\), none timestamped/, out);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a readable top-level window with no run id anywhere is refused, and nothing is written", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-collect-noid2-"));
+  try {
+    writeFileSync(join(root, "routing-policy.yaml"), POLICY);
+    const passDir = join(root, "passes", "p-test");
+    mkdirSync(passDir, { recursive: true });
+    const started = new Date(Date.now() - 30 * MIN).toISOString();
+    const ended = new Date(Date.now() - 10 * MIN).toISOString();
+    // Top-level window IS readable, so the rebuild never runs and the earlier
+    // no-id throw is never reached — this pins the second one. Before the change
+    // this booked real dollars against the literal pass `undefined`, writing a
+    // telemetry event with task_id "orchestrator-overhead-undefined".
+    writeFileSync(
+      join(passDir, "manifest.json"),
+      JSON.stringify({ schema: 1, started_at: started, ended_at: ended, total_cost_usd: 0.05, policy: "check-collect" }, null, 2)
+    );
+    writeFileSync(
+      join(passDir, "telemetry.jsonl"),
+      JSON.stringify({ phase: "codegen", task_id: "t-1", cost_usd: 0.05, ts: started }) + "\n"
+    );
+    const res = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root], { encoding: "utf-8" });
+    const out = (res.stdout ?? "") + (res.stderr ?? "");
+    assert.notEqual(res.status, 0, `expected a refusal, got exit ${res.status}\n${out}`);
+    assert.match(out, /cannot name this run/, out);
+    assert.doesNotMatch(out, /orchestrator-overhead-undefined/, out);
+    const m = JSON.parse(readFileSync(join(passDir, "manifest.json"), "utf-8"));
+    assert.equal(m.orchestrator_overhead, undefined);
+    const lines = readFileSync(join(passDir, "telemetry.jsonl"), "utf-8").trim().split("\n");
+    assert.equal(lines.length, 1, "no orchestrator event may be appended");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
