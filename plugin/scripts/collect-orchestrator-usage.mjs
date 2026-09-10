@@ -75,6 +75,12 @@
  *      "approximate window" in cost_source and `window.exact = false` in the
  *      manifest, and the receipt rule (8) is what decides whether it was
  *      right — a wrong window fails that rule; it never writes a guess.
+ *      One case is worse than approximate and says so: when the opening anchor
+ *      is `started_at` (the first DISPATCHED call) the window cannot see what
+ *      the driver did before it, so the overhead is a FLOOR, not an estimate —
+ *      measured 22% low on v37-agsdk-1 and 83% low on a nested-window
+ *      receivables fixture. That case reads "LOWER BOUND — window opens at the
+ *      first dispatch" in cost_source and sets `window.lower_bound = true`.
  *      `run.start`/`run.end` are read as the LAST run.start at or before the
  *      first dispatch (a reused run id appends to the same log) and the first
  *      lifecycle marker after it, which must be run.end. File-level pruning
@@ -389,8 +395,39 @@ export function compareBuckets(perModel, receiptModels) {
 // Runs write `policy`/`run_id`; `buildManifest`'s shape says `policy_name`/`pass`.
 // Read both spellings — a manifest key the reader does not recognise otherwise
 // resolves to undefined and reprices the whole run under a fallback preset.
-export const manifestPolicyName = (manifest) => manifest.policy ?? manifest.policy_name;
-export const manifestPassId = (manifest) => manifest.run_id ?? manifest.pass;
+// Identity — the run's id and policy name — is `buildManifest`'s INPUT, not its
+// output: nothing can derive what a run was called. The manifest's own top-level
+// spellings are read first, then the dispatched lines, which each carry `pass`
+// and `routing.policy_name`. No nested manifest key is read on purpose: adding
+// them would be a list of model-invented names to keep extending, whereas the
+// log's field names are written by code and cannot drift.
+//
+// THIS DOES CHANGE SOME ALREADY-PRICED RUNS, and the change is not cosmetic. A
+// manifest with a readable top-level window but no id used to yield the literal
+// pass `undefined`, and the command-turn scan skips any turn whose `--run-id`
+// does not equal the pass — so the run's own invocation was skipped, the window
+// fell back to the approximate ±5m anchors, and no session was pinned. Once the
+// id resolves, that run pins its session and measures an exact window, and its
+// dollars move. On one probe: $1.85 approximate becomes $1.55 exact. The new
+// figure is the correct one, but anything already published from the old path
+// must be re-collected rather than assumed stable — `orchestrator_overhead.window`
+// records `source`, `exact` and `session_id` so the two are told apart.
+//
+// Orchestrator lines are skipped, exactly as the window skips them — but for a
+// second reason. THIS SCRIPT writes an orchestrator line, and stamps its own
+// `pass` and `routing.policy_name` into it. Reading those back on a re-run would
+// make the collector's previous answer its next input: run it once with
+// `--policy X` and every later run would silently re-price under X, with no
+// manifest and no dispatched line ever having said so. The dispatched lines are
+// the run's own record and nothing here ever writes them, so the fallback reads
+// only those.
+const dispatchedOnly = (events) => events.filter((ev) => ev && ev.tier !== "orchestrator");
+export const manifestPolicyName = (manifest, events = []) =>
+  manifest.policy ??
+  manifest.policy_name ??
+  dispatchedOnly(events).find((ev) => ev?.routing?.policy_name)?.routing?.policy_name;
+export const manifestPassId = (manifest, events = []) =>
+  manifest.run_id ?? manifest.pass ?? dispatchedOnly(events).find((ev) => ev?.pass)?.pass;
 
 function parseArgs(argv) {
   const args = {
@@ -429,7 +466,8 @@ async function loadDist() {
     const policyMod = await import(pathToFileURL(join(DIST, "policy.js")).href);
     const routingMod = await import(pathToFileURL(join(DIST, "routing.js")).href);
     const pricingMod = await import(pathToFileURL(join(DIST, "pricing.js")).href);
-    return { policyMod, routingMod, pricingMod };
+    const telemetryMod = await import(pathToFileURL(join(DIST, "telemetry.js")).href);
+    return { policyMod, routingMod, pricingMod, telemetryMod };
   } catch (err) {
     throw new Error(
       `could not load the dispatch server's compiled modules from ${DIST} — the MCP ` +
@@ -753,13 +791,91 @@ export async function main(argv = process.argv.slice(2)) {
   if (!existsSync(manifestPath)) {
     throw new Error(`no manifest.json in ${passDir} — is this a run's pass directory?`);
   }
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+  const modelWritten = JSON.parse(readFileSync(manifestPath, "utf-8"));
+  // The call log: machine-written, one line per dispatched call.
+  const logEvents = readTelemetry(telemetryPath);
+  const { policyMod, routingMod, pricingMod, telemetryMod } = await loadDist();
+
+  // ── When the model's manifest cannot be read, rebuild it ────────────────
+  //
+  // manifest.json is written BY THE MODEL, by hand. `buildManifest` — the
+  // function this repo wrote to produce it — had no caller that ever wrote a
+  // manifest: SKILL.md's Phase 9 names it as a SHAPE for the model to imitate
+  // ("Build rollup manifest using the buildManifest shape") and hands the model
+  // the write. The call below is its first production caller. So the shape drifts,
+  // and the two greenfield runs in this repo disagree on every field that
+  // matters:
+  //
+  //   examples/quick-demo/passes/agent-path/.sdlc  run.pass    run.policy       run.finished_at
+  //   examples/quick-demo/passes/model-path/.sdlc  run.pass_id run.policy_name  run.ended_at
+  //
+  // Neither puts the window where this script looks, so EVERY greenfield run
+  // exited at "no parseable started_at/ended_at" before reading a transcript
+  // line, and the driver's own cost has never once been booked for one.
+  //
+  // Chasing those names would be endless — each run invents its own. So this
+  // does not read them. When the manifest's own top-level window is missing,
+  // the manifest is REBUILT with `buildManifest` over the run's own
+  // telemetry.jsonl, and the rebuilt object is read from there on. That file
+  // is written by code, one line per dispatched call, and is the same source
+  // buildManifest derives every figure from — so this is not a guess and not
+  // a fallback chain: it is the repo's own builder, finally run, on the run's
+  // own call log.
+  //
+  // The model-written file is left on disk untouched; nothing here writes it.
+  let manifest = modelWritten;
+  let rebuilt = false;
+  const windowUnreadable = () =>
+    !Number.isFinite(Date.parse(manifest.started_at)) || !Number.isFinite(Date.parse(manifest.ended_at));
+
+  // buildManifest takes the run's identity as input — it derives every figure,
+  // but it cannot know what the run was called. That is the one thing only the
+  // manifest recorded, so it is read there first and from the dispatched lines
+  // second (they each carry `pass` and `routing.policy_name`).
+  const passIdRaw = manifestPassId(modelWritten, logEvents);
+  const policyNameRaw = manifestPolicyName(modelWritten, logEvents);
+  if (windowUnreadable()) {
+    if (passIdRaw === undefined || passIdRaw === null || passIdRaw === "") {
+      throw new Error(
+        `no run id: manifest.json has no run_id/pass and telemetry.jsonl has no dispatched event carrying one — cannot rebuild the manifest`
+      );
+    }
+    const anchorable = dispatchedOnly(logEvents).filter((ev) => Number.isFinite(Date.parse(ev.ts)));
+    if (anchorable.length === 0) {
+      const total = dispatchedOnly(logEvents).length;
+      throw new Error(
+        `manifest.json has no parseable started_at/ended_at and telemetry.jsonl has no dispatched event with a parseable ts to rebuild it from ` +
+          `(${total} dispatched line(s), none timestamped) — cannot anchor the run window`
+      );
+    }
+    manifest = telemetryMod.buildManifest(logEvents, {
+      pass: String(passIdRaw),
+      policy_name: policyNameRaw === undefined || policyNameRaw === null ? "" : String(policyNameRaw),
+    });
+    rebuilt = true;
+    console.log(
+      `  manifest.json carries no top-level started_at/ended_at — rebuilt from telemetry.jsonl with buildManifest (${dispatchedOnly(logEvents).length} dispatched call(s)); the model-written file is left as it is`
+    );
+  }
+
   const firstDispatchMs = Date.parse(manifest.started_at);
   const lastDispatchMs = Date.parse(manifest.ended_at);
   if (!Number.isFinite(firstDispatchMs) || !Number.isFinite(lastDispatchMs)) {
     throw new Error(`manifest.json has no parseable started_at/ended_at — cannot anchor the run window`);
   }
-  const passId = String(manifestPassId(manifest));
+  // Report each anchor under the file it actually came from. Naming the manifest
+  // for a value it never held printed the word `undefined` into the run's own
+  // record, and a reader checking the window against the manifest would find
+  // nothing there.
+  const source = rebuilt ? "the manifest rebuilt from telemetry.jsonl" : "the manifest's";
+  const startedAtLabel = `${source} started_at ${manifest.started_at} (= first dispatched event)`;
+  const endedAtLabel = `${source} ended_at ${manifest.ended_at} (= last dispatched event)`;
+  if (passIdRaw === undefined || passIdRaw === null || passIdRaw === "") {
+    throw new Error(
+      `no run id: manifest.json has no run_id/pass and telemetry.jsonl has no dispatched event carrying one — cannot name this run`
+    );
+  }
+  const passId = String(passIdRaw);
   const projectRoot = resolve(args.projectRoot ?? process.cwd());
 
   // ── The driver's own lifecycle markers ──────────────────────────────────
@@ -787,12 +903,32 @@ export async function main(argv = process.argv.slice(2)) {
     if (found) runEnd = { ...found, path: runStart.path };
   }
 
-  const { policyMod, routingMod, pricingMod } = await loadDist();
   // Default to the policy the run recorded — pricing overhead under any
   // other policy would attribute dollars the run never saw.
+  //
+  // When nothing named one, `loadPolicy` picks a shipped preset. That is a
+  // reasonable default but it is NOT this run's policy, and pricing a driver
+  // session under a rate card the run never used is the exact class of error
+  // this script exists to catch. It is not fatal — the id is required because
+  // buildManifest cannot run without it, whereas a rate card can be supplied
+  // after the fact with --policy or --policy-path — but it is never silent: the
+  // fallback is named on stdout and the run says which policy it was priced
+  // under, so a reader can see that the name came from nowhere.
+  const policyNameGiven = args.policy ?? policyNameRaw;
+  if (!args.policyPath && (policyNameGiven === undefined || policyNameGiven === null || policyNameGiven === "")) {
+    console.log(
+      `  NOTE: no policy name in manifest.json (policy/policy_name) or in any dispatched telemetry line, ` +
+        `and no --policy given — falling back to this install's default policy. The driver's dollars below are ` +
+        `priced under that card, NOT under a card this run recorded. Pass --policy <name> or --policy-path <file> ` +
+        `to price it under the run's own.`
+    );
+  }
   const policy = args.policyPath
     ? policyMod.loadPolicyFromPath(resolve(args.policyPath))
-    : policyMod.loadPolicy({ policyName: args.policy ?? manifestPolicyName(manifest), projectRoot });
+    : policyMod.loadPolicy({ policyName: policyNameGiven, projectRoot });
+  if (!args.policyPath && (policyNameGiven === undefined || policyNameGiven === null || policyNameGiven === "")) {
+    console.log(`  NOTE: that default resolved to policy '${policy.name}'.`);
+  }
   const overrides = routingMod.parseSelectOverrides(process.env.MMO_SELECT);
 
   // Claude Code's own accounting for the driver session, when a runner kept
@@ -867,6 +1003,10 @@ export async function main(argv = process.argv.slice(2)) {
   let files;
   let pinned;
   let pinnedId;
+  // Set only by the opening-anchor branch that starts at the first dispatched
+  // call: everything the driver did before it is outside the window, so the
+  // overhead can only be under-reported, never over.
+  let overheadIsFloor = false;
   let mainFile;
   if (commandTurn) {
     pinnedId = commandTurn.session_id;
@@ -898,9 +1038,23 @@ export async function main(argv = process.argv.slice(2)) {
     startLine = `opens at run.start ${runStart.iso} in ${runStart.path} minus 5 minutes (approximate: no run command turn found in ${tDir})`;
   } else {
     windowStartMs = firstDispatchMs - WINDOW_SLACK_MS;
-    startAnchor = "manifest started_at - 5m";
+    startAnchor = rebuilt ? "telemetry rebuild started_at - 5m" : "manifest started_at - 5m";
+    // THIS BRANCH PRODUCES A FLOOR, NOT AN APPROXIMATION.
+    //
+    // started_at is the first DISPATCHED call, so opening the window there drops
+    // every driver message before it — reading the brief, requirements analysis,
+    // planning. That is not noise around a true value, it is missing spend, and
+    // it only ever runs one way: the reported cost is at or below the real one.
+    // Measured: 22% low on v37-agsdk-1 (docs/methodology.md), and 83% low on a
+    // nested-window receivables fixture ($16.15 real, $2.78 reported).
+    //
+    // "approximate" reads as "give or take". A figure that can be a fifth of the
+    // truth must not be quoted that way — it is the same failure this script
+    // exists to end, one order of magnitude smaller. So it is labelled a lower
+    // bound, in the console, in the report line and in the run's own record.
+    overheadIsFloor = true;
     startExact = false;
-    startLine = `opens at the manifest's started_at ${manifest.started_at} (= first dispatched event) minus 5 minutes (approximate: no run command turn found in ${tDir} and no run.start line in ${runLogCandidates[0]})`;
+    startLine = `opens at ${startedAtLabel} minus 5 minutes (approximate: no run command turn found in ${tDir} and no run.start line in ${runLogCandidates[0]})`;
   }
 
   // ── Closing anchor ──────────────────────────────────────────────────────
@@ -938,10 +1092,10 @@ export async function main(argv = process.argv.slice(2)) {
     endLine = `closes at the end of the session file: no run.end line in ${runLogCandidates[0]}, and no human turn after the window opens (exact)`;
   } else {
     windowEndMs = lastDispatchMs + WINDOW_SLACK_MS;
-    endAnchor = "manifest ended_at + 5m";
+    endAnchor = rebuilt ? "telemetry rebuild ended_at + 5m" : "manifest ended_at + 5m";
     endExact = false;
     endLine =
-      `closes at the manifest's ended_at ${manifest.ended_at} (= last dispatched event) plus 5 minutes (approximate: no run.end line in ${runLogCandidates[0]}` +
+      `closes at ${endedAtLabel} plus 5 minutes (approximate: no run.end line in ${runLogCandidates[0]}` +
       (mainFile ? ", and a human turn after the window opens that only run.end could place)" : ", and the scan is not pinned to a session file)");
   }
   const windowExact = startExact && endExact;
@@ -959,8 +1113,17 @@ export async function main(argv = process.argv.slice(2)) {
 
   console.log(
     `collect-orchestrator-usage: pass '${passId}' window ${isoOf(windowStartMs)} → ${finiteEnd ? isoOf(windowEndMs) : "end of session"}` +
-      (windowExact ? "" : " (approximate)")
+      (windowExact ? "" : " (approximate)") +
+      (overheadIsFloor ? " — LOWER BOUND" : "")
   );
+  if (overheadIsFloor) {
+    console.log(
+      `  ! the overhead below is a LOWER BOUND, not an estimate: the window opens at the first dispatched call, ` +
+        `so every driver message before it (brief, requirements, planning) is outside it. The real figure is higher — ` +
+        `by 22% on one measured run and by 83% on another. Do not quote it as a measurement. To close the gap, run ` +
+        `the collector where the run's .sdlc/runs/<run-id>/orchestrator.log and the driver's session transcript live.`
+    );
+  }
   console.log(`  ${startLine}`);
   console.log(`  ${endLine}`);
   if (runStart && firstDispatchMs - runStart.ms > 60 * 60_000) {
@@ -1078,7 +1241,7 @@ export async function main(argv = process.argv.slice(2)) {
     input_cache_write_1h: t.input_cache_write_1h,
   });
   const transcriptCost = driver ? pricingMod.computeCostUsd(priceOf(tokens), driver.pricing) : null;
-  const approxTag = windowExact ? "" : "; approximate window";
+  const approxTag = overheadIsFloor ? "; LOWER BOUND — window opens at the first dispatch" : windowExact ? "" : "; approximate window";
 
   // ── The receipt rule ────────────────────────────────────────────────────
   let cost;
@@ -1262,12 +1425,34 @@ export async function main(argv = process.argv.slice(2)) {
   // reported overhead as if it were the whole cost — a silent under-report of
   // the entire mechanical tier, which is the failure this script exists to end.
   // Absent both, stop: a cost of zero must never be assumed.
-  const dispatched = manifest.totals?.dispatched_cost_usd ?? manifest.total_cost_usd;
-  if (typeof dispatched !== "number") {
+  // THE MONEY COMES FROM THE MODEL'S OWN FILE, NOT FROM THE REBUILD.
+  //
+  // The rebuild exists to supply the run WINDOW when the model misplaced it —
+  // nothing else. Reading the dispatched total off it too would silently swap an
+  // authoritative figure for a re-derivation whenever the window happened to be
+  // nested: `buildManifest` emits no `totals` object at all, so
+  // `totals.dispatched_cost_usd` would miss and fall through to the rebuild's own
+  // sum of the log. Those two disagree routinely — telemetry is repriced or
+  // repaired after a run — and on the repo's own receivables fixture the swap
+  // reports $22.31 where the manifest says $6.08, a 3.7x overstatement, and
+  // fabricates an in-session subtraction the run never had (`models_used` is also
+  // absent from a rebuild, which disables the model filter).
+  //
+  // So: the model's file first, both spellings, exactly as before this change.
+  // The rebuild is the last resort, and only reaches this line for a run whose
+  // manifest records no dispatched figure anywhere — which is the greenfield
+  // case, where the rebuild's sum is the same arithmetic over the same log.
+  const dispatched =
+    modelWritten.totals?.dispatched_cost_usd ??
+    modelWritten.total_cost_usd ??
+    (rebuilt ? manifest.total_cost_usd : undefined);
+  if (!Number.isFinite(dispatched)) {
     console.error(
-      `collect-orchestrator-usage FAILED: the manifest carries no dispatched cost ` +
-        `(looked for totals.dispatched_cost_usd, then total_cost_usd). Refusing to ` +
-        `assume $0 — that would report the overhead as the entire run cost. Nothing was written.`
+      `collect-orchestrator-usage FAILED: the manifest carries no usable dispatched cost ` +
+        `(looked for totals.dispatched_cost_usd, then total_cost_usd; got ${JSON.stringify(dispatched)}). ` +
+        `A NaN counts as unusable: it survives a typeof check, serialises to null, and would write a run ` +
+        `record whose cost reads as absent. Refusing to assume $0 — that would report the overhead as the ` +
+        `entire run cost. Nothing was written.`
     );
     return 1;
   }
@@ -1275,7 +1460,7 @@ export async function main(argv = process.argv.slice(2)) {
   // scan was not pinned to the driver's session AND the figure written is the
   // transcript's: a booked receipt bills the driver's session alone, so the
   // worker's dollars are not inside it and must stay in the total.
-  const inside = inSessionDispatched(readTelemetry(telemetryPath), policy, manifest, dispatched, {
+  const inside = inSessionDispatched(readTelemetry(telemetryPath), policy, modelWritten, dispatched, {
     claudeCliScanned: !pinned && driver != null && costSource.startsWith("transcript"),
   });
   for (const n of inside.notes) console.error(`NOTE: ${n}`);
@@ -1309,10 +1494,10 @@ export async function main(argv = process.argv.slice(2)) {
   const provenance = "transcript";
   const event = {
     ts: new Date().toISOString(),
-    pass: manifestPassId(manifest),
+    pass: passId,
     phase: "orchestrator_overhead",
     task_type: "orchestrator_overhead",
-    task_id: `orchestrator-overhead-${manifestPassId(manifest)}`,
+    task_id: `orchestrator-overhead-${passId}`,
     module: "orchestrator",
     model: derived.modelName,
     model_id: derived.modelId,
@@ -1352,7 +1537,13 @@ export async function main(argv = process.argv.slice(2)) {
   writeFileSync(tmpT, kept.join("\n") + "\n", "utf-8");
   renameSync(tmpT, telemetryPath);
 
-  manifest.orchestrator_overhead = {
+  // The two figures this script adds go onto the file that is ON DISK — the
+  // model-written one — never onto a rebuild. A rebuild exists only so the
+  // window and the dispatched total can be READ when the model misplaced them;
+  // writing it back would replace the run's own record with a reconstruction,
+  // and the run's own record is the evidence. `modelWritten` and `manifest` are
+  // the same object whenever no rebuild happened, so this is a no-op then.
+  modelWritten.orchestrator_overhead = {
     cost_usd: cost,
     input_tokens: tokens.input,
     input_tokens_cached: tokens.input_cached,
@@ -1377,12 +1568,22 @@ export async function main(argv = process.argv.slice(2)) {
       start_anchor: startAnchor,
       end_anchor: endAnchor,
       exact: windowExact,
+      // true when the window opens at the first dispatched call: the overhead is
+      // a floor, and the real driver cost is higher. Recorded so a reader of the
+      // manifest sees it without having watched the run.
+      lower_bound: overheadIsFloor,
       session_id: pinnedId,
+      // Which file the anchors were derived from. "manifest" is the model's own
+      // file; "telemetry-rebuild" means it carried no top-level window and the
+      // manifest was rebuilt from telemetry.jsonl with buildManifest to read it.
+      // Recorded because the anchor names alone were once written as
+      // "manifest started_at - 5m" for a value the manifest never held.
+      source: rebuilt ? "telemetry-rebuild" : "manifest",
     },
   };
-  manifest.true_total_cost_usd = trueTotal;
+  modelWritten.true_total_cost_usd = trueTotal;
   const tmpM = `${manifestPath}.tmp-collect`;
-  writeFileSync(tmpM, JSON.stringify(manifest, null, 2), "utf-8");
+  writeFileSync(tmpM, JSON.stringify(modelWritten, null, 2), "utf-8");
   renameSync(tmpM, manifestPath);
 
   console.log(`written: 1 orchestrator event → ${telemetryPath}; manifest patched with orchestrator_overhead + true_total_cost_usd.`);
