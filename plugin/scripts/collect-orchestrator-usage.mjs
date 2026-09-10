@@ -75,6 +75,12 @@
  *      "approximate window" in cost_source and `window.exact = false` in the
  *      manifest, and the receipt rule (8) is what decides whether it was
  *      right — a wrong window fails that rule; it never writes a guess.
+ *      One case is worse than approximate and says so: when the opening anchor
+ *      is `started_at` (the first DISPATCHED call) the window cannot see what
+ *      the driver did before it, so the overhead is a FLOOR, not an estimate —
+ *      measured 22% low on v37-agsdk-1 and 83% low on a nested-window
+ *      receivables fixture. That case reads "LOWER BOUND — window opens at the
+ *      first dispatch" in cost_source and sets `window.lower_bound = true`.
  *      `run.start`/`run.end` are read as the LAST run.start at or before the
  *      first dispatch (a reused run id appends to the same log) and the first
  *      lifecycle marker after it, which must be run.end. File-level pruning
