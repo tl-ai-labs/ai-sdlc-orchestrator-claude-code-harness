@@ -1,0 +1,128 @@
+# Multi-model — Sonnet 5 for judgment phases, Gemini 3.7 Flash for mechanical.
+# Same rule set as opus-plus-flash-v37; only the judgment leaf changes.
+#
+# Why this exists: on measured brownfield runs the driver session (the Claude
+# Code loop that reads the repo, plans packets, and reviews) is ~90% of the
+# true total, and the dispatched Flash work under 5%. Moving the mechanical
+# tier off Opus barely moves the bill; moving the driver tier off Opus does.
+# Sonnet 5 is 2.5x cheaper per token than Opus 5 on every token class.
+#
+# Under --auth=estimated the judgment tier runs in-session, so the driver
+# model must also be exported before `claude` launches:
+#   export CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5
+# The orchestrator's driver-model check stops the run if it disagrees.
+version: 1
+name: sonnet-plus-flash
+
+models:
+  - id: sonnet
+    adapter: builtin-anthropic
+    model_name: claude-sonnet-5
+    # Sonnet 5 list card: input 2.00 / cached 0.20 / output 10.00 per 1M.
+    # Source: platform.claude.com pricing page, checked 2026-09-11.
+    pricing: { input: 2.00, input_cached: 0.20, output: 10.00 }
+    pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
+    pricing_last_verified: 2026-09-11
+    auth: { env: ANTHROPIC_API_KEY }
+    max_output_tokens_absolute: 32000
+
+  # Gemini 3.7 Flash as a MODEL. One completion call per packet.
+  - id: flash-completion
+    adapter: mcp:model-dispatch
+    model_name: gemini-3.7-flash
+    display_name: gemini-3.7-flash
+    # Introductory rate card, in force through 2026-12-31 (reverts to
+    # 1.50 / 0.15 / 7.50 on 2027-01-01). Vertex regional endpoints add +10%
+    # at dispatch via geminiTransports.ts::applyVertexSurcharge.
+    pricing: { input: 0.75, input_cached: 0.075, output: 3.75 }
+    pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
+    pricing_last_verified: 2026-09-11
+    auth: { env: GEMINI_API_KEY }
+    max_output_tokens_absolute: 8192
+
+  # The SAME model reached as an AGENT. Kept selectable for docs / test
+  # backfill jobs that need the worker to explore; on feature-extend runs it
+  # cost 8-20x the completion door for the same packets.
+  - id: flash-agsdk-worker
+    adapter: antigravity-worker
+    model_name: gemini-3.7-flash
+    display_name: gemini-3.7-flash (Antigravity agent)
+    pricing: { input: 0.75, input_cached: 0.075, output: 3.75 }
+    pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
+    pricing_last_verified: 2026-09-11
+    worker_timeout_sec: 540
+
+select:
+  gemini-flash:
+    default: flash-completion
+    options:
+      - flash-completion
+      - flash-agsdk-worker
+    reason: "How the mechanical tier reaches Gemini 3.7: one completion call (cheap, predictable) or an agent session with tools and a workspace (costlier per packet, does its own reading and editing)."
+
+rules:
+  - when: { phase: requirements_analysis }
+    use: sonnet
+    reason: "Judgment-heavy, low volume"
+  - when: { phase: architecture_design }
+    use: sonnet
+    reason: "Foundational, decision-bearing"
+  - when: { phase: plan_task_packets }
+    use: sonnet
+    reason: "Needs full context to slice work cleanly"
+  - when: { phase: senior_code_review }
+    use: sonnet
+    reason: "Cross-file reasoning + judgment"
+  - when: { phase: security_review }
+    use: sonnet
+    reason: "Risk-bearing, low volume"
+
+  # Brownfield-mode phases.
+  - when: { phase: discovery }
+    use: sonnet
+    reason: "Judgment: understanding an unknown repo"
+  - when: { phase: change_plan }
+    use: sonnet
+    reason: "Judgment: delta design for feature-extend / refactor / deps"
+
+  - when:
+      phase: codegen
+      task_type:
+        - controller_handler
+        - service_method
+        - dto
+        - module_wiring
+        - migration
+        - seed_data
+        - entity
+        - guard
+        - interceptor
+        - filter
+        - react_component
+        - react_page
+        - api_client
+        - frontend_util
+        - frontend_config
+        - frontend_html
+    use: gemini-flash
+    reason: "Schema-driven boilerplate"
+  - when: { phase: tests }
+    use: gemini-flash
+    reason: "Scaffold-heavy, pattern-based"
+  - when: { phase: docs }
+    use: gemini-flash
+    reason: "Volume work"
+
+  # Escalate to Sonnet after 2 mechanical-tier retries.
+  - when: { phase: debug, retry_count: { gte: 2 } }
+    use: sonnet
+    reason: "Escalation: 2 mechanical-tier attempts failed"
+  - when: { phase: debug }
+    use: gemini-flash
+    reason: "Most debugs have clear cause"
+
+  - default: sonnet
+    reason: "Unrecognized task — fail safe to the judgment tier"
+
+# Hard per-run cost cap.
+hard_cost_cap_usd: 50

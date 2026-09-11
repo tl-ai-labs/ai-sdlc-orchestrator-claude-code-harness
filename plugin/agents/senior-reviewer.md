@@ -43,9 +43,15 @@ not the whole repo. This is the v1 simplification per C5 cut in the plan self-re
 
 Behavior:
 - Read `.sdlc/runs/<run-id>/provenance.json` to get the list of files this run has written or
-  edited.
-- `Glob`/`Grep`/`Bash ls -R` **only** those files (or their immediate module directory if a
-  small feature folder). Do NOT walk the whole codebase looking for unrelated smells.
+  edited, and `git_head_before`.
+- **Read the change, not the tree.** For each edited file read
+  `git diff <git_head_before> -- <path>`; read new files in full. Open a file outside the touched
+  set only to resolve a symbol the diff references (an imported type, a called helper) and read
+  only that symbol's definition. Do not read `discovery.md`, `stack-profile.md`, `packets.json`,
+  or the run's telemetry — none of them is the code under review. Read `change_plan.md` once, for
+  the intended shape of the change; that is the spec the diff is checked against.
+- `Glob`/`Grep`/`Bash ls -R` **only** the touched files' directories when you need to confirm a
+  sibling convention. Do NOT walk the whole codebase looking for unrelated smells.
 - Findings scoped to the changed files' correctness, type safety, error handling, authz on new
   routes, PII handling on new fields, DRY within the changed set, and test coverage of the
   changed code.

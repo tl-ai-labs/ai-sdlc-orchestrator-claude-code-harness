@@ -177,8 +177,8 @@ non-docs intent, and `docs` runs from before this existed — infer as before.
 
 Set `budget.maxOutputTokens` per phase type. The adapter automatically doubles this ceiling on any attempt that terminates with the vendor's max-tokens stop reason (Anthropic `stop_reason: "max_tokens"`, Gemini `finishReason: "MAX_TOKENS"`), up to 3 doublings or the model's absolute output limit declared in the policy YAML (`max_output_tokens_absolute`), whichever comes first. Cached input keeps retry cost low.
 
-- **Codegen packets:** `3000` (services, controllers, DTOs, tests). Most files fit first-shot; a few large service files double once or twice.
-- **Premium packets (design, senior_code_review, security_review):** `5000`. Design and review artifacts are the ones that historically hit the ceiling.
+- **Codegen and test packets:** `6000` (services, controllers, DTOs, React components, test files). A ceiling is a cap, not a spend — an unused ceiling costs nothing, while every doubling re-bills the whole attempt and returns a second full copy into your context. At `3000`, one feature-extend run doubled 4 of 14 codegen packets; at `6000` none of them would have.
+- **Premium packets (design, senior_code_review, security_review):** `8000`. Design and review artifacts are the ones that historically hit the ceiling.
 - **Docs, ADR, README:** `3000`. Same doubling behavior.
 - **Debug packets:** inherit from the packet they refine.
 
@@ -202,6 +202,10 @@ Write the returned file content to disk at the packet's stated `artifact_path`.
 ### Phase 6 — senior_code_review
 
 Invoke `senior-reviewer` subagent for each module. Collect refinement packets. Re-dispatch them via Phase 5 mechanics.
+
+In brownfield the delegation carries paths only — `change_plan.md` (or `requirements.md`) and
+`provenance.json` — per orchestrator.md rule 9; the reviewer reads diffs against
+`git_head_before`, not whole files.
 
 ### Phase 7 — test_run
 
@@ -241,6 +245,22 @@ On failure:
 
 Invoke `security-reviewer` subagent. Writes `<output_dir>/security_review.md`.
 
+**Brownfield: pick `form: full` or `form: light` from the touched set, then delegate.** Read the
+`files` list in `provenance.json` and match each path against the security surface below. Any
+match → `full`. No match → `light`, and the reviewer runs only the secrets and dependency checks.
+Log the phase with `--form=<full|light>` so the report shows which one ran.
+
+| Surface | Path or content signal |
+|---|---|
+| Auth and authz | path contains `auth`, `guard`, `session`, `permission`, `role`, `middleware`, `policy` |
+| Route registration | new or edited controller, router, `urls.py`, `routes/`, `index.ts` that registers handlers, `include_router` |
+| Data layer | `migration`, `schema`, `prisma`, `models.py`, `entity`, `repository`, `db/` |
+| Serialization of user data | `dto`, `serializer`, `interceptor`, `transform`, `mask` |
+| Config and secrets | `.env*`, `config/`, `settings.py`, `package.json`, lockfiles, `Dockerfile`, CI workflow files |
+| Audit | `audit`, `log` in a path under the API or server tree |
+
+A pure presentation change — a React component, a stylesheet, an i18n file, a docs page, a test file for existing code — matches none of these. A run that adds an unauthenticated endpoint matches *Route registration* and gets the full checklist. When in doubt, `full`; the light form is for the case where there is nothing for the checklist to find.
+
 ### Phase 9 — generate_final_report
 
 Read all events in `<telemetry_path>`. Build rollup manifest using the `buildManifest` shape (see `plugin/mcp/model-dispatch/src/telemetry.ts`). Write `<output_dir>/manifest.json`. Also write a brief `<output_dir>/SUMMARY.md` with: total cost, breakdown, links to key artifacts.
@@ -267,7 +287,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/collect-orchestrator-usage.mjs" <output_dir>
   inputs: [ { path, content, reason } ],  // SLICED — never full files unless necessary
   outputSchema: { /* JSON schema */ },
   acceptance: ["<testable bullet>", ...],
-  budget: { maxInputTokens: 4000, maxOutputTokens: 3000 },  // codegen initial; adapter doubles on max_tokens truncation up to 3× (see below)
+  budget: { maxInputTokens: 4000, maxOutputTokens: 6000 },  // codegen initial; adapter doubles on max_tokens truncation up to 3× (see below)
   retry_count: 0,
   pass_id: "pass1" | "pass2",
   intent: "docs" | "bugfix" | "feature-extend" | "feature-new" | "refactor" | "test" | "deps"  // brownfield only — omit entirely on greenfield packets
@@ -295,12 +315,12 @@ phase) does NOT change per intent; that's fixed by the loaded policy (§11).
 
 | Intent | Phase 1 · requirements | Phase 2 · architecture | Phase 4 · packet plan | Phase 7 · tests | Phase 8 · security review |
 |---|---|---|---|---|---|
-| **docs** | scoped ("what docs?") | **SKIP** | `doc_addition` / `doc_update` packets | doc-lint only | changed files only |
+| **docs** | scoped ("what docs?") | **SKIP** | `doc_addition` / `doc_update` packets | doc-lint only | changed files only, `light` unless the surface table matches |
 | **bugfix** | reproduce + diagnose | **SKIP** unless design-affecting | `bug_reproduce` → `bug_diagnose` → `bug_fix_apply` → `test_add` | regression + focused suite | changed files only |
-| **feature-extend** | delta requirements | delta `change_plan.md` | mixed `existing_file_edit` + `new_file_add` | affected suites | changed files only |
+| **feature-extend** | delta requirements | delta `change_plan.md` | mixed `existing_file_edit` + `new_file_add` | affected suites | changed files only; `full` or `light` per the Phase 8 surface table |
 | **feature-new** | new-feature requirements | full subsystem design (`change_plan.md`) | full mix (`new_file_add`, `test_add`, `doc_addition`, wiring) | affected + new | changed files only |
-| **refactor** | delta (what to preserve) | delta refactor plan | `refactor_extract` + `patch_apply` | **full suite** (invariants) | changed files only |
-| **test** | coverage target | **SKIP** | `test_backfill` / `test_add` | new tests + full suite | test files only |
+| **refactor** | delta (what to preserve) | delta refactor plan | `refactor_extract` + `patch_apply` | **full suite** (invariants) | changed files only; `full` or `light` per the Phase 8 surface table |
+| **test** | coverage target | **SKIP** | `test_backfill` / `test_add` | new tests + full suite | test files only, `light` |
 | **deps** | upgrade target list | dep-swap plan | `dependency_add` + adjacent-code patches | full suite + smoke | dep-diff + advisory |
 
 **v1 specialization scope (per C6 cut).** Matrix cells are fully specified for the four "known"

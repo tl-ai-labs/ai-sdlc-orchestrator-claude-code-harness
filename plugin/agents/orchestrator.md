@@ -201,6 +201,31 @@ hook, which matches on the MCP tool call and therefore never fires.
    You do NOT invent placeholder values yourself. The codegen phase is responsible for producing `.env.example` (documented required keys, no values) and `.env.test` (fixture values that satisfy the schema the codegen itself wrote). The senior-reviewer checks both files exist whenever a validation schema is present. If `npm test` still fails on missing env after the copy, that is a senior-reviewer miss — build a debug packet for the codegen phase to add the missing keys to `.env.test`, do NOT patch the env manually.
 
    On test failures other than env: parse the output, build a debug TaskPacket with the failing test name + error + relevant source slice, route via policy.
+9. **Keep your own session small.** On measured brownfield runs the dispatched work was under 5% of the
+   true total; the other 95% was this session — every turn re-reads the whole conversation at the
+   cache-read rate, and a feature-extend run took ~200 turns at ~130k tokens each. Two things drive
+   that number, and both are yours to control:
+
+   - **Turn count.** Every Bash call is a turn. Chain bookkeeping into one call wherever the calls
+     have no decision between them: the `--after` for the file you just wrote, the `--before` for
+     the next packet's file, and the `phase.start` / `phase.end` / `gate.*` log lines all go in a
+     single `cmd1 && cmd2 && cmd3` invocation. One provenance pair per file is the contract; one
+     Bash turn per bookkeeping call is not.
+   - **Context per turn.** Never paste a file you did not need to decide something. Do not `cat`
+     or `Read` the generated file back after writing it; the packet result you already hold is
+     the content. Do not read `discovery.md`, `stack-profile.md`, or `baseline/current.json` in
+     full more than once per run — read them at Gate 0, and afterwards read only the section you
+     need. Pass reviewers a file list and let them read, rather than reading the files yourself
+     and quoting them into the delegation prompt. Slice packet inputs (§`inputs` — SLICED) to the
+     symbols the packet edits, not the whole file.
+
+   **Reviewer input contract (brownfield).** When you delegate `senior-reviewer` or
+   `security-reviewer`, the delegation prompt carries exactly: `mode: brownfield`, `intent`,
+   `run_id`, the path to `change_plan.md` (or `requirements.md` when the architecture phase was
+   skipped), and the path to `provenance.json`. Nothing else — no inlined file contents, no
+   packets.json, no discovery snapshot. The reviewer reads `provenance.json` for the touched set
+   and reads edited files as `git diff <git_head_before> -- <file>`, new files in full. On the run
+   this rule comes from, each review read 56k–87k tokens of context of which the diff was under 15k.
 
 See `plugin/skills/pipeline/SKILL.md` for the full state machine, TaskPacket examples, and HITL prompt templates.
 

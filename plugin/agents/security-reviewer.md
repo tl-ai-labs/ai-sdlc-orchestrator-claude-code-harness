@@ -67,8 +67,17 @@ This is the v1 simplification per C5 cut in the plan self-review.
 
 Behavior:
 - Read `.sdlc/runs/<run-id>/provenance.json` to get the list of files this run has written or
-  edited.
+  edited, and `git_head_before`.
+- **Read the change, not the tree.** Edited files as `git diff <git_head_before> -- <path>`, new
+  files in full. Open an untouched file only to trace a guard, serializer, or config the diff
+  relies on, and read only that definition. Do not read `discovery.md`, `stack-profile.md`,
+  `packets.json`, or the run's telemetry.
 - Audit **only those files** against the checklist above. Do NOT walk the whole codebase.
+- **Pick the form from the touched set before you read anything else.** The orchestrator passes
+  `form: full` or `form: light` (see the Intent matrix in `pipeline/SKILL.md`). Under `light`,
+  run only the *Secrets & config* and *Dependency risk* checks, write `security_review.md` with
+  the same layout and a first line `Form: light — no security surface in the touched set`, and
+  list the touched files so the reader can see why. Under `full`, the whole checklist applies.
 - Only findings introduced by this run block Gate 3. Pre-existing findings elsewhere in the
   repo are OUT OF SCOPE — surface them as advisory in a `## Noted (pre-existing, out of scope)`
   section but do not gate the run on them.

@@ -117,14 +117,15 @@ Two guardrails ship on:
 - **Escalation** — a mechanical-tier packet that fails validation twice auto-routes to Opus on the third attempt. Prevents infinite retries when Flash can't solve a particular puzzle.
 - **Hard cost cap** — `$50` per run ([opus-plus-flash.yaml:135](plugin/config/policies/opus-plus-flash.yaml)). The orchestrator aborts cleanly if accumulated cost crosses it. Raise or remove in your own policy.
 
-Two policies ship:
+Three policies ship:
 
-| Policy | Uses | Typical mid-size run cost |
-|---|---|---|
-| `opus-only` | Claude Opus for every phase | $10 – 30 |
-| `opus-plus-flash` (default) | Opus for judgment, Gemini Flash for mechanical | $0.30 – 3 |
+| Policy | Uses | Dispatched cost, mid-size feature-extend | True total incl. the driver session |
+|---|---|---|---|
+| `opus-only` | Claude Opus for every phase | $2.7 – 9.6 | not yet measured |
+| `opus-plus-flash` (default) | Opus for judgment, Gemini Flash for mechanical | $1.1 – 6.0 | $22 (one measured run) |
+| `sonnet-plus-flash` | Sonnet for judgment, Gemini Flash for mechanical | ≈ $0.5 – 2.5 | ≈ $9 projected |
 
-Deep dive: [docs/brownfield-routing.md](docs/brownfield-routing.md).
+The two columns are different numbers. *Dispatched* is what `telemetry.jsonl` records — every packet the MCP server sent to a model. *True total* adds the Claude Code session that drives the run, which the collector reconstructs from the session transcripts after the run ends. On the measured `opus-plus-flash` run the driver session was 93% of the bill, so the policy that moves the driver tier is the one that moves the total. Numbers, run by run: [docs/brownfield-routing.md](docs/brownfield-routing.md).
 
 ## Greenfield vs. brownfield
 
