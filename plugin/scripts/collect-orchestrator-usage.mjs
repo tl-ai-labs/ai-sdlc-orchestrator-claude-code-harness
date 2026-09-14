@@ -62,7 +62,10 @@
  *      file when no human turn follows — both exact, because assistant
  *      messages only ever follow a human turn. Lines with `isMeta: true`,
  *      `toolUseResult`, or a `tool_result` content block are the CLI's own
- *      bookkeeping, not human turns. Subagent files hold no human turns and
+ *      bookkeeping, not human turns; nor are compaction summaries
+ *      (`isCompactSummary`, `isVisibleInTranscriptOnly`) or harness-injected
+ *      lines whose `origin.kind` is not `human` (a background-task
+ *      notification), which no person typed. Subagent files hold no human turns and
  *      are not scanned for them.
  *      FALLBACKS, each APPROXIMATE and said so: no command turn → the window
  *      opens at `run.start` minus 5 minutes (the driver's setup runs for a
@@ -341,11 +344,17 @@ export function runEndFromLog(logPath, runStartMs) {
  * bookkeeping: `isMeta: true` lines are the CLI's expansion of a slash
  * command (same timestamp as the turn, not a turn), `toolUseResult` lines and
  * lines whose content holds a `tool_result` block are tool output handed
- * back to the model. Each turn reports whether its text is a run command
- * (MMO_COMMAND) and which `--run-id` it names, if any. The session id is the
- * line's own `sessionId` field, else the file's basename — the CLI names the
- * file after the session. Lines without a parseable timestamp cannot anchor
- * anything and are skipped.
+ * back to the model. Lines Claude Code writes as `"type": "user"` without a
+ * person typing them are not turns either: compaction summaries
+ * (`isCompactSummary: true`, which also carry `isVisibleInTranscriptOnly:
+ * true`), any other transcript-only line, and harness-injected lines, whose
+ * `origin.kind` is something other than `human` (a background-task
+ * notification is `task-notification`). A line with no `origin` is kept:
+ * older transcripts never wrote one. Each turn reports whether its text is a
+ * run command (MMO_COMMAND) and which `--run-id` it names, if any. The
+ * session id is the line's own `sessionId` field, else the file's basename —
+ * the CLI names the file after the session. Lines without a parseable
+ * timestamp cannot anchor anything and are skipped.
  */
 export function humanTurns(file) {
   const turns = [];
@@ -356,6 +365,14 @@ export function humanTurns(file) {
     let obj;
     try { obj = JSON.parse(line); } catch { continue; }
     if (obj?.type !== "user" || obj.isMeta === true || obj.toolUseResult !== undefined) continue;
+    // Not typed by a person, so not a turn (review finding F2; shapes read from
+    // real Claude Code transcripts, 2026-09-14). The receipt rule depends on this
+    // count: a compaction summary or task notification inside the window was
+    // counted as a second human turn and refused a provable run with exit 3, and
+    // one just after run.end closed the window there, which moved the session's
+    // closing messages into billed-but-not-logged.
+    if (obj.isCompactSummary === true || obj.isVisibleInTranscriptOnly === true) continue;
+    if (obj.origin && typeof obj.origin === "object" && obj.origin.kind != null && obj.origin.kind !== "human") continue;
     const content = obj.message?.content;
     let text;
     if (typeof content === "string") text = content;
@@ -583,14 +600,30 @@ export function helperAttribution(sessionFile, helperFiles, { root } = {}) {
  * are the facts the collector already records for the window. Every failed
  * fact is a reason, in words. (A transcript EQUAL to the receipt on every
  * bucket needs none of this: the equality itself proves the message set.)
+ *
+ * The facts: pinned to the receipt's session; opened at the run's command turn
+ * (not a lower bound); one human turn inside the window; NO human turn after it
+ * (`laterHumanTurns`, counted in the pinned session file from the window's
+ * close, the first one's timestamp in `laterHumanTurnFrom`); exact. A receipt
+ * is Claude Code's bill for the session's LAST invocation, so a human turn after
+ * the window means the receipt may bill that later leg. This fact was missing:
+ * only turns inside the window were counted, so a window closed by a later
+ * `/mmo:pass` turn was called provable and the later leg's receipt was booked
+ * onto the earlier run (review finding F1). `laterHumanTurns` absent counts as 0.
  */
-export function provableInvocation({ receiptSessionId, pinnedId, startAnchor, humanTurnsInWindow, windowExact, lowerBound }) {
+export function provableInvocation({ receiptSessionId, pinnedId, startAnchor, humanTurnsInWindow, laterHumanTurns = 0, laterHumanTurnFrom = null, windowExact, lowerBound }) {
   const reasons = [];
   if (!receiptSessionId) reasons.push("the receipt names no session");
   else if (pinnedId !== receiptSessionId) reasons.push(`the scan is not pinned to the receipt's session ${receiptSessionId}${pinnedId ? ` (it is pinned to ${pinnedId})` : ""}`);
   if (lowerBound) reasons.push("the window opens at the first dispatch (a lower bound)");
   else if (startAnchor !== "command turn") reasons.push(`the window opens at ${startAnchor}, not at the run's command turn`);
   if (humanTurnsInWindow > 1) reasons.push(`${humanTurnsInWindow} human turns fall inside the window, so the receipt may bill only the last invocation`);
+  if (laterHumanTurns > 0) {
+    reasons.push(
+      `${laterHumanTurns} human turn(s) follow the window${laterHumanTurnFrom ? ` (from ${laterHumanTurnFrom})` : ""}, ` +
+        `so the receipt may bill a later invocation of this session`
+    );
+  }
   if (!windowExact) reasons.push("the window is approximate");
   return { provable: reasons.length === 0, reasons };
 }
@@ -2120,11 +2153,19 @@ export async function main(argv = process.argv.slice(2)) {
       // 2.3% and 22% on two real runs.
       if (cmp.short.length > 0) {
         const turnsInWindow = mainTurns.filter((t) => t.ms >= windowStartMs && t.ms < windowEndMs);
+        // Human turns at or after the window's close (review finding F1). A pinned
+        // window with a finite close ends AT the next human turn, so any close other
+        // than the end of the session refuses here: the receipt may be that later
+        // invocation's bill. An unpinned scan has no session file to read turns from;
+        // its close is approximate, which provableInvocation refuses on its own.
+        const laterTurns = mainTurns.filter((t) => t.ms >= windowEndMs);
         const proof = provableInvocation({
           receiptSessionId: receipt.session_id,
           pinnedId,
           startAnchor,
           humanTurnsInWindow: turnsInWindow.length,
+          laterHumanTurns: laterTurns.length,
+          laterHumanTurnFrom: laterTurns[0]?.iso ?? null,
           windowExact,
           lowerBound: overheadIsFloor,
         });
@@ -2143,7 +2184,7 @@ export async function main(argv = process.argv.slice(2)) {
         }
         console.log(
           `  below the receipt, and the window is provably its invocation (session ${pinnedId}, opened at the command turn, ` +
-            `one human turn, exact): the difference is billed but not logged`
+            `one human turn, no later human turn, exact): the difference is billed but not logged`
         );
       }
       const share = book();

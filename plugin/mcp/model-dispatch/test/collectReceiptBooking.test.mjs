@@ -450,14 +450,157 @@ test("bookReceiptTokens: the gap is priced at the model's logged TTL and modifie
   assert.equal(early.unlogged_billed.per_model.some((g) => g.model === "claude-haiku-4-5"), false);
 });
 
-test("provableInvocation: pinned to the receipt's session, opened at the command turn, one human turn, exact", async () => {
+// ── F1: a human turn AFTER the window means the receipt may bill a later leg ──
+
+/**
+ * Review finding F1. One session runs two invocations: `/mmo:pass --run-id
+ * pass1` at 10:00 (one Opus 5 message, $0.17505 at the list), its run.end at
+ * 10:05, then `/mmo:pass --run-id pass2` at 11:00 (one larger Opus 5 message,
+ * $0.90025). The receipt beside pass1 is the LATER leg's (same session id).
+ * pass1's window closes exactly at the 11:00 turn, so its log is short of that
+ * receipt on every bucket. Before the fix, provableInvocation counted only the
+ * human turns INSIDE the window (one), called the window provable and booked
+ * the later leg's $0.90025 onto pass1 with exit 0. The rule it was written
+ * from (plan section 2, Fix D step 3; docs/methodology.md) also requires no
+ * later human turn, and a receipt is Claude Code's bill for the LAST
+ * invocation of a session, so a later turn means it cannot be shown to be
+ * this run's.
+ */
+test("T7 refusal: a receipt from a LATER invocation of the same session is exit 3 — a human turn after the window means the short log cannot be proven to be the receipt's invocation", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-receipt-laterleg-"));
+  try {
+    const passDir = join(root, "pass"); mkdirSync(passDir);
+    const tDir = join(root, "transcripts"); mkdirSync(tDir);
+    writeFileSync(join(root, "policy.yaml"), "version: 1\nname: h-policy\nmodels:\n  - id: driver\n    adapter: builtin-anthropic\n    model_name: claude-opus-4-8\nrules:\n  - default: driver\n");
+    writeFileSync(join(passDir, "manifest.json"), JSON.stringify({ pass: "pass1", policy_name: "h-policy", started_at: AT("10:00:20"), ended_at: AT("10:04:00"), totals: { dispatched_cost_usd: 0, models_used: [] } }));
+    writeFileSync(join(passDir, "telemetry.jsonl"), "");
+    mkdirSync(join(root, ".sdlc", "runs", "pass1"), { recursive: true });
+    writeFileSync(join(root, ".sdlc", "runs", "pass1", "orchestrator.log"), `MMO: ${AT("10:00:10")} INFO   run.start run_id=pass1 mode=greenfield\nMMO: ${AT("10:05:00")} INFO   run.end run_id=pass1 outcome=completed\n`);
+    const command = (runId) => `<command-message>mmo:pass</command-message>\n<command-name>/mmo:pass</command-name>\n<command-args>--run-id ${runId} brief.md</command-args>`;
+    writeFileSync(join(tDir, "sess-l.jsonl"), [
+      human("sess-l", AT("10:00:00"), command("pass1")),
+      asst("sess-l", "l1", "claude-opus-5", usage(10, 100_000, 0, 10_000, 1_000), AT("10:00:30")),
+      human("sess-l", AT("11:00:00"), command("pass2")),
+      asst("sess-l", "l2", "claude-opus-5", usage(50, 500_000, 0, 50_000, 6_000), AT("11:00:30")),
+    ].join("\n") + "\n");
+    // The later leg's receipt: 50 x $5 + 500,000 x $0.50 + 50,000 x $10 (1-hour) + 6,000 x $25, per 1M = $0.90025.
+    writeFileSync(join(passDir, "claude-session.json"), JSON.stringify({
+      type: "result",
+      session_id: "sess-l",
+      total_cost_usd: 0.90025,
+      usage: { input_tokens: 50, cache_read_input_tokens: 500_000, cache_creation_input_tokens: 50_000, output_tokens: 6_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 50_000 } },
+      modelUsage: { "claude-opus-5[1m]": { inputTokens: 50, cacheReadInputTokens: 500_000, cacheCreationInputTokens: 50_000, outputTokens: 6_000, costUSD: 0.90025 } },
+    }));
+    const r = exec([passDir, "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", tDir]);
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stdout, /closes at the next human turn 2026-09-10T11:00:00\.000Z after run\.end/);
+    assert.match(r.stdout, /claude-opus-5: in 10<50 · cached 100000<500000 · cache_write 10000<50000 · out 1000≤6000 → short of the receipt/);
+    assert.match(r.stderr, /cannot be proven to be the receipt's invocation: 1 human turn\(s\) follow the window \(from 2026-09-10T11:00:00\.000Z\), so the receipt may bill a later invocation of this session/);
+    assert.equal(readJson(join(passDir, "manifest.json")).orchestrator_overhead, undefined, "nothing written");
+    assert.equal(readFileSync(join(passDir, "telemetry.jsonl"), "utf-8"), "", "nothing written");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ── F2: lines Claude Code injects as `type: "user"` are not human turns ─────
+
+const UNLOGGED_SESSION = "908511af-6158-466f-92ad-beb1cd9f5c73";
+/**
+ * Two kinds of `type: "user"` line that no person typed, in the shapes real
+ * Claude Code transcripts on this machine carry (keys read 2026-09-14; text
+ * replaced): a compaction summary (`isCompactSummary: true`,
+ * `isVisibleInTranscriptOnly: true`, string content, no `isMeta`) and a
+ * background-task notification (`origin: {kind: "task-notification"}`, string
+ * content, no `isMeta`). Neither carries `isMeta` or a tool result, so the
+ * human-turn reader used to count both, and the receipt rule depends on that
+ * count.
+ */
+const INJECTED_LINES = {
+  "compaction summary": (ts) => ({ type: "user", isSidechain: false, sessionId: UNLOGGED_SESSION, timestamp: ts, isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: "user", content: "(summary text removed)" } }),
+  "background-task notification": (ts) => ({ type: "user", isSidechain: false, sessionId: UNLOGGED_SESSION, timestamp: ts, origin: { kind: "task-notification" }, message: { role: "user", content: "<task-notification>(removed)</task-notification>" } }),
+};
+
+/** A copy of the T5 fixture with one line inserted into the session file in timestamp order. */
+function unloggedWithLine(line) {
+  const root = mkdtempSync(join(tmpdir(), "mmo-receipt-injected-"));
+  cpSync(UNLOGGED, root, { recursive: true });
+  const file = join(root, "transcripts", `${UNLOGGED_SESSION}.jsonl`);
+  const lines = readFileSync(file, "utf-8").split("\n").filter(Boolean);
+  const at = lines.findIndex((l) => Date.parse(JSON.parse(l).timestamp) > Date.parse(line.timestamp));
+  lines.splice(at === -1 ? lines.length : at, 0, JSON.stringify(line));
+  writeFileSync(file, lines.join("\n") + "\n");
+  return root;
+}
+
+for (const [shape, make] of Object.entries(INJECTED_LINES)) {
+  test(`F2: a ${shape} inside the window is not a second human turn — the Sep 10 run still books $14.197776 with 2.32% billed but not logged`, () => {
+    // Between the command turn (17:27:16.771Z) and run.end (18:16:20.212Z). Counted as a
+    // turn, it made "2 human turns" and refused a provable run with exit 3.
+    const root = unloggedWithLine(make("2026-09-10T17:50:00.000Z"));
+    try {
+      const r = exec([join(root, "pass1"), "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", join(root, "transcripts")]);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /= \$14\.19777[67] \[receipt \(Anthropic token counts priced at the price list\); 2\.3% billed but not logged\]/);
+      const o = readJson(join(root, "pass1", "manifest.json")).orchestrator_overhead;
+      near(o.cost_usd, 14.197777, 0.000002, "booked");
+      assert.equal(o.unlogged_billed.pct_of_booked, 2.32);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test(`F2: a ${shape} just after run.end does not close the window — it still ends at the end of the session, with no logged message pushed out`, () => {
+    // Just after run.end, among the session's closing messages. Counted as a turn, it closed
+    // the window there, so the closing messages fell outside and were booked as "billed but
+    // not logged" (3.6% instead of 2.32%).
+    const root = unloggedWithLine(make("2026-09-10T18:16:54.842Z"));
+    try {
+      const r = exec([join(root, "pass1"), "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", join(root, "transcripts")]);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /, 0 outside window\)/);
+      const o = readJson(join(root, "pass1", "manifest.json")).orchestrator_overhead;
+      assert.equal(o.window.end_anchor, "end of session");
+      near(o.unlogged_billed.cost_usd, 0.3292975, 0.000001, "unlogged");
+      near(o.cost_usd, 14.197777, 0.000002, "booked");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test("humanTurns: compaction summaries and harness-injected notifications are not turns; a line with origin.kind human, or with no origin (older transcripts), is", async () => {
+  const { humanTurns } = await helpers();
+  const dir = mkdtempSync(join(tmpdir(), "mmo-humanturns-"));
+  try {
+    const injected = join(dir, "injected.jsonl");
+    writeFileSync(injected, [
+      human(UNLOGGED_SESSION, "2026-09-10T17:27:16.771Z", "<command-message>mmo:pass</command-message>\n<command-name>/mmo:pass</command-name>"),
+      JSON.stringify(INJECTED_LINES["compaction summary"]("2026-09-10T17:50:00.000Z")),
+      JSON.stringify(INJECTED_LINES["background-task notification"]("2026-09-10T18:00:00.000Z")),
+      // Only the transcript-only flag, and a harness origin of another kind: neither is typed by a person.
+      JSON.stringify({ type: "user", sessionId: UNLOGGED_SESSION, timestamp: "2026-09-10T18:05:00.000Z", isVisibleInTranscriptOnly: true, message: { role: "user", content: "x" } }),
+      JSON.stringify({ type: "user", sessionId: UNLOGGED_SESSION, timestamp: "2026-09-10T18:06:00.000Z", origin: { kind: "some-future-kind" }, message: { role: "user", content: "x" } }),
+    ].join("\n") + "\n");
+    const turns = humanTurns(injected);
+    assert.deepEqual(turns.map((t) => [t.iso, t.command]), [["2026-09-10T17:27:16.771Z", true]]);
+
+    const people = join(dir, "people.jsonl");
+    writeFileSync(people, [
+      JSON.stringify({ type: "user", sessionId: "s", timestamp: "2026-09-10T10:00:00.000Z", origin: { kind: "human" }, message: { role: "user", content: "/mmo:pass --run-id r1" } }),
+      human("s", "2026-09-10T10:30:00.000Z", "keep going"),
+    ].join("\n") + "\n");
+    assert.deepEqual(humanTurns(people).map((t) => [t.iso, t.command]), [["2026-09-10T10:00:00.000Z", true], ["2026-09-10T10:30:00.000Z", false]]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("provableInvocation: pinned to the receipt's session, opened at the command turn, one human turn, no later human turn, exact", async () => {
   const { provableInvocation } = await helpers();
-  const ok = { receiptSessionId: "s", pinnedId: "s", startAnchor: "command turn", humanTurnsInWindow: 1, windowExact: true, lowerBound: false };
+  const ok = { receiptSessionId: "s", pinnedId: "s", startAnchor: "command turn", humanTurnsInWindow: 1, laterHumanTurns: 0, laterHumanTurnFrom: null, windowExact: true, lowerBound: false };
   assert.deepEqual(provableInvocation(ok), { provable: true, reasons: [] });
   assert.match(provableInvocation({ ...ok, receiptSessionId: null }).reasons.join("; "), /the receipt names no session/);
   assert.match(provableInvocation({ ...ok, pinnedId: null }).reasons.join("; "), /not pinned to the receipt's session s/);
   assert.match(provableInvocation({ ...ok, startAnchor: "run.start - 5m", windowExact: false }).reasons.join("; "), /opens at run\.start - 5m, not at the run's command turn/);
   assert.match(provableInvocation({ ...ok, humanTurnsInWindow: 3 }).reasons.join("; "), /3 human turns fall inside the window/);
+  // F1: a human turn after the window closes means the receipt may bill a later invocation.
+  assert.match(
+    provableInvocation({ ...ok, laterHumanTurns: 2, laterHumanTurnFrom: "2026-09-10T11:00:00.000Z" }).reasons.join("; "),
+    /2 human turn\(s\) follow the window \(from 2026-09-10T11:00:00\.000Z\), so the receipt may bill a later invocation of this session/,
+  );
   assert.match(provableInvocation({ ...ok, windowExact: false }).reasons.join("; "), /approximate/);
   assert.match(provableInvocation({ ...ok, startAnchor: "manifest started_at - 5m", windowExact: false, lowerBound: true }).reasons.join("; "), /opens at the first dispatch \(a lower bound\)/);
 });
