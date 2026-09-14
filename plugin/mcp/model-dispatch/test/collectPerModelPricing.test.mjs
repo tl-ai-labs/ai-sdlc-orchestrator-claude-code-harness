@@ -129,6 +129,15 @@ test("T4: a Fable 5.1 session with Opus 5 helpers is priced per message: $13.933
     assert.equal(o.input_tokens_cache_write_1h, 147_929);
     assert.equal(o.output_tokens, 152_411);
     assert.equal(m.true_total_cost_usd, 13.933431);
+    // All five helpers are named by an Agent result, as in the real session: the
+    // session file names three in toolUseResult.agentId, and helper
+    // a7de90a49669913e0 names a2c641503e98ecc4c and a3e06ad488f47acef in its
+    // result text (lines 125 and 133 of its real transcript). The fixture had
+    // lost those two text lines, so attribution read INCOMPLETE on a complete tree.
+    assert.match(r.stdout, /helpers: 5 named by Agent\/Task results, 5 transcript file\(s\) → attribution complete/);
+    assert.equal(o.attribution_complete, true);
+    assert.deepEqual(o.missing_helper_ids, []);
+    assert.deepEqual(o.unreferenced_helper_files, []);
 
     const event = readLines(join(root, "telemetry.jsonl")).find((e) => e.tier === "orchestrator");
     assert.equal(event.cost_usd, 13.933431);

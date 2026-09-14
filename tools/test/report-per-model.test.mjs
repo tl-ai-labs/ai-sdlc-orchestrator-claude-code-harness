@@ -82,9 +82,18 @@ const TRANSCRIPT = {
   per_model: [entry("session", "claude-fable-5-1", 4.801151, { messages: 31 }), entry("helper", "claude-opus-5", 9.13228, { messages: 102 })],
   unpriced: [], pricing_complete: true, price_list_verified: "2026-09-14",
   unlogged_billed: null,
+  // The real fixture names all five helpers (three in the session file, two in a
+  // nested result's text), so attribution is complete. An earlier copy of the
+  // fixture had dropped those two result texts and this constant carried the
+  // false INCOMPLETE it produced; the incomplete cases below say so explicitly.
+  attribution_complete: true, missing_helper_ids: [], unreferenced_helper_files: [],
+  dispatched_in_session_cost_usd: 0, dispatched_in_session_events: 0,
+};
+
+/** A helper file no Agent/Task result names: the shape an incomplete copy of a transcript tree produces. */
+const UNREFERENCED = {
   attribution_complete: false, missing_helper_ids: [],
   unreferenced_helper_files: ["cf8e4f5c/subagents/agent-a2c641503e98ecc4c.jsonl", "cf8e4f5c/subagents/agent-a3e06ad488f47acef.jsonl"],
-  dispatched_in_session_cost_usd: 0, dispatched_in_session_events: 0,
 };
 
 const run = (overhead, { markdown = false, dispatched = 0.1 } = {}) =>
@@ -128,12 +137,14 @@ test("a transcript-priced figure prints the cost per model and says it is a floo
 });
 
 test("attribution_complete false is a warning that says what it does and does not change", () => {
-  const unreferenced = run(TRANSCRIPT);
+  // The real fixture is complete, so nothing is printed for it.
+  assert.doesNotMatch(run(TRANSCRIPT), /Attribution incomplete/);
+  const unreferenced = run({ ...TRANSCRIPT, ...UNREFERENCED });
   assert.match(
     unreferenced,
     /    Attribution incomplete: 2 helper file\(s\) named by no Agent\/Task result \(cf8e4f5c\/subagents\/agent-a2c641503e98ecc4c\.jsonl, cf8e4f5c\/subagents\/agent-a3e06ad488f47acef\.jsonl\); their tokens are counted, only the helper call they came from is unknown\.\n/,
   );
-  const missingTranscript = run({ ...TRANSCRIPT, missing_helper_ids: ["a2222"], unreferenced_helper_files: [] });
+  const missingTranscript = run({ ...TRANSCRIPT, attribution_complete: false, missing_helper_ids: ["a2222"], unreferenced_helper_files: [] });
   assert.match(missingTranscript, /Attribution incomplete: helper\(s\) a2222 named by an Agent\/Task result have no transcript file; their tokens are in no figure above — copy the session's whole subagents\/ directory and re-run the collector\./);
   const missingBooked = run({ ...BOOKED, attribution_complete: false, missing_helper_ids: ["a2222"] });
   assert.match(missingBooked, /Attribution incomplete: helper\(s\) a2222 named by an Agent\/Task result have no transcript file; the booked total is unaffected, but their tokens sit in billed but not logged instead of By model\./);
@@ -201,7 +212,9 @@ test("the Markdown branch carries every new line", () => {
   assert.match(booked, /The overhead line is the run's own loop: Claude Code's receipt token counts, checked against the session transcripts and priced at the price list by collect-orchestrator-usage\.mjs; only the true total compares architectures fairly\._/);
   const transcript = run(TRANSCRIPT, { markdown: true });
   assert.match(transcript, /_No receipt booked, so this is a floor: excludes calls Claude Code bills but does not log \(2\.3%–22% on measured runs\)\._/);
-  assert.match(transcript, /_Attribution incomplete: 2 helper file\(s\) named by no Agent\/Task result/);
+  assert.doesNotMatch(transcript, /Attribution incomplete/);
+  const unreferenced = run({ ...TRANSCRIPT, ...UNREFERENCED }, { markdown: true });
+  assert.match(unreferenced, /_Attribution incomplete: 2 helper file\(s\) named by no Agent\/Task result/);
 });
 
 // From v0.7.3 a dispatched dollar comes from the dated price list (or a

@@ -17,7 +17,8 @@ All four helpers named by an `Agent` result have a transcript file, and no helpe
 
 | Collector | Outcome |
 |---|---|
-| Exact receipt rule (0.7.1 to 0.7.2) | exit 3: Opus 4.8 is below the receipt on every bucket, and `claude-opus-5[1m]` never matched `claude-opus-5` |
+| Exact receipt rule (0.7.2), this fixture's own `policy.yaml` (no `pricing` blocks) | exit 1: `Policy model: missing 'pricing'`. The 0.7.2 loader required a `pricing` block on every model, so no transcript is read |
+| Exact receipt rule (0.7.2), the same two models with `pricing` blocks equal to the list | exit 3: `the transcript is BELOW the CLI's own receipt`, naming Opus 4.8's input (224 < 228), cache-read and cache-write buckets (output 188,601 ≤ 188,968 is allowed). The receipt's `claude-opus-5[1m]` never matched the log's `claude-opus-5`; it is printed only as a receipt model no transcript records, because that rule checks BELOW before anything else |
 | Fix D (0.7.3) | books $14.197776 (the receipt's tokens at the list, $14.19777625, to the micro-dollar): the window is provably the receipt's invocation, `unlogged_billed` is the Opus 4.8 gap ($0.329297), `attribution_complete` is true |
 
 ## What was kept

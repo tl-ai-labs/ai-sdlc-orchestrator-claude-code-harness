@@ -22,7 +22,7 @@ The $1.356079 difference is the Fable 5.1 session priced at Opus rates.
 
 - Assistant lines: `type`, `timestamp`, `sessionId`, `agentId` (subagent files), `uuid`, `parentUuid`, `isSidechain`, and `message.{id, model, stop_reason}` plus `message.usage` reduced to the token counts, the `cache_creation` 5m/1h split, `service_tier`, `speed` and `inference_geo`. `Agent` / `Task` tool uses keep only `{type, id, name}`.
 - The run's command turn, with its text reduced to the `/mmo:greenfield` command tags.
-- User lines that return an `Agent` / `Task` result keep only `tool_use_id` and `toolUseResult.agentId`.
+- User lines that return an `Agent` / `Task` result keep only `tool_use_id` and the helper id, written the way Claude Code wrote it: `toolUseResult.agentId` on the three results in the session file (helpers `a7de90a49669913e0`, `ad6451af4f62aeef4`, `a0fe04abc94ec3b62`), and the single `agentId: …` line of the result text on the two nested results in `agent-a7de90a49669913e0.jsonl` (helpers `a2c641503e98ecc4c` and `a3e06ad488f47acef`, lines 125 and 133 of the real file), which carry no `toolUseResult`. All five helper files are named, so the collector reports `attribution_complete: true`.
 - Each `agent-<id>.meta.json` keeps `agentType`, `toolUseId`, `parentAgentId` and `spawnDepth`.
 
 Every message text, tool input and output, path, working directory, version and attribution field is removed. Every other line is removed, including the three human prompts typed after the run, so the collector's window runs from the command turn to the end of the session file. That is the window the figures above were measured over.

@@ -112,8 +112,12 @@ test("T11: the report renders the collector's real per-model, billed-but-not-log
     const fableOut = spawnSync(process.execPath, [REPORT, fable.passDir], { encoding: "utf-8" }).stdout;
     assert.match(fableOut, /session \(claude-fable-5-1\): \$4\.8012 · helpers \(claude-opus-5\): \$9\.1323/);
     assert.match(fableOut, /floor: excludes calls Claude Code bills but does not log \(2\.3%–22% on measured runs\)/);
-    // The real fixture has two helper files no Agent/Task result names.
-    assert.match(fableOut, /Attribution incomplete: 2 helper file\(s\) named by no Agent\/Task result/);
+    // Every helper file in the real session is named by an Agent result (two of
+    // them only in a nested result's text), so no attribution line is printed.
+    // This used to expect "Attribution incomplete: 2 helper file(s)": the
+    // fixture had dropped those two result texts, and the test pinned the defect.
+    assert.equal(fable.overhead.attribution_complete, true);
+    assert.doesNotMatch(fableOut, /Attribution incomplete/);
     assert.doesNotMatch(fableOut, /billed but not logged:/);
   } finally {
     rmSync(headless.root, { recursive: true, force: true });

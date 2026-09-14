@@ -244,7 +244,7 @@ Figures that move on the same tokens:
 |---|---|---|
 | Sonnet 5 dispatched through the API (`opus-plus-sonnet`) | Card 3.00 / 0.30 / 15.00 | List 2.00 / 0.20 / 10.00 (verified 2026-09-14: the launch price became the standing price), so two thirds of the earlier dollars |
 | Claude Fable 5.1 session with Claude Opus 5 helpers (fixture `fable-session-opus-helpers`) | $12.577352 | $13.933431 |
-| Headless run with two Opus 4.8 calls no transcript recorded (fixture `headless-unlogged-calls`) | exit 3, nothing written | $14.197776, 2.32% billed but not logged |
+| Headless run with two Opus 4.8 calls no transcript recorded (fixture `headless-unlogged-calls`) | exit 3, nothing written, under a policy whose `pricing` blocks equal the list (the fixture's own block-less `policy.yaml` exits 1 on v0.7.2, whose loader required a block) | $14.197776, 2.32% billed but not logged |
 | Gemini 3.5 Flash-Lite leaf whose block says 0.50 / 0.05 / 3.00 (the governance demo policy's `flash-lite`) | Billed at the block | List 0.30 / 0.03 / 2.50 (GA 21 Jul 2026, verified 2026-09-14); the block draws a `pricing.policy_mismatch` warning |
 | A run using Gemini 3.7 Flash or 3.8 Flash on or after 1 Jan 2027 | Billed at the policy block (the introductory card, in the shipped 3.7 Flash policies) | Billed at the list's 2027 card, 1.50 / 0.15 / 7.50, published on both Google pages; a block still carrying the introductory card draws a `pricing.policy_mismatch` warning and does not halt |
 

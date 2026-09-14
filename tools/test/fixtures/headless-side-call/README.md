@@ -10,7 +10,14 @@ One real minimal headless run (`claude -p --output-format json`, Claude Code 2.1
 
 `total_cost_usd` is $0.1841705. The log priced per message is $0.183168. Adding Haiku's tokens at the list ($0.001003) gives $0.184171.
 
-The exact receipt rule refused this run (exit 3), because `claude-opus-5[1m]` never matched the log's `claude-opus-5`. With names resolved through the price list it is booked, and the Haiku call is priced from the list inside `unlogged_billed`.
+The 0.7.2 collector refuses this fixture, with an exit code that depends on the policy it is given:
+
+| Policy given to the 0.7.2 collector | Exit | What it prints |
+|---|---|---|
+| This fixture's own `policy.yaml` (no `pricing` block) | 1 | `Policy model: missing 'pricing'`: the 0.7.2 loader required a `pricing` block on every model, so no transcript is read |
+| The same entry with a `pricing` block equal to the list (5 / 0.50 / 6.25 5-minute write / 10 1-hour write / 25) | 3 | The exact receipt rule: `claude-opus-5[1m]` never matched the log's `claude-opus-5`, so the log's two Opus 5 messages read as `claude-opus-5: 37835 tokens in the transcript, none on the receipt` |
+
+From 0.7.3 names are resolved through the price list, the run is booked, and the Haiku call is priced from the list inside `unlogged_billed`.
 
 ## What was kept
 
