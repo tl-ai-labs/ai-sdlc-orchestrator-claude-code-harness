@@ -118,7 +118,9 @@ One JSON object per line. Key fields:
 }
 ```
 
-Fields the report reads: `phase`, `input_tokens`, `input_tokens_cached`, `input_tokens_cache_write`, `output_tokens`, `cost_usd`, `success`. Everything else is available for downstream analysis. `input_tokens_cache_write` is the cache-*write* bucket — prompt tokens written into the vendor's cache, billed at a premium over fresh input (1.25× unless the policy names an explicit rate) — kept separate from `input_tokens` precisely so that premium prices correctly.
+Fields the report reads: `phase`, `input_tokens`, `input_tokens_cached`, `input_tokens_cache_write`, `output_tokens`, `cost_usd`, `success`. Everything else is available for downstream analysis. `input_tokens_cache_write` is the cache-*write* bucket — every prompt token written into the vendor's cache, billed at a premium over fresh input — kept separate from `input_tokens` precisely so that premium prices correctly. When the 5-minute / 1-hour split is known (a `claude-cli` worker, or the collector's line), `input_tokens_cache_write_1h` holds the 1-hour share, which bills at 2× input instead of 1.25×.
+
+Every dispatched line also says where its dollars' rates came from. `price_basis` is `list` (the dated price list; see [methodology.md](methodology.md#pricing-table-provenance)) or `custom` (the policy's `pricing:` block under `pricing_override: true`). `unpriced_models` names any billed model that had no price; its tokens are not in `cost_usd`. A `claude-cli` worker's line adds `cli_reported_cost_usd` (Claude Code's own figure, kept as a check) and `ttl_split` (`transcript`, `approximate` or `no_cache_writes`).
 
 One line is special: after the post-run collector has run, the file gains a single `tier: "orchestrator"` event (`provenance: "transcript"`, phase `orchestrator_overhead`) holding the orchestrator session's own transcript-measured usage. Every dispatched aggregation — report tables, manifest totals, breakdowns — partitions that line out; it surfaces only in the report's overhead/true-total lines and the manifest's `orchestrator_overhead` block.
 

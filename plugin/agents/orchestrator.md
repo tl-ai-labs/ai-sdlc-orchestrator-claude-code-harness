@@ -77,6 +77,13 @@ hook, which matches on the MCP tool call and therefore never fires.
    (the same policy would not start in `vendor` mode) and is never a reason to stop a run it cannot
    affect.
 
+   `ok: false` can also be about price, and you halt on it the same way. The `halt_reason` then
+   either says `Cannot price N of M models`, or it names a model that has no pricing block under
+   `estimated`. In the first case a model has no price for today: work routed to it would be
+   refused at dispatch. In the second, your in-session model has no `pricing` block for your
+   estimates to read. Anything under `price_warnings` is a policy `pricing` block that differs from
+   the dated price list. The server bills the list, so print each one and continue.
+
    Anything listed under `not_selected` is neither a warning nor a problem: the policy offers two ways
    of reaching one tier, this install picked one, and the other was left unchecked because nothing in
    this run can call it. Say nothing about it unless asked.
@@ -175,13 +182,13 @@ hook, which matches on the MCP tool call and therefore never fires.
    infer the mode from `ANTHROPIC_API_KEY` presence — presence alone is not the same as an explicit
    choice, and env-var-driven mode switches would silently change published cost numbers.
 
-   **Vendor-authoritative mode (`vendor`)** — `ANTHROPIC_API_KEY` MUST also be set; if it is not, abort with: "vendor mode requires ANTHROPIC_API_KEY — export it, or rerun in estimated mode." Dispatch **every** LLM call, including your own tier's calls, via `execute_with_model`. The MCP server hits the vendor API directly and records real vendor-reported `input_tokens`, `input_tokens_cached`, and `output_tokens` on the event. `cost_usd` is computed from those vendor tokens times the policy YAML's `pricing` block. Every event's `provenance` field MUST be `"vendor"` — the MCP server stamps this on every dispatched event itself, so you never write it for `execute_with_model` calls.
+   **Vendor-authoritative mode (`vendor`)** — `ANTHROPIC_API_KEY` MUST also be set; if it is not, abort with: "vendor mode requires ANTHROPIC_API_KEY — export it, or rerun in estimated mode." Dispatch **every** LLM call, including your own tier's calls, via `execute_with_model`. The MCP server hits the vendor API directly and records real vendor-reported `input_tokens`, `input_tokens_cached`, and `output_tokens` on the event. The server prices those vendor tokens into `cost_usd` itself, at the dated price list's rate for the model (the policy's `pricing` block only when the model sets `pricing_override: true`); you never compute or edit that figure. Every event's `provenance` field MUST be `"vendor"` — the MCP server stamps this on every dispatched event itself, so you never write it for `execute_with_model` calls.
 
    **Estimator mode (`estimated`)** — dispatch mechanical-tier calls via MCP as usual (those events still carry vendor tokens and `provenance: "vendor"`). For your own direct-tier calls, use the character-count heuristic (≈3.8 chars/token) for tokens, source rates from the loaded policy YAML's `pricing` block, and call `log_telemetry` with `provenance: "estimated"` on the event (the server also defaults an omitted stamp to `"estimated"` on this path, so a forgotten field can no longer make the report disown the run as "unknown"). `ANTHROPIC_API_KEY` is deliberately ignored in this mode even if set — the user chose estimated numbers, so estimated is what is emitted. What model that direct-tier work *executes* on is `CLAUDE_CODE_SUBAGENT_MODEL` — exported at launch, verified by rule 0's driver-model check — so the model being priced and the model doing the work are the same one; the agent files themselves carry no `model:` pin (a frontmatter pin would silently override the policy, which is the bug the check exists to prevent).
 
    This applies to escalations too. When a policy rule sends a packet to your own tier — `opus-plus-flash` escalates `debug` after two mechanical-tier retries — the routing decision stands, but under `estimated` the packet is handled in this conversation with the estimator, not dispatched via `execute_with_model`. Routing decides *which model*; `auth_mode` decides *which transport*. Confusing the two is what makes a run either abort on a credential it never needed or bill an API it was told not to use.
 
-   **Under both modes:** `cost_usd` comes ONLY from the loaded policy YAML's `pricing` block. Never invent rates. Never use rates from your training data. Never hardcode. If the policy's `pricing` block is missing or malformed, abort the run with a clear error rather than guessing.
+   **Rates you apply yourself** (your estimated direct-tier events) come ONLY from the loaded policy YAML's `pricing` block. Never invent rates. Never use rates from your training data. Never hardcode. If that block is missing or malformed, abort the run with a clear error rather than guessing (pre-flight already halts an estimated run whose in-session model has none). Events returned by `execute_with_model` were priced by the server; never recompute their `cost_usd`.
 7. **Stateless workers.** If a mechanical-tier result fails validation, do NOT continue a conversation. Construct a refined TaskPacket from scratch with the failure mode encoded in the instruction.
 8. **Run tests.** After codegen, run `npm install && npm test` via Bash from `<code_dir>` — the
    generated application lives there, so that is where its package manifest and test runner are.

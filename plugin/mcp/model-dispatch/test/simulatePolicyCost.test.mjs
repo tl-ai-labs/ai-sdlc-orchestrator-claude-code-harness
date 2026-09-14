@@ -22,13 +22,31 @@ import {
   CACHE_WRITE_PREMIUM,
   CACHE_WRITE_PREMIUM_1H,
 } from "../dist/pricing.js";
+import { effectivePrice } from "../dist/effectivePrice.js";
 
 const policy = loadPolicy({ policyName: "opus-plus-flash-v37" });
+
+// The replay prices each event on the day in its `ts`. Pinned inside the Gemini
+// 3.7 Flash introductory period, so these arithmetic pins do not start
+// failing on 2027-01-01 for a reason that has nothing to do with them.
+const base = { phase: "tests", task_type: "test_unit", module: "cross", retry_count: 0, ts: "2026-09-14T10:00:00.000Z" };
+
+// The live path's rates for a model on the events' day: the effective price
+// (the dated list, or the block under pricing_override). Changed expectation
+// (v0.7.3): these pins used the policy block directly. For the Gemini leaf
+// these events route to, the block's omitted write rates fell back to
+// Anthropic's 1.25x / 2x premiums, while the list prices Gemini writes at the
+// input rate (Gemini has no write premium). The replay now bills what a
+// dispatch bills, so the expectations follow the same rates.
+function rates(model) {
+  const price = effectivePrice(model, base.ts);
+  assert.equal(price.unpriced, false, `${model.id} must be priced on ${base.ts}`);
+  return price.pricing;
+}
 
 // Every event below matches the same rule, so the replay routes all of them
 // to one model; read that model back from the replay itself rather than
 // hardcoding an id that a future policy edit could move.
-const base = { phase: "tests", task_type: "test_unit", module: "cross", retry_count: 0 };
 function modelFor(ev) {
   const { per_model } = simulatePolicyCost([ev], policy);
   const ids = Object.keys(per_model);
@@ -43,7 +61,7 @@ const near = (a, b) => Math.abs(a - b) <= 1e-6;
 test("a cache-hit event replays at the live price, never negative", () => {
   const ev = { ...base, input_tokens: 20_000, input_tokens_cached: 80_000, output_tokens: 3_000 };
   const model = modelFor(ev);
-  const live = computeCostUsd({ input: 20_000, input_cached: 80_000, output: 3_000 }, model.pricing);
+  const live = computeCostUsd({ input: 20_000, input_cached: 80_000, output: 3_000 }, rates(model));
   const replay = simulatePolicyCost([ev], policy);
 
   assert.ok(live > 0);
@@ -54,9 +72,9 @@ test("a cache-hit event replays at the live price, never negative", () => {
   // zero (fresh = 20k − 80k). If this ever stops being negative the fixture
   // no longer exercises the bug and needs bigger cached counts.
   const preFix =
-    ((20_000 - 80_000) / 1e6) * model.pricing.input +
-    (80_000 / 1e6) * model.pricing.input_cached +
-    (3_000 / 1e6) * model.pricing.output;
+    ((20_000 - 80_000) / 1e6) * rates(model).input +
+    (80_000 / 1e6) * rates(model).input_cached +
+    (3_000 / 1e6) * rates(model).output;
   assert.ok(preFix < 0, "fixture must be one the old subtraction priced negative");
 });
 
@@ -69,25 +87,30 @@ test("cache reads only ever ADD their discounted cost to an event", () => {
   const b = simulatePolicyCost([withCache], policy).total_cost_usd;
 
   assert.ok(b > a, "adding cache reads must not lower the price");
-  assert.ok(near(b - a, (80_000 / 1e6) * model.pricing.input_cached));
+  assert.ok(near(b - a, (80_000 / 1e6) * rates(model).input_cached));
 });
 
 test("5-minute and 1-hour cache writes replay at their own premiums", () => {
   const ev5m = { ...base, input_tokens: 10_000, input_tokens_cached: 0, input_tokens_cache_write: 5_000, output_tokens: 1_000 };
-  const ev1h = { ...ev5m, input_tokens_cache_write: 0, input_tokens_cache_write_1h: 5_000 };
+  // Changed fixture (v0.7.3): input_tokens_cache_write is the TOTAL written and
+  // input_tokens_cache_write_1h its 1-hour share, the convention the
+  // collector's event and claude-cli events write. The old fixture
+  // ({write: 0, write_1h: 5000}) encoded a disjoint reading that priced every
+  // real event's 1-hour writes twice.
+  const ev1h = { ...ev5m, input_tokens_cache_write: 5_000, input_tokens_cache_write_1h: 5_000 };
   const model = modelFor(ev5m);
 
   const c5m = simulatePolicyCost([ev5m], policy).total_cost_usd;
   const c1h = simulatePolicyCost([ev1h], policy).total_cost_usd;
 
-  assert.equal(c5m, computeCostUsd({ input: 10_000, input_cached: 0, input_cache_write: 5_000, output: 1_000 }, model.pricing));
-  assert.equal(c1h, computeCostUsd({ input: 10_000, input_cached: 0, input_cache_write_1h: 5_000, output: 1_000 }, model.pricing));
+  assert.equal(c5m, computeCostUsd({ input: 10_000, input_cached: 0, input_cache_write: 5_000, output: 1_000 }, rates(model)));
+  assert.equal(c1h, computeCostUsd({ input: 10_000, input_cached: 0, input_cache_write_1h: 5_000, output: 1_000 }, rates(model)));
 
   // The two tiers differ by exactly their rate gap on the written tokens
   // (explicit per-model rates when the policy declares them, else the
   // fresh-rate premiums pricing.ts defines).
-  const rate5m = model.pricing.input_cache_write ?? model.pricing.input * CACHE_WRITE_PREMIUM;
-  const rate1h = model.pricing.input_cache_write_1h ?? model.pricing.input * CACHE_WRITE_PREMIUM_1H;
+  const rate5m = rates(model).input_cache_write ?? rates(model).input * CACHE_WRITE_PREMIUM;
+  const rate1h = rates(model).input_cache_write_1h ?? rates(model).input * CACHE_WRITE_PREMIUM_1H;
   assert.ok(near(c1h - c5m, (5_000 / 1e6) * (rate1h - rate5m)));
 });
 
@@ -106,7 +129,7 @@ test("a mixed batch replays to the sum of its live prices", () => {
       sum +
       computeCostUsd(
         { input: ev.input_tokens, input_cached: ev.input_tokens_cached, input_cache_write: ev.input_tokens_cache_write, output: ev.output_tokens },
-        model.pricing
+        rates(model)
       ),
     0
   );

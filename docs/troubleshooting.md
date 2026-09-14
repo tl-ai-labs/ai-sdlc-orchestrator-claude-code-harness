@@ -45,6 +45,9 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 | Symptom | Cause | Fix |
 |---|---|---|
 | Halts before phase 1 with `halt_reason` naming models | An adapter this run's auth mode requires cannot be constructed — usually a missing credential. | Fix each named credential and restart. Constructions run offline; nothing was billed. |
+| Halts with `Cannot price N of M models` | A model the policy can route to has no price on the dated price list for today: it is not on the list (`gemini-3.5-flash-lite`, for example), or today is outside its periods (Gemini 3.7 Flash's introductory period ends 31 Dec 2026). Nothing was dispatched. | Add the model's verified period to `plugin/mcp/model-dispatch/src/prices.ts`, or give the model a `pricing:` block with `pricing_override: true` to bill a custom price. |
+| Halts naming a model that `has no pricing block` | Under `--auth=estimated` the orchestrator prices its in-session model's work from that model's `pricing:` block. | Add the block, equal to the price list, or run with `--auth=vendor`. |
+| Prints a `price_warnings` entry but the run starts | A policy `pricing:` block differs from the price list by more than 0.5% on some rate. The list is billed. | Correct the block to the list, or set `pricing_override: true` if the block is deliberate (its events then say `price_basis: "custom"`). |
 | Prints a `warnings` entry but the run starts | The failed adapter belongs to a model this run's auth mode never dispatches to (typically `builtin-anthropic` under `--auth=estimated`). | Expected. Only a model this run actually dispatches to halts. |
 | Lists a model under `not_selected` | The policy offers more than one way to reach a tier (a `select:` slot), and this run picked the other option. Prerequisites for the losing option are not checked. | Expected. Switch `MMO_SELECT` if you meant the other one. |
 
@@ -54,6 +57,7 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 |---|---|---|
 | `anthropic-key` warning | `ANTHROPIC_API_KEY` unset in the environment the plugin sees. | Get a key at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys). Put it in the `env` block of `~/.claude/settings.json` — a shell export is not enough, because Claude Code launched from the desktop app inherits no login shell. |
 | Vendor-mode run fails immediately | `ANTHROPIC_API_KEY` truly not set, or set to a `${...}` placeholder that arrived unexpanded (see [env-placeholders](#gemini)). | Same fix. Verify with `verify-setup.mjs`. |
+| `pricing.cli_cost_mismatch` in the log after a `claude-cli` dispatch | Claude Code's own `total_cost_usd` differs from the list-priced figure by more than 0.5%. Either its price table is stale, or the worker's transcript could not be read and the cache-write split is approximate. | Nothing to fix in the run: `cost_usd` is the list figure either way. Look at the event's `ttl_split`. If it says `transcript`, compare `cli_reported_cost_usd` with the price page. |
 
 ## Gemini
 

@@ -55,6 +55,15 @@ are true and the operator should know the same policy would not start in `vendor
 warning as a halt: refusing to start a viable run is not the safe error, it is the one that teaches the
 operator to override a gate that exists to protect them.
 
+**`ok: false` can also be about price.** Stop exactly as for a credential failure when `halt_reason`
+says `Cannot price N of M models`: a model this run can route to has no price on the dated price list
+for today, so work sent to it would be refused at dispatch. Stop too when it names a model that has
+no pricing block under `estimated`: your own estimates read that block (rule 6).
+
+**If `price_warnings` is non-empty, print each one and keep going.** Each names a policy `pricing:`
+block that differs from the dated price list. The server bills the list, not the block, so the run's
+numbers stay right; the fix belongs in the policy file, not in this run.
+
 **`not_selected` is not a warning and not a problem.** A policy may hold more than one way of reaching a
 tier — `opus-plus-flash` reaches its mechanical tier either as a Gemini model call or as an Antigravity
 agent — and only the one this install selected can be dispatched to. The other is listed here, unchecked,

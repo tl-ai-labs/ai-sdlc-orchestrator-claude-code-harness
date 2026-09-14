@@ -22,11 +22,12 @@ models:
   - id: sonnet
     adapter: claude-cli
     model_name: claude-sonnet-5
-    # Cost is reported directly by `claude -p` (total_cost_usd); these list
-    # rates are informational only and never used to derive cost. They must
-    # still equal claude-sonnet-5 in plugin/mcp/model-dispatch/src/prices.ts
-    # (2.00 / 0.20 / 10.00 since the 3.00 / 15.00 increase was cancelled);
-    # test/prices.test.mjs fails when they do not.
+    # The worker's cost is its own token ledger priced from the price list
+    # (plugin/mcp/model-dispatch/src/prices.ts); claude -p's total_cost_usd
+    # is kept only as a check. This card is not billed (it would be only
+    # under pricing_override: true). It must still equal claude-sonnet-5 on
+    # the list (2.00 / 0.20 / 10.00 since the 3.00 / 15.00 increase was
+    # cancelled); test/prices.test.mjs fails when it does not.
     pricing: { input: 2.00, input_cached: 0.20, output: 10.00 }
     pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
     pricing_last_verified: 2026-09-14

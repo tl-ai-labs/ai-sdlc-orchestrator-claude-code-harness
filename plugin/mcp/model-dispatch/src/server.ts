@@ -27,7 +27,8 @@ import {
   unreachableModelIds,
 } from "./routing.js";
 import { assessModels, parseAuthMode, type AuthMode } from "./preflight.js";
-import { appendEvent, normalizeDirectTierEvent } from "./telemetry.js";
+import { checkModelPrice } from "./effectivePrice.js";
+import { appendEvent, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
 import { createAdapter } from "./adapters/index.js";
 import {
   defaultAdcPath,
@@ -167,11 +168,19 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
   // Losing options of `select:` slots are excluded: their prerequisites
   // (Python venv, worker script) are not this run's problem.
   const notSelected = unreachableModelIds(policy, selectOverrides());
+  // Every reachable model is also priced for today: a model with no price
+  // halts the run here, before anything is spent, and a policy pricing block
+  // that differs from the price list is reported under price_warnings.
+  const today = new Date();
   const assessment = assessModels(
     policy.models.filter((m) => !notSelected.has(m.id)),
     authMode,
     (modelId) => adapterFor(policy, modelId),
+    (m) => checkModelPrice(getModel(policy, m.id), today, authMode),
   );
+  for (const message of assessment.price_warnings) {
+    log("warn", "pricing.policy_mismatch", { message });
+  }
 
   // Resolved Gemini configuration — the project and region the run will bill.
   const adcPath = defaultAdcPath();
@@ -205,6 +214,8 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
       ok: m.ok,
       error_class: m.ok ? undefined : "PreflightFailed",
       classification: m.ok ? undefined : (m.severity ?? "warning"),
+      price_basis: m.price_basis,
+      unpriced: m.unpriced,
     });
   }
   for (const id of notSelected) {
@@ -232,6 +243,9 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
     // Failures on models this run will not dispatch to — informational,
     // never blocking.
     warnings: assessment.warnings,
+    // Price notes that do not stop the run (a policy block that differs from
+    // the price list; the list is billed).
+    price_warnings: assessment.price_warnings,
   };
 }
 
@@ -285,11 +299,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           events: {
             type: "array",
             description:
-              "Telemetry events exactly as telemetry.jsonl stores them. Token buckets are " +
-              "DISJOINT: input_tokens is the FRESH count (cache reads and writes are not " +
-              "inside it); input_tokens_cached, input_tokens_cache_write and " +
-              "input_tokens_cache_write_1h are priced at their own rates. Pass them as-is — " +
-              "the replay never subtracts one bucket from another.",
+              "Telemetry events exactly as telemetry.jsonl stores them. input_tokens is the " +
+              "FRESH count (cache reads and writes are not inside it); input_tokens_cached " +
+              "and input_tokens_cache_write (the TOTAL written) are disjoint from it; " +
+              "input_tokens_cache_write_1h is the 1-hour SHARE of input_tokens_cache_write. " +
+              "Pass them as-is. Each event is priced at the model's effective price on the day " +
+              "in its `ts` (the dated price list, or the policy block under pricing_override); " +
+              "events the list cannot price are left out of the total and listed under `unpriced`.",
           },
           policy_name: { type: "string" },
           project_root: {
@@ -445,6 +461,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             cost_usd: result.cost_usd,
             latency_ms: Date.now() - dispatchStarted,
             attempts: result.attempts?.length ?? 1,
+            price_basis: result.attempts?.[result.attempts.length - 1]?.price_basis,
           });
         } else {
           log("error", "dispatch.error", {
@@ -505,10 +522,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...baseEvent,
           input_tokens: att.tokens.input,
           input_tokens_cached: att.tokens.input_cached,
-          // Cache writes, disjoint from input_tokens (Anthropic adapters
-          // populate it; others leave it undefined and JSON.stringify drops
-          // the key, keeping their events byte-identical to before).
-          input_tokens_cache_write: att.tokens.input_cache_write,
+          // Cache writes, disjoint from input_tokens: the total written, plus
+          // the 1-hour share when the adapter knows it (claude-cli). Anthropic
+          // adapters populate it; Gemini leaves both undefined and
+          // JSON.stringify drops the keys, keeping those events unchanged.
+          ...cacheWriteBuckets(att.tokens),
           output_tokens: att.tokens.output,
           // Already counted in output_tokens and billed at the output rate;
           // surfaced only so a reader can see how much of a delegation's
@@ -521,6 +539,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ceiling_used: att.ceiling_used,
           retry_reason: att.attempt_number > 1 ? "output_cap" : undefined,
           error: att.error,
+          // Where the dollars' rates came from ("list" or "custom" under
+          // pricing_override), which billed models had no price, and, for a
+          // claude-cli worker, Claude Code's own figure and how the cache
+          // TTL split was known. Undefined fields are dropped from the line.
+          price_basis: att.price_basis,
+          unpriced_models: att.unpriced_models?.length ? att.unpriced_models : undefined,
+          cli_reported_cost_usd: att.cli_reported_cost_usd,
+          ttl_split: att.ttl_split,
         }));
         if (a.telemetry_path) {
           for (const ev of events) appendEvent(a.telemetry_path, ev);

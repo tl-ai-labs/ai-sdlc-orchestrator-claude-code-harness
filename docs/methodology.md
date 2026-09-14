@@ -35,7 +35,7 @@ Every telemetry event carries a `provenance` field: `"vendor"` or `"estimated"` 
 The orchestrator (per [rule 6 in orchestrator.md](../plugin/agents/orchestrator.md)) dispatches **every** LLM call — including its own tier's calls — through the MCP server. The MCP server hits the vendor API directly, receives the vendor's own `usage` block in the response, and writes those exact numbers into the event:
 
 - `input_tokens`, `input_tokens_cached`, `output_tokens` — Anthropic-reported (or Google-reported for Gemini calls under `opus-plus-flash`)
-- `cost_usd` — (vendor tokens × the policy YAML's `pricing:` block) / 1M
+- `cost_usd` — (vendor tokens × the model's effective price) / 1M: the dated price list's rates on the dispatch day, or the policy YAML's `pricing:` block when the model sets `pricing_override: true` (see [Pricing table provenance](#pricing-table-provenance))
 - `provenance: "vendor"`
 
 These numbers reconcile to the Anthropic and Google dashboards for the API key and time window the run used. An independent run under vendor-authoritative mode should land within a few percent of the published figures; residual variance is LLM non-determinism in packet decomposition, not measurement drift.
@@ -49,7 +49,7 @@ tokens ≈ characters / 3.8
 ```
 
 - `input_tokens`, `output_tokens` — char-count estimated
-- `cost_usd` — (estimated tokens × the policy YAML's `pricing:` block) / 1M
+- `cost_usd` — (estimated tokens × the policy YAML's `pricing:` block) / 1M; the block must equal the price list (see [Pricing table provenance](#pricing-table-provenance))
 - `provenance: "estimated"`
 
 MCP-dispatched calls in this mode (Gemini under `opus-plus-flash`) still carry vendor tokens; only the direct-tier events are estimated. The report labels the whole run "Mixed" in that case.
@@ -101,7 +101,7 @@ Every attempt emits its own TelemetryEvent with `attempt_number`, `ceiling_used`
 ## Where the numbers come from
 
 - **Token counts pass through unchanged from the source.** In vendor mode, the numbers on every event are exactly what the vendor's `usage` block returned. In estimated mode, they're exactly what the char/3.8 heuristic computed at the moment of the call. Report totals are those per-event counts summed — nothing between measurement and display.
-- **Cost is computed and written at the moment of each call.** Each event's `cost_usd` is (that event's tokens × the loaded policy YAML's `pricing:` block) / 1M, stamped into `telemetry.jsonl` at write time. The report's totals are those per-event costs summed.
+- **Cost is computed and written at the moment of each call.** A dispatched event's `cost_usd` is (that event's tokens × the model's effective price on the dispatch day) / 1M; an estimated event's is (its tokens × the loaded policy YAML's `pricing:` block) / 1M. Either is stamped into `telemetry.jsonl` at write time, and a dispatched event also records `price_basis` (`list` or `custom`) and any billed model it could not price (`unpriced_models`). The report's totals are those per-event costs summed.
 - **The report shows what the run produced.** Every figure on the report comes from summing that run's own telemetry events.
 - **Telemetry covers dispatched work only.** The orchestrator's own loop — reasoning, file reads, re-sending the growing conversation every turn — never passes through the MCP server, so no event above contains it. It is measured separately, post-run, from session transcripts; see [The orchestrator's own cost](#the-orchestrators-own-cost-and-the-transcript-collector).
 
@@ -169,20 +169,33 @@ The report (`node tools/report.mjs`) renders three numbers once the collector ha
 
 ## Pricing table provenance
 
-The rates that turn tokens into dollars live in the `pricing:` block of each policy YAML under `plugin/config/policies/`. Each block also carries:
+The rates that turn dispatched tokens into dollars live in one dated price list, [`plugin/mcp/model-dispatch/src/prices.ts`](../plugin/mcp/model-dispatch/src/prices.ts). Each policy YAML under `plugin/config/policies/` still carries a `pricing:` block per model: the orchestrator's estimated telemetry reads it (last paragraph below), and it is a readable copy of the list. Beside it:
 
 - `pricing_source:` — the vendor URL these rates were taken from
 - `pricing_last_verified:` — the ISO date the maintainer last checked the source page
 
-Every shipped card is checked against one dated price list, [`plugin/mcp/model-dispatch/src/prices.ts`](../plugin/mcp/model-dispatch/src/prices.ts). The list gives each model one or more periods (`from`, `to`, the five token rates, `source_url`, `verified`) and prices a model name on a day:
+The list gives each model one or more periods (`from`, `to`, the five token rates, `source_url`, `verified`) and prices a model name on a day:
 
 | Call | Returns |
 |---|---|
 | `resolveModel(name)` | The list id for an exact id, an id plus `-YYYYMMDD`, or either followed by one bracketed option such as `[1m]`. `null` for anything else. The longest id wins, so `claude-fable-5-1` never reads as `claude-fable-5`. |
 | `lookupPrice(name, date, {speed, service_tier, inference_geo})` | The period's rates, with fast mode (Opus 5 and Opus 4.8) or US-only inference (×1.1, Claude 4.6 and later) applied. Otherwise `unpriced` with the reason: an unknown model, no period for the date, or a modifier value the list has no price for. A rate is never borrowed from a similar model. |
 
-`npm test` fails when a shipped card differs from the list for today's date, or when today falls outside every period for a card's model. Gemini 3.7 Flash's introductory period ends on 31 Dec 2026, so from 1 Jan 2027 the suite stays red until its next period is on the list and the cards match it. In this version the adapters and the collector still price from the policy card; the check is what keeps those cards equal to the list.
+`npm test` fails when a shipped card differs from the list for today's date, or when today falls outside every period for a card's model. Gemini 3.7 Flash's introductory period ends on 31 Dec 2026, so from 1 Jan 2027 the suite stays red until its next period is on the list and the cards match it.
+
+**Which price a dispatch bills** ([`effectivePrice.ts`](../plugin/mcp/model-dispatch/src/effectivePrice.ts)). Every adapter prices a dispatch on the day it starts:
+
+| The policy model entry | Billed at | Event says |
+|---|---|---|
+| No `pricing:` block, or a block within 0.5% of the list on every rate it declares | The list | `price_basis: "list"` |
+| A block more than 0.5% off the list on any rate it declares | The list. A `pricing.policy_mismatch` warning names both prices; `preflight_dispatch` returns it under `price_warnings` | `price_basis: "list"` |
+| `pricing_override: true` with a block (the loader refuses the flag without one) | The block | `price_basis: "custom"` |
+| No list price for the model on that day, and no override | Nothing. `preflight_dispatch` halts the run before it starts, and an adapter refuses the dispatch before any call | — |
+
+The Vertex regional surcharge (+10% on Gemini 3+ at a non-`global` endpoint) is applied on top of the list or custom rates exactly as before, so a shipped Gemini leaf bills the same dollars it did when its block was the price. A `claude-cli` worker is priced per model from its result's `modelUsage`, so a helper or side call on another model bills at that model's own rate; Claude Code's own `total_cost_usd` is kept as `cli_reported_cost_usd`, and a difference of more than 0.5% logs `pricing.cli_cost_mismatch`. A response billed under a modifier the list has no price for (a `service_tier` other than `standard`, say) records its model under `unpriced_models` instead of billing the standard card. The `simulate_policy` replay prices each event at the same effective price on its `ts` day and lists what it cannot price under `unpriced`.
+
+In this version the orchestrator's own session cost ([The orchestrator's own cost](#the-orchestrators-own-cost-and-the-transcript-collector)) is still priced at the driver model's policy card.
 
 Before publishing a study that relies on these numbers, check both fields against the current vendor page. If the vendor changed rates and this repo hasn't caught up, submit a PR that updates the period in `prices.ts` and the matching YAML cards together — the report will then compute costs at the correct schedule automatically.
 
-The orchestrator subagent is instructed (via `plugin/agents/orchestrator.md` rule 6) to read pricing constants ONLY from the loaded policy YAML, never from its own trained knowledge. If the policy's pricing block is missing or malformed, the run aborts rather than guessing.
+Under `--auth=estimated`, the orchestrator subagent prices its own in-session estimates from the loaded policy YAML's `pricing:` block (via `plugin/agents/orchestrator.md` rule 6), never from its own trained knowledge. That is why every shipped block must equal the list, and why `preflight_dispatch` halts an estimated run whose in-session model has no block, before anything is spent. If a block is malformed, the policy does not load.

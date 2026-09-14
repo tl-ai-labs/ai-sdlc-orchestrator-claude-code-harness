@@ -7,9 +7,11 @@
  * pricing, and telemetry never see a slot name.
  */
 
-// The what-if replay prices through the live path's own function so the two
-// can never disagree on the same token buckets.
+// The what-if replay prices through the live path's own functions (the same
+// effective price and the same computeCostUsd) so the two can never disagree
+// on the same token buckets.
 import { computeCostUsd } from "./pricing.js";
+import { effectivePrice } from "./effectivePrice.js";
 import type {
   Policy,
   Rule,
@@ -217,15 +219,29 @@ export interface ReplayEvent {
    */
   input_tokens: number;
   input_tokens_cached: number;
-  /** Cache-write count, disjoint from input_tokens. Absent on events written before the bucket existed. */
+  /** TOTAL cache writes, disjoint from input_tokens. Absent on events written before the bucket existed. */
   input_tokens_cache_write?: number;
   /**
-   * 1-hour-TTL cache-write count, disjoint from `input_tokens_cache_write`
-   * (5-minute). Today only the collector's `tier: "orchestrator"` event
-   * carries it; dispatched events leave it undefined and price as before.
+   * The 1-hour-TTL SHARE of `input_tokens_cache_write`. Both producers write
+   * it that way: the collector's `tier: "orchestrator"` event and claude-cli
+   * worker events. The replay prices min(total, this) at the 1-hour rate and
+   * the rest at the 5-minute rate. It used to read this as a count disjoint
+   * from the total, which priced every 1-hour write of a real telemetry file
+   * twice (once at 5 minutes inside the total, once at 1 hour).
    */
   input_tokens_cache_write_1h?: number;
   output_tokens: number;
+  /** When the event ran; the replay prices it on that day. Absent: priced on today's date. */
+  ts?: string;
+}
+
+export interface ReplayResult {
+  total_cost_usd: number;
+  per_model: Record<string, number>;
+  /** Models the replay could not price (no list period for an event's day, or not on the list), with how many events it skipped. */
+  unpriced: Array<{ model_id: string; model_name: string; reason: string; events: number }>;
+  /** Policy pricing blocks that differ from the list and were ignored. */
+  price_warnings: string[];
 }
 
 export function simulatePolicyCost(
@@ -233,14 +249,33 @@ export function simulatePolicyCost(
   policy: Policy,
   // Defaulting to no overrides prices the policy's defaults — the right
   // answer when the caller has not said otherwise.
-  overrides: SelectOverrides = {}
-): { total_cost_usd: number; per_model: Record<string, number> } {
+  overrides: SelectOverrides = {},
+  opts: { now?: () => Date } = {}
+): ReplayResult {
   const perModel: Record<string, number> = {};
+  const unpriced = new Map<string, ReplayResult["unpriced"][number]>();
+  const priceWarnings = new Set<string>();
   let total = 0;
   for (const ev of events) {
     const decision = pickModel(ev, policy, overrides);
     const model = policy.models.find((m) => m.id === decision.modelId);
     if (!model) continue;
+    // The effective price on the event's own day, exactly as the live
+    // dispatch priced it: the dated list, or the policy block under
+    // pricing_override. A what-if never bills a mismatched block, and an
+    // event on a day the list cannot price is left out of the total and
+    // listed, never priced at a remembered rate.
+    const price = effectivePrice(model, typeof ev.ts === "string" ? ev.ts : (opts.now ?? (() => new Date()))());
+    for (const w of price.warnings) priceWarnings.add(w);
+    if (price.unpriced) {
+      const key = `${model.id} ${price.reason}`;
+      const entry = unpriced.get(key) ?? { model_id: model.id, model_name: model.model_name, reason: price.reason, events: 0 };
+      entry.events++;
+      unpriced.set(key, entry);
+      continue;
+    }
+    const written = ev.input_tokens_cache_write ?? 0;
+    const oneHour = Math.min(written, ev.input_tokens_cache_write_1h ?? 0);
     // Price the replayed event with the SAME function the live path uses
     // (pricing.ts computeCostUsd) on the SAME disjoint buckets the event
     // stores, so a what-if can never disagree with the dollars the run
@@ -261,14 +296,14 @@ export function simulatePolicyCost(
       {
         input: ev.input_tokens,
         input_cached: ev.input_tokens_cached,
-        input_cache_write: ev.input_tokens_cache_write,
-        input_cache_write_1h: ev.input_tokens_cache_write_1h,
+        input_cache_write: written - oneHour,
+        input_cache_write_1h: oneHour,
         output: ev.output_tokens,
       },
-      model.pricing
+      price.pricing
     );
     perModel[model.id] = (perModel[model.id] ?? 0) + cost;
     total += cost;
   }
-  return { total_cost_usd: total, per_model: perModel };
+  return { total_cost_usd: total, per_model: perModel, unpriced: [...unpriced.values()], price_warnings: [...priceWarnings] };
 }

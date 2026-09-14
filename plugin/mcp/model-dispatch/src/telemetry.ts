@@ -137,6 +137,31 @@ export interface Manifest {
   quality_scores?: Record<string, number>;
 }
 
+/**
+ * An attempt's cache-write tokens as a telemetry event stores them.
+ *
+ * Attempts keep the 5-minute (`input_cache_write`) and 1-hour
+ * (`input_cache_write_1h`) writes disjoint, because that is what
+ * computeCostUsd prices. An event keeps `input_tokens_cache_write` as the
+ * TOTAL written, which is what buildManifest, tools/report.mjs and every
+ * earlier event read, and adds the 1-hour SHARE beside it, the same
+ * convention the collector's orchestrator event uses. An attempt with no
+ * cache-write field (Gemini) yields no event field, so its events are
+ * unchanged.
+ */
+export function cacheWriteBuckets(tokens: { input_cache_write?: number; input_cache_write_1h?: number }): {
+  input_tokens_cache_write?: number;
+  input_tokens_cache_write_1h?: number;
+} {
+  const fiveMinute = tokens.input_cache_write;
+  const oneHour = tokens.input_cache_write_1h;
+  if (fiveMinute === undefined && oneHour === undefined) return {};
+  return {
+    input_tokens_cache_write: (fiveMinute ?? 0) + (oneHour ?? 0),
+    ...(oneHour !== undefined ? { input_tokens_cache_write_1h: oneHour } : {}),
+  };
+}
+
 export function buildManifest(allEvents: TelemetryEvent[], opts: {
   pass: string;
   policy_name: string;
