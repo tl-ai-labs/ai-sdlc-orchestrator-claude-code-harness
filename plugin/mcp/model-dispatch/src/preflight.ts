@@ -147,7 +147,12 @@ export function assessModels(
   const blocking = results.filter((m) => !m.ok && m.required);
   const nonBlocking = results.filter((m) => !m.ok && !m.required);
   const unpriced = results.filter((m) => m.unpriced);
-  const needsBlock = results.filter((m) => m.price_error !== undefined && !m.unpriced);
+  // A price error that is not "no price". checkModelPrice raises none since v0.7.3
+  // Q3, which removed its estimated-mode pricing-block requirement (the
+  // orchestrator's estimates read load_policy's effective price now); a price
+  // check that gives any other reason still halts with that reason, rather than
+  // letting it pass silently.
+  const otherPriceErrors = results.filter((m) => m.price_error !== undefined && !m.unpriced);
 
   const reasons: string[] = [];
   if (blocking.length > 0) {
@@ -167,7 +172,7 @@ export function assessModels(
         "tokens the session spends on it could not be priced, so the run's cost would have a hole in it.",
     );
   }
-  for (const f of needsBlock) {
+  for (const f of otherPriceErrors) {
     reasons.push(`Model '${f.id}' (${f.model_name}) ${f.price_error}.`);
   }
   const halt_reason = reasons.length === 0 ? null : reasons.join(" ");

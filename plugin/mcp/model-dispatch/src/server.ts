@@ -5,7 +5,7 @@
  *   simulate_policy      — recompute cost from telemetry against another policy
  *   log_telemetry        — append a direct-tier event to disk
  *   preflight_dispatch   — construct every adapter this run will use (no API call)
- *   load_policy          — return the active policy (debug)
+ *   load_policy          — return the active policy, each model with its effective price for today
  */
 
 // MUST stay the first import — strips `${NAME}` placeholder env vars before
@@ -27,7 +27,7 @@ import {
   unreachableModelIds,
 } from "./routing.js";
 import { assessModels, parseAuthMode, type AuthMode } from "./preflight.js";
-import { checkModelPrice } from "./effectivePrice.js";
+import { checkModelPrice, withEffectivePrices } from "./effectivePrice.js";
 import { appendEvent, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
 import { createAdapter } from "./adapters/index.js";
 import {
@@ -364,7 +364,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "load_policy",
-      description: "Return the policy that would be active for the given args (debug).",
+      description:
+        "Return the policy that would be active for the given args, with each model's effective price for " +
+        "today in models[].effective_price: the dated price list's rates, or the model's pricing block only " +
+        "under pricing_override: true. Those are the rates this server bills every dispatch at, so under " +
+        "auth_mode=estimated the orchestrator prices its own in-session estimates from effective_price.rates, " +
+        "never from a pricing block's text.",
       inputSchema: {
         type: "object",
         properties: {
@@ -601,7 +606,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "load_policy": {
         const a = args as any;
         const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
-        return { content: [{ type: "text", text: JSON.stringify(policy, null, 2) }] };
+        // v0.7.3 Q3: the policy as loaded, plus every model's effective price for
+        // today. orchestrator.md rule 6 prices estimated events from this output,
+        // so it must carry the price this server bills (the list, or a block only
+        // under pricing_override), not only the policy file's pricing blocks, which
+        // can differ from the list and are otherwise documentation. It is built by
+        // the same effectivePrice that prices every dispatch and pre-flight.
+        const view = withEffectivePrices(policy, new Date());
+        return { content: [{ type: "text", text: JSON.stringify(view, null, 2) }] };
       }
       default:
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };

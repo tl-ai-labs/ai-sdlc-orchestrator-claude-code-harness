@@ -403,7 +403,13 @@ function isCalendarDay(y: number, m: number, d: number): boolean {
 const DAY_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 const ZONED_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-function utcDay(date: unknown): string | null {
+/**
+ * The UTC calendar day a date prices on: a YYYY-MM-DD string as given, a
+ * zoned ISO-8601 timestamp as its UTC day, anything else null. Exported
+ * (v0.7.3 Q3) so effectivePrice.ts withEffectivePrices names the day its
+ * rates apply to with the same rule lookupPrice uses to pick the period.
+ */
+export function utcDay(date: unknown): string | null {
   if (typeof date !== "string") return null;
   const dayOnly = DAY_ONLY.exec(date);
   if (dayOnly) return isCalendarDay(Number(dayOnly[1]), Number(dayOnly[2]), Number(dayOnly[3])) ? date : null;

@@ -105,3 +105,24 @@ test("before Flash-Lite's GA day (2026-07-21) pre-flight halts, naming the model
     assert.equal(out.models.find((m) => m.id === "flash-lite").unpriced, true);
   }
 });
+
+test("Q3: load_policy's view of the demo policy shows flash-lite at the list card its dispatches bill, not its stale block, and names the block as ignored", async () => {
+  // Imported here so a missing export fails this test alone, not the file.
+  const { withEffectivePrices } = await import("../dist/effectivePrice.js");
+  const { lookupPrice } = await import("../dist/prices.js");
+  const policy = loadPolicyFromPath(FIXTURE);
+  const view = withEffectivePrices(policy, DAY);
+  const by = Object.fromEntries(view.models.map((m) => [m.id, m]));
+  const lite = by["flash-lite"];
+  assert.deepEqual(lite.pricing && [lite.pricing.input, lite.pricing.input_cached, lite.pricing.output], [0.5, 0.05, 3], "the demo's own block, kept as written");
+  assert.equal(lite.effective_price.basis, "list");
+  assert.deepEqual(lite.effective_price.rates, lookupPrice("gemini-3.5-flash-lite", DAY, {}).pricing);
+  assert.deepEqual([lite.effective_price.rates.input, lite.effective_price.rates.input_cached, lite.effective_price.rates.output], [0.3, 0.03, 2.5]);
+  assert.equal(lite.effective_price.pricing_block, "ignored_differs_from_list");
+  // The same numbers a dispatch bills that day.
+  assert.deepEqual(lite.effective_price.rates, effectivePrice(getModel(policy, "flash-lite"), DAY).pricing);
+  // The in-session Opus seat, whose rates the orchestrator's estimates use.
+  const opus = by.opus;
+  assert.equal(opus.adapter, "builtin-anthropic");
+  assert.deepEqual([opus.effective_price.basis, opus.effective_price.rates], ["list", lookupPrice(opus.model_name, DAY, {}).pricing]);
+});

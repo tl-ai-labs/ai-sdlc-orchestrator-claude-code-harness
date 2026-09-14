@@ -7,9 +7,9 @@
  * - Loader: a `pricing:` block is optional; `pricing_override` is a boolean
  *   and needs a block to bill.
  * - Pre-flight: an unpriced model this run can reach halts the run before
- *   anything is spent; so does a model run in-session under `estimated` with
- *   no block, because the orchestrator prices that work from the block
- *   (orchestrator.md rule 6). Price warnings are reported, never halting.
+ *   anything is spent, in both auth modes. A model run in-session under
+ *   `estimated` needs no block (Q3: the orchestrator's estimates read
+ *   load_policy's effective price). Price warnings are reported, never halting.
  * - BuiltinAnthropicAdapter: bills the list; a wrong block is ignored with a
  *   warning; today's Opus figure is unchanged.
  * - simulate_policy: replays at the effective price on each event's own day,
@@ -153,15 +153,26 @@ test("T9 pre-flight: a policy block that differs from the list is a price warnin
   assert.match(out.price_warnings[0], /input 3\b.*input 2\b/s);
 });
 
-test("T9 pre-flight: under estimated, an in-session model with no block halts; under vendor it does not", async () => {
+test("T9 pre-flight (Q3): an in-session model with no pricing block starts in both modes — estimates read load_policy's effective price, not the block", async () => {
+  // RE-DERIVED (Q3, v0.7.3): this halted under estimated, because orchestrator.md
+  // rule 6 priced in-session estimates from the block text. The estimates now read
+  // `effective_price` from load_policy (the list, or the block only under
+  // pricing_override), so a missing block leaves nothing unpriced; a model with no
+  // list price still halts (the "unpriced model" test above).
   const models = [{ id: "opus", adapter: "builtin-anthropic", model_name: "claude-opus-5" }];
-  const est = preflight.assessModels(models, "estimated", healthy, await priceCheckFor(models, "estimated"));
-  assert.equal(est.ok, false);
-  assert.match(est.halt_reason, /opus/);
-  assert.match(est.halt_reason, /no pricing block/);
-  assert.match(est.halt_reason, /estimated/);
-  const vendor = preflight.assessModels(models, "vendor", healthy, await priceCheckFor(models, "vendor"));
-  assert.equal(vendor.ok, true, "under vendor the server prices it from the list");
+  for (const mode of ["estimated", "vendor"]) {
+    const out = preflight.assessModels(models, mode, healthy, await priceCheckFor(models, mode));
+    assert.equal(out.ok, true, `${mode}: ${out.halt_reason}`);
+    assert.equal(out.halt_reason, null);
+    assert.equal(out.models[0].price_basis, "list");
+  }
+});
+
+test("T9 load_policy server wiring (Q3): the tool returns the policy with every model's effective price for the day it is called", () => {
+  // dist-grep, as above: importing dist/server.js starts a stdio server.
+  // withEffectivePrices itself is pinned in effectivePrice.test.mjs.
+  const src = readFileSync(join(HERE, "..", "dist", "server.js"), "utf-8");
+  assert.match(src, /case "load_policy": \{[\s\S]*?withEffectivePrices\(policy, new Date\(\)\)[\s\S]*?\}/);
 });
 
 test("T9 pre-flight: a credential failure and an unpriced model are both named", async () => {

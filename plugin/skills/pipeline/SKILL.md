@@ -57,8 +57,8 @@ operator to override a gate that exists to protect them.
 
 **`ok: false` can also be about price.** Stop exactly as for a credential failure when `halt_reason`
 says `Cannot price N of M models`: a model this run can route to has no price on the dated price list
-for today, so work sent to it would be refused at dispatch. Stop too when it names a model that has
-no pricing block under `estimated`: your own estimates read that block (rule 6).
+for today, so work sent to it would be refused at dispatch, and your own estimates for it would have
+no rate (rule 6).
 
 **If `price_warnings` is non-empty, print each one and keep going.** Each names a policy `pricing:`
 block that differs from the dated price list. The server bills the list, not the block, so the run's
@@ -193,7 +193,7 @@ every dispatch inside the loop below already logs itself via the MCP server (`ro
 
 For each packet, in dependency order:
 
-**Direct-tier work (subagent handles it, no MCP dispatch):** the orchestrator (Opus) writes the file directly. Estimate tokens via `chars/3.8` heuristic for both inputs and outputs; source pricing constants from the loaded policy's `pricing:` block for this model (a shipped block mirrors the dated price list the server and the post-run collector bill at; see orchestrator rule 6); log a TelemetryEvent via `log_telemetry`.
+**Direct-tier work (subagent handles it, no MCP dispatch):** the orchestrator (Opus) writes the file directly. Estimate tokens via `chars/3.8` heuristic for both inputs and outputs; take pricing constants from this model's `effective_price.rates` in the `load_policy` result (the dated price list's card for the day, or the policy's block only under `pricing_override: true`: the price the server and the post-run collector bill at; see orchestrator rule 6); log a TelemetryEvent via `log_telemetry`.
 
 **Mechanical-tier work (routed to another model):** call `execute_with_model` with the packet, `policy_name`, `project_root: $(pwd)`, and `cache_context`. The server routes per policy. Pass `project_root` on every dispatch, exactly as pre-flight received it: it is what lets the loader prefer a repo-local `routing-policy.yaml` over the shipped preset, and omitting it is the historical bug — the preview named the user's policy while the billed calls quietly routed under a different one. Validate the returned structured output against the schema; if invalid, construct a *refined* packet (new id, `retry_count+1`, with the validation error appended to instruction) and re-dispatch. After 2 mechanical-tier retries fail, the policy escalates to the subagent's own tier automatically (rule with `retry_count: { gte: 2 }`).
 
@@ -426,4 +426,4 @@ Log via `log_telemetry` with `telemetry_path` = `<output_dir>/telemetry.jsonl`. 
 }
 ```
 
-For direct-tier calls (no MCP dispatch), the orchestrator constructs this event itself using the char/3.8 token estimator. **Do not populate `ts` or `latency_ms` for these — `log_telemetry` overwrites both server-side.** You have no clock and no stopwatch, so any value you supply is a guess; the server stamps the real arrival time and records `latency_ms: null`, meaning "not measured". A `0` would be read downstream as "returned instantly", and an invented `ts` corrupts the run duration in the manifest, which is derived by sorting events on `ts`. **Pricing constants come from the loaded policy YAML's `pricing:` block for the current model — never from the subagent's trained knowledge, never hardcoded.** If the policy's pricing block is missing, abort the run (pre-flight already halts an estimated run whose in-session model has none). The block is only for these estimates: `execute_with_model` events are priced by the server from the dated price list (from the block only under `pricing_override: true`), the post-run collector prices this session's transcript the same way, and every shipped block equals the list.
+For direct-tier calls (no MCP dispatch), the orchestrator constructs this event itself using the char/3.8 token estimator. **Do not populate `ts` or `latency_ms` for these — `log_telemetry` overwrites both server-side.** You have no clock and no stopwatch, so any value you supply is a guess; the server stamps the real arrival time and records `latency_ms: null`, meaning "not measured". A `0` would be read downstream as "returned instantly", and an invented `ts` corrupts the run duration in the manifest, which is derived by sorting events on `ts`. **Pricing constants come from the current model's `effective_price.rates` in the `load_policy` result — never from a policy file's `pricing:` block, never from the subagent's trained knowledge, never hardcoded.** If that model has no `effective_price.rates`, abort the run (pre-flight already halts a run with a model that has no price). `effective_price` is the price the server bills `execute_with_model` events at (the dated price list, or the block only under `pricing_override: true`), and the post-run collector prices this session's transcript the same way, so estimates and billing use the same numbers; a block is documentation unless `pricing_override` is true.

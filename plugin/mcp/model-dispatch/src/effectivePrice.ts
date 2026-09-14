@@ -19,6 +19,12 @@
  *      caller refuses to dispatch it (or, for tokens already billed, records
  *      them as unpriced). A rate is never borrowed or remembered.
  *
+ * The same prices reach the orchestrator (v0.7.3 Q3): withEffectivePrices
+ * builds load_policy's output, the policy with each model's effective price
+ * for the day, and orchestrator.md rule 6 prices estimated in-session events
+ * from it. Before, rule 6 read the policy file's block text, so a block that
+ * differed from the list made the run's estimates and its bills disagree.
+ *
  * Pure: warnings are returned, and each caller decides where to log them.
  */
 
@@ -26,11 +32,13 @@ import type { ModelConfig, ModelPricing, PriceBasis } from "./types.js";
 import {
   lookupPrice,
   resolveModel,
+  utcDay,
   type AppliedModifiers,
   type PeriodRef,
   type PriceModifiers,
 } from "./prices.js";
-import { IN_SESSION_ADAPTER, type AuthMode, type PriceCheck } from "./preflight.js";
+import { CACHE_WRITE_PREMIUM, CACHE_WRITE_PREMIUM_1H } from "./pricing.js";
+import type { AuthMode, PriceCheck } from "./preflight.js";
 
 // PriceCheck is declared in preflight.ts, which consumes it, so that module
 // stays free of imports; re-exported here beside the function that builds it.
@@ -191,26 +199,124 @@ function blockMismatch(model: PricedModel, list: Required<ModelPricing>, period:
  * session runs in-session is priced from the same list by the collector, so
  * either way the run's cost would have a hole in it.
  *
- * Under `estimated`, a model the orchestrator runs in-session also needs a
- * pricing block: orchestrator.md rule 6 prices that estimated work from the
- * block text and aborts when it is missing, so the absence is caught here,
- * before anything is spent, rather than at the first estimate.
+ * The auth mode does not change the answer since v0.7.3 Q3. Under `estimated`
+ * a model the orchestrator runs in-session used to need a pricing block as
+ * well, because orchestrator.md rule 6 priced that estimated work from the
+ * block's text. Rule 6 now prices it from the model's `effective_price` in
+ * load_policy's output (withEffectivePrices below), which is the price checked
+ * here, so a model without a block is priced exactly like one whose block
+ * equals the list, and a model with no price halts in both modes. `_authMode`
+ * stays in the signature so callers (server.ts preflightDispatch, the tests)
+ * are unchanged.
  */
-export function checkModelPrice(model: ModelConfig, date: Date | string, authMode: AuthMode): PriceCheck {
+export function checkModelPrice(model: ModelConfig, date: Date | string, _authMode: AuthMode): PriceCheck {
   const r = effectivePrice(model, date);
   if (r.unpriced) return { ok: false, unpriced: true, reason: r.reason, warnings: r.warnings };
-  if (authMode === "estimated" && model.adapter === IN_SESSION_ADAPTER && !model.pricing) {
-    const list = RATE_KEYS.slice(0, 3).map((k) => `${k} ${(r.pricing as ModelPricing)[k]}`).join(", ");
+  return { ok: true, basis: r.basis, warnings: r.warnings };
+}
+
+/**
+ * What a policy entry's own `pricing:` block is, beside its effective price:
+ *   - "none": no block; the list prices the model;
+ *   - "equals_list": within 0.5% of the list on every rate it declares; the list is billed;
+ *   - "ignored_differs_from_list": more than 0.5% off; the list is billed and pre-flight warns;
+ *   - "billed_pricing_override": `pricing_override: true`; the block is the price, labelled custom;
+ *   - "ignored_model_unpriced": a block without the override on a model the list cannot price;
+ *     nothing prices the model, and pre-flight halts.
+ */
+export type PricingBlockStatus =
+  | "none"
+  | "equals_list"
+  | "ignored_differs_from_list"
+  | "billed_pricing_override"
+  | "ignored_model_unpriced";
+
+/** One model's effective price as load_policy presents it (withEffectivePrices). */
+export interface EffectivePriceView {
+  /** The UTC day the rates apply to: the day load_policy was called. */
+  priced_on: string;
+  /** "list" or "custom"; null when the model has no price. */
+  basis: PriceBasis | null;
+  /**
+   * USD per 1M tokens for all five buckets: what a dispatch of this model on
+   * `priced_on` bills at standard modifiers, before the Vertex regional
+   * surcharge (applied at dispatch, Gemini 3+ at a non-global endpoint). A
+   * custom card's undeclared cache-write rates are the computeCostUsd fallbacks
+   * it bills (input x CACHE_WRITE_PREMIUM and x CACHE_WRITE_PREMIUM_1H). Null
+   * when the model has no price.
+   */
+  rates: Required<ModelPricing> | null;
+  /** The list period that priced it; null for a custom price or no price. */
+  period: PeriodRef | null;
+  /** USD per web search request on that day, or null when none is priced. */
+  web_search_per_request: number | null;
+  /** Why the model has no price (pre-flight halts on it); null when priced. */
+  unpriced_reason: string | null;
+  pricing_block: PricingBlockStatus;
+  /** effectivePrice's warnings, such as a block that differs from the list. */
+  warnings: string[];
+}
+
+/** The sentence load_policy's output carries beside the prices, for the model reading it. */
+export const EFFECTIVE_PRICES_NOTE =
+  "Each models[].effective_price is the price the dispatch server bills that model at on effective_prices_on, " +
+  "and the post-run collector prices the session at: the dated price list (plugin/mcp/model-dispatch/src/prices.ts), " +
+  "or the model's pricing block only under pricing_override: true (effective_price.pricing_block says which). Price " +
+  "estimated events from effective_price.rates, never from a pricing block: a block is documentation unless " +
+  "pricing_override is true. A Gemini leaf at a non-global Vertex endpoint bills these rates x1.10 at dispatch.";
+
+function effectivePriceView(model: PricedModel, date: Date | string, day: string): EffectivePriceView {
+  const r = effectivePrice(model, date);
+  const hasBlock = model.pricing != null;
+  if (r.unpriced) {
     return {
-      ok: false,
-      unpriced: false,
-      basis: r.basis,
-      reason:
-        `has no pricing block, but it runs inside the Claude Code session under auth_mode=estimated, where the ` +
-        `orchestrator prices that work from the block (orchestrator.md rule 6). Add a pricing block equal to ` +
-        `the price list ({${list}}), or run with auth_mode=vendor`,
+      priced_on: day,
+      basis: null,
+      rates: null,
+      period: null,
+      web_search_per_request: null,
+      unpriced_reason: r.reason,
+      pricing_block: hasBlock ? "ignored_model_unpriced" : "none",
       warnings: r.warnings,
     };
   }
-  return { ok: true, basis: r.basis, warnings: r.warnings };
+  const p = r.pricing;
+  return {
+    priced_on: day,
+    basis: r.basis,
+    rates: {
+      input: p.input,
+      input_cached: p.input_cached,
+      // A list card always carries both write rates; a custom card may not, and
+      // computeCostUsd bills the missing ones at these fallbacks.
+      input_cache_write: p.input_cache_write ?? p.input * CACHE_WRITE_PREMIUM,
+      input_cache_write_1h: p.input_cache_write_1h ?? p.input * CACHE_WRITE_PREMIUM_1H,
+      output: p.output,
+    },
+    period: r.period,
+    web_search_per_request: r.web_search_per_request,
+    unpriced_reason: null,
+    // effectivePrice's only warning on a list price is the block mismatch.
+    pricing_block:
+      r.basis === "custom" ? "billed_pricing_override" : !hasBlock ? "none" : r.warnings.length > 0 ? "ignored_differs_from_list" : "equals_list",
+    warnings: r.warnings,
+  };
+}
+
+/**
+ * load_policy's output (v0.7.3 Q3): the policy as loaded, unchanged, with
+ * every model given its `effective_price` for `date`, and the day and a note
+ * at the top. Pure: the loaded policy object is not modified. The day is the
+ * price list's own UTC-day reading of `date` (utcDay), so `priced_on` names
+ * the period the rates came from.
+ */
+export function withEffectivePrices<P extends { models: PricedModel[] }>(policy: P, date: Date | string) {
+  const arg = dateArg(date);
+  const day = utcDay(arg) ?? arg;
+  return {
+    effective_prices_on: day,
+    effective_prices_note: EFFECTIVE_PRICES_NOTE,
+    ...policy,
+    models: policy.models.map((m) => ({ ...m, effective_price: effectivePriceView(m, date, day) })),
+  };
 }

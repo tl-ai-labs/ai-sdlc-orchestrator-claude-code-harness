@@ -319,11 +319,12 @@ export interface ModelConfig {
    * The policy's copy of the model's rates. Optional, and by default NOT what
    * a dispatch is billed at: every adapter prices from the dated price list
    * (src/prices.ts) via effectivePrice.ts, and a block that differs from the
-   * list by more than 0.5% is ignored with a warning. It still matters in two
-   * places: under `pricing_override: true` it IS the price (labelled custom),
-   * and under `--auth=estimated` the orchestrator prices its in-session work
-   * from this block's text (orchestrator.md rule 6), so pre-flight requires
-   * one on the in-session model in that mode.
+   * list by more than 0.5% is ignored with a warning. Under
+   * `pricing_override: true` it IS the price (labelled custom); otherwise it is
+   * documentation. The orchestrator's `--auth=estimated` estimates no longer
+   * read it (v0.7.3 Q3): load_policy returns each model's `effective_price`
+   * (effectivePrice.ts withEffectivePrices), orchestrator.md rule 6 prices from
+   * that, and so no model needs a block in either auth mode.
    */
   pricing?: ModelPricing;
   /**

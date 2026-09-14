@@ -157,9 +157,10 @@ function validateSelect(raw: any, modelIds: Set<string>): Set<string> {
 function validateModel(m: any) {
   // `pricing` is no longer required: the dated price list (src/prices.ts)
   // prices every dispatch (effectivePrice.ts), so a model the list knows
-  // needs no block. A block is still validated when present, because the
-  // orchestrator reads its text under --auth=estimated and pricing_override
-  // bills it.
+  // needs no block. A block is still validated when present, because
+  // pricing_override bills it and a shipped block documents the list's card.
+  // The orchestrator's estimates read load_policy's effective price since
+  // v0.7.3 Q3, not the block.
   for (const key of ["id", "adapter", "model_name"]) {
     if (!(key in m)) throw new Error(`Policy model: missing '${key}'`);
   }

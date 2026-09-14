@@ -46,7 +46,8 @@ The bundled server exposes four tools over stdio.
 | `execute_with_model` | Dispatch a TaskPacket to the model the policy names; return result + tokens + cost. |
 | `simulate_policy` | Recompute cost from an existing telemetry stream against a different policy. No LLM call. |
 | `log_telemetry` | Append a TelemetryEvent the orchestrator emitted itself (direct-tier). Server stamps `ts` and nulls `latency_ms`. |
-| `preflight_dispatch` | Construct every adapter this run's auth mode will use, and price every model it can reach for today. Halts on an adapter that fails, a model with no price, or (under `estimated`) an in-session model with no `pricing:` block. No API call. |
+| `preflight_dispatch` | Construct every adapter this run's auth mode will use, and price every model it can reach for today. Halts on an adapter that fails or a model with no price. No API call. |
+| `load_policy` | Return the policy that would be active, each model with its `effective_price` for today: the list's rates, or the model's `pricing:` block only under `pricing_override: true`. The orchestrator prices its estimated events from it. No API call. |
 
 Two files run before anything else:
 
@@ -66,7 +67,7 @@ Policies live under [plugin/config/policies/](../plugin/config/policies/) as YAM
 |---|---|---|
 | `models[].id` | string | Referenced by rules and by `MMO_SELECT`. |
 | `models[].adapter` | `builtin-anthropic` \| `claude-cli` \| `mcp:model-dispatch` \| `antigravity-worker` | Selects the adapter class. |
-| `models[].pricing` | `{input, input_cached, output, input_cache_write?, input_cache_write_1h?}` USD per 1M; optional | Not what a dispatch bills by default: adapters price from [prices.ts](../plugin/mcp/model-dispatch/src/prices.ts) through [effectivePrice.ts](../plugin/mcp/model-dispatch/src/effectivePrice.ts), and a block more than 0.5% off the list is ignored with a warning. The orchestrator's estimated telemetry reads it, so a shipped block must equal the model's list period for today's date (`test/prices.test.mjs` fails otherwise). Flat global/AI-Studio rates; the Vertex regional surcharge is applied at dispatch, not written in the file. |
+| `models[].pricing` | `{input, input_cached, output, input_cache_write?, input_cache_write_1h?}` USD per 1M; optional | Not what a dispatch bills by default: adapters price from [prices.ts](../plugin/mcp/model-dispatch/src/prices.ts) through [effectivePrice.ts](../plugin/mcp/model-dispatch/src/effectivePrice.ts), and a block more than 0.5% off the list is ignored with a warning. Otherwise it is documentation: the orchestrator's estimated telemetry reads `effective_price` from `load_policy`, not the block. A shipped block must still equal the model's list period for today's date (`test/prices.test.mjs` fails otherwise). Flat global/AI-Studio rates; the Vertex regional surcharge is applied at dispatch, not written in the file. |
 | `models[].pricing_override` | boolean; optional | `true` bills `pricing` instead of the list for this leaf's own model; its events say `price_basis: "custom"`. Refused at load without a block. |
 | `models[].pricing_source`, `pricing_last_verified` | URL, ISO date | Vendor page and last verify date. |
 | `models[].max_output_tokens_absolute` | number | Doubling-loop clamp for completion adapters. Absent on `antigravity-worker`. |
@@ -150,7 +151,7 @@ One JSON object per LLM call, appended to `<pass-dir>/telemetry.jsonl`. `manifes
 | `model_id` | Policy leaf that dispatched: `opus` / `flash-completion` / `flash-agsdk-worker`. The only field that distinguishes the two Gemini doors. |
 | `input_tokens`, `input_tokens_cached`, `output_tokens` | Vendor-reported under `vendor`; char-count-estimated under `estimated`. |
 | `output_tokens_reasoning` | Gemini only; already counted in `output_tokens`. Absent on adapters that do not report it (JSON.stringify drops undefined). |
-| `cost_usd` | Dispatched events: `(tokens × effective price) / 1M`, the dated price list or the policy block under `pricing_override`. Estimated events: `(tokens × policy pricing) / 1M`. Cached fraction subtracted before pricing. Vertex regional surcharge applied at dispatch. |
+| `cost_usd` | Dispatched events: `(tokens × effective price) / 1M`, the dated price list or the policy block under `pricing_override`. Estimated events: `(tokens × effective_price.rates from load_policy) / 1M`, the same effective price. Cached fraction subtracted before pricing. Vertex regional surcharge applied at dispatch. |
 | `input_tokens_cache_write`, `input_tokens_cache_write_1h` | Total cache writes, and the 1-hour share of them when known (`claude-cli` workers, the collector's orchestrator line). |
 | `price_basis` | `list` or `custom` (policy block under `pricing_override: true`). Absent on direct-tier events. |
 | `unpriced_models` | `[{model, reason}]` for billed models with no price; their tokens are not in `cost_usd`. Absent when everything was priced. |
@@ -173,7 +174,7 @@ Chosen per run. `/mmo:greenfield` asks; `/mmo:pass --auth=<mode>` requires the f
 
 Under `estimated` the orchestrator runs the direct tier inside the Claude Code loop, where per-call `usage` is not visible. The report labels it "Estimator mode" and marks affected phases with `E`. Totals will not match a vendor-billed run exactly.
 
-`preflight_dispatch` respects the mode: under `estimated`, an unset `ANTHROPIC_API_KEY` is a warning, not a halt. Its price gate does not depend on the mode: a reachable model with no price halts either way, and under `estimated` so does an in-session model with no `pricing:` block, because the orchestrator's estimates read that block.
+`preflight_dispatch` respects the mode: under `estimated`, an unset `ANTHROPIC_API_KEY` is a warning, not a halt. Its price gate does not depend on the mode: a reachable model with no price halts either way. The orchestrator's estimates read each model's `effective_price` from `load_policy`, so an in-session model needs no `pricing:` block.
 
 ## 9. Install routes
 
