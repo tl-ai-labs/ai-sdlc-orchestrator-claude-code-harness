@@ -847,20 +847,25 @@ for (const dir of ["prisma", "test"]) {
 }
 
 // 4. Claude Code session/subagent transcripts under
-// ~/.claude/projects/<project-dir>/. Claude Code names that directory after the
-// absolute project path with EVERY character that is not a letter or digit
-// replaced by '-' (`/a/my_app.v0.6.0` -> `-a-my-app-v0-6-0`): the rule
-// transcriptsDirFor in plugin/scripts/collect-orchestrator-usage.mjs uses and
-// docs/methodology.md states. This used to replace only '/' and whitespace, so
-// for a project path holding a dot or an underscore it looked in a directory
-// that never exists and silently listed no session or subagent transcript
-// (tools/test/report-transcript-dir.test.mjs).
+// <claude root>/projects/<project-dir>/. The claude root is $CLAUDE_CONFIG_DIR
+// when it is set and non-empty, else ~/.claude: where Claude Code writes, and the
+// root transcriptsDirFor in plugin/scripts/collect-orchestrator-usage.mjs and the
+// claude-cli worker ledger (claudeProjectsDir) read. Looking only under
+// ~/.claude listed no transcript for a run launched with CLAUDE_CONFIG_DIR.
+// Claude Code names the project directory after the absolute project path with
+// EVERY character that is not a letter or digit replaced by '-'
+// (`/a/my_app.v0.6.0` -> `-a-my-app-v0-6-0`), as docs/methodology.md states.
+// This used to replace only '/' and whitespace, so for a project path holding a
+// dot or an underscore it looked in a directory that never exists
+// (tools/test/report-transcript-dir.test.mjs pins both rules).
 try {
   // Project root is four levels up from passDir
   // (examples/<study>/passes/<run-id>/ → repo root)
   const projectRoot = dirname(dirname(dirname(dirname(passDir))));
   const projectHash = resolve(projectRoot).replace(/[^A-Za-z0-9]/g, "-");
-  const claudeProjectDir = join(homedir(), ".claude", "projects", projectHash);
+  // `||`, not `??`: an empty CLAUDE_CONFIG_DIR counts as unset, as the collector and the ledger treat it.
+  const claudeRoot = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+  const claudeProjectDir = join(claudeRoot, "projects", projectHash);
   if (existsSync(claudeProjectDir)) {
     const startedAt = Date.parse(manifest.started_at ?? "") || 0;
     const endedAt   = Date.parse(manifest.ended_at   ?? "") || Date.now();

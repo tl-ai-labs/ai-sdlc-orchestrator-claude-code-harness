@@ -20,10 +20,12 @@
  * window and receipt rules against four real sessions across two CLI
  * versions in September 2026):
  *
- *   1. WHERE: transcripts live in ~/.claude/projects/<hash>/*.jsonl where
- *      <hash> is the absolute project path with every character that is not
- *      a letter or digit replaced by `-` (`/a/v0.6.0` → `-a-v0-6-0`); each
- *      session may also have <hash>/<sessionId>/subagents/*.jsonl.
+ *   1. WHERE: transcripts live in <root>/projects/<hash>/*.jsonl, where <root>
+ *      is $CLAUDE_CONFIG_DIR when set and non-empty, else ~/.claude (the root
+ *      the claude-cli worker ledger reads too), and <hash> is the absolute
+ *      project path with every character that is not a letter or digit
+ *      replaced by `-` (`/a/v0.6.0` → `-a-v0-6-0`); each session may also have
+ *      <hash>/<sessionId>/subagents/*.jsonl.
  *      Driver subagents run in-session, so their transcripts count too — all
  *      in-session work is driver-tier work by construction (the plugin ships
  *      only the five driver agents).
@@ -229,8 +231,10 @@
  *   --policy-path       explicit policy file; beats --policy and the
  *                       repo-local override, mirroring the server's loader.
  *   --transcripts-dir   read transcripts from this directory instead of
- *                       ~/.claude/projects/<hash> (tests; or a transcript
- *                       tree copied from another machine).
+ *                       $CLAUDE_CONFIG_DIR/projects/<hash>, or
+ *                       ~/.claude/projects/<hash> when CLAUDE_CONFIG_DIR is
+ *                       unset or empty (tests; or a transcript tree copied
+ *                       from another machine).
  *   --receipt           Claude Code's own end-of-session result for the driver
  *                       session: a `claude -p --output-format json` object, a
  *                       runner's `claude-session.json`, or a stream-json
@@ -934,15 +938,21 @@ async function loadDist() {
 }
 
 /**
- * The CLI's transcript directory for a project: the absolute path with every
- * character that is not a letter or digit replaced by "-" (the same rule the
- * claude-cli worker ledger uses). Replacing only "/" and whitespace missed any
- * path holding a dot or an underscore, so the scan looked in a directory that
- * does not exist.
+ * The CLI's transcript directory for a project: `<claude root>/projects/<dir>`.
+ * The claude root is `$CLAUDE_CONFIG_DIR` when it is set and non-empty, else
+ * `~/.claude`: where Claude Code writes, and the rule claudeProjectsDir in
+ * src/adapters/claudeCliLedger.ts uses to find a claude-cli worker's transcript.
+ * Reading ~/.claude/projects whatever CLAUDE_CONFIG_DIR said found no message
+ * for a session launched with it, so the collector exited 1. <dir> is the
+ * absolute path with every character that is not a letter or digit replaced by
+ * "-" (the same rule the worker ledger uses); replacing only "/" and whitespace
+ * missed any path holding a dot or an underscore. `env` and `home` are
+ * parameters so a test can pin both.
  */
-export function transcriptsDirFor(projectRoot) {
+export function transcriptsDirFor(projectRoot, env = process.env, home = homedir()) {
   const hash = resolve(projectRoot).replace(/[^A-Za-z0-9]/g, "-");
-  return join(homedir(), ".claude", "projects", hash);
+  // `||`, not `??`: an empty CLAUDE_CONFIG_DIR counts as unset, exactly as claudeProjectsDir treats it.
+  return join(env.CLAUDE_CONFIG_DIR || join(home, ".claude"), "projects", hash);
 }
 
 /**

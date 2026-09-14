@@ -193,7 +193,7 @@ A retried packet overwrites all three files, so what survives describes the fina
 
 ### The Claude Code session transcript
 
-Claude Code writes a JSONL transcript of every session to `~/.claude/projects/<project-hash>/<session-id>.jsonl`, and per-subagent transcripts to `~/.claude/projects/<project-hash>/<session-id>/subagents/agent-<id>.jsonl`. These files are the underlying source of truth for what the subagent said and did.
+Claude Code writes a JSONL transcript of every session to `~/.claude/projects/<project-hash>/<session-id>.jsonl`, and per-subagent transcripts to `~/.claude/projects/<project-hash>/<session-id>/subagents/agent-<id>.jsonl`. When `CLAUDE_CONFIG_DIR` is set, both live under `$CLAUDE_CONFIG_DIR/projects/` instead, and the report's Artifacts list and the cost collector look there. These files are the underlying source of truth for what the subagent said and did.
 
 For audits at that level of detail, the files are on disk. The `<session-id>` for a given run is printed at the top of the Claude Code session output.
 

@@ -13,8 +13,9 @@
  *
  * Paths vary per machine, so the pass directory sits at
  * <tmp>/examples/study/passes/pass1 and every occurrence of <tmp> is replaced
- * by <ROOT> before comparing. The report's project root is four levels up, so
- * no ~/.claude/projects directory matches and the Artifacts list is stable.
+ * by <ROOT> before comparing. The report's project root is four levels up, a
+ * fresh temp path, so no transcript directory matches under ~/.claude/projects
+ * or $CLAUDE_CONFIG_DIR/projects and the Artifacts list is stable.
  *
  * Regenerate (only when an intended change to OLD-manifest output is made, and
  * say why in the commit): REPORT_GOLDEN_WRITE=1 node --test tools/test/report-old-manifests.test.mjs

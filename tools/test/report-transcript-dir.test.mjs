@@ -1,8 +1,9 @@
 /**
  * tools/report.mjs lists a run's Claude Code transcripts (its Artifacts
- * section) from ~/.claude/projects/<dir>, where <dir> is Claude Code's own
- * name for the project root: every character that is not a letter or digit
- * becomes "-". That is the rule the collector's transcriptsDirFor uses and
+ * section) from <root>/projects/<dir>, where <root> is $CLAUDE_CONFIG_DIR when
+ * set and non-empty, else ~/.claude, and <dir> is Claude Code's own name for
+ * the project root: every character that is not a letter or digit becomes "-".
+ * Both are the rules the collector's transcriptsDirFor uses and
  * docs/methodology.md states.
  *
  * The report kept an older rule that replaced only "/" and whitespace. For any
@@ -28,7 +29,14 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REPORT = join(ROOT, "tools", "report.mjs");
 const RUN = join(ROOT, "tools", "test", "fixtures", "receivables-ops", "pass1");
 
-test("report Artifacts: a project root with a dot and an underscore finds its transcripts under Claude Code's directory name", () => {
+/**
+ * Writes a run under `<tmp>/work/my_app.v0.6.0`, puts one session and one
+ * helper transcript under `<claude root>/projects/<dir>` (the claude root is
+ * `configDir` when given, else `<tmp>/home/.claude`), and returns the report's
+ * text. HOME is the temp home either way; CLAUDE_CONFIG_DIR is set to
+ * `configDir` or removed, so the machine's own value never leaks in.
+ */
+function reportWithTranscripts({ configDir } = {}) {
   const tmp = mkdtempSync(join(tmpdir(), "report-transcript-dir-"));
   try {
     // The report takes the project root as four levels above the pass directory.
@@ -40,8 +48,10 @@ test("report Artifacts: a project root with a dot and an underscore finds its tr
     writeFileSync(join(passDir, "telemetry.jsonl"), readFileSync(join(RUN, "telemetry.jsonl")));
 
     const home = join(tmp, "home");
-    const claudeDir = join(home, ".claude", "projects", projectRoot.replace(/[^A-Za-z0-9]/g, "-"));
+    const claudeRoot = configDir ? join(tmp, configDir) : join(home, ".claude");
+    const claudeDir = join(claudeRoot, "projects", projectRoot.replace(/[^A-Za-z0-9]/g, "-"));
     mkdirSync(join(claudeDir, "sess-1", "subagents"), { recursive: true });
+    mkdirSync(home, { recursive: true });
     const session = join(claudeDir, "sess-1.jsonl");
     const helper = join(claudeDir, "sess-1", "subagents", "agent-a1.jsonl");
     writeFileSync(session, "{}\n");
@@ -52,10 +62,27 @@ test("report Artifacts: a project root with a dot and an underscore finds its tr
       utimesSync(session, t, t);
     }
 
-    const out = execFileSync(process.execPath, [REPORT, passDir], { encoding: "utf8", env: { ...process.env, HOME: home } });
-    assert.match(out, /Claude Code session log\s+\S*sess-1\.jsonl/);
-    assert.match(out, /Subagent transcript\s+\S*agent-a1\.jsonl/);
+    const env = { ...process.env, HOME: home };
+    delete env.CLAUDE_CONFIG_DIR;
+    if (configDir) env.CLAUDE_CONFIG_DIR = claudeRoot;
+    return execFileSync(process.execPath, [REPORT, passDir], { encoding: "utf8", env });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+test("report Artifacts: a project root with a dot and an underscore finds its transcripts under Claude Code's directory name", () => {
+  const out = reportWithTranscripts();
+  assert.match(out, /Claude Code session log\s+\S*sess-1\.jsonl/);
+  assert.match(out, /Subagent transcript\s+\S*agent-a1\.jsonl/);
+});
+
+// Claude Code writes transcripts under $CLAUDE_CONFIG_DIR/projects when that
+// variable is set; the collector and the claude-cli worker ledger read them
+// there. The report looked only under ~/.claude/projects, so such a run listed
+// no session or subagent transcript.
+test("report Artifacts: with CLAUDE_CONFIG_DIR set, transcripts are listed from $CLAUDE_CONFIG_DIR/projects", () => {
+  const out = reportWithTranscripts({ configDir: "claude-config" });
+  assert.match(out, /Claude Code session log\s+\S*claude-config\/projects\/\S*sess-1\.jsonl/);
+  assert.match(out, /Subagent transcript\s+\S*claude-config\/projects\/\S*agent-a1\.jsonl/);
 });

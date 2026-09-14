@@ -340,12 +340,52 @@ test("transcript discovery ignores non-transcript files", () => {
  * and the run then found no messages to price.
  */
 import { transcriptsDirFor } from "../../../scripts/collect-orchestrator-usage.mjs";
+import { claudeProjectsDir } from "../dist/adapters/claudeCliLedger.js";
+import { cpSync } from "node:fs";
+import { resolve } from "node:path";
 
 test("transcriptsDirFor names the directory the way Claude Code does: every character that is not a letter or digit becomes '-'", () => {
-  const name = (p) => transcriptsDirFor(p).split("/").pop();
+  // An explicit empty env and home, so the machine's own CLAUDE_CONFIG_DIR can never change the answer.
+  const name = (p) => transcriptsDirFor(p, {}, "/home/dev").split("/").pop();
   assert.equal(name("/Users/dev/Desktop/repro-main-v0.6.0-headless/project"), "-Users-dev-Desktop-repro-main-v0-6-0-headless-project");
   assert.equal(name("/private/tmp/claude-501/-Users-dev/scratch pad/cc_folder.test"), "-private-tmp-claude-501--Users-dev-scratch-pad-cc-folder-test");
-  assert.equal(transcriptsDirFor("/a/b"), join(homedir(), ".claude", "projects", "-a-b"));
+  assert.equal(transcriptsDirFor("/a/b", {}, "/home/dev"), join("/home/dev", ".claude", "projects", "-a-b"));
+});
+
+/*
+ * Claude Code writes its transcripts under $CLAUDE_CONFIG_DIR/projects when
+ * that variable is set, and the claude-cli worker ledger already looked there
+ * (claudeProjectsDir in src/adapters/claudeCliLedger.ts). The collector read
+ * ~/.claude/projects whatever the variable said, so a run launched with
+ * CLAUDE_CONFIG_DIR found no message in its window and exited 1 unless
+ * --transcripts-dir was passed by hand.
+ */
+test("transcriptsDirFor honours CLAUDE_CONFIG_DIR exactly as the worker ledger does; an empty value counts as unset", () => {
+  assert.equal(transcriptsDirFor("/a/b", { CLAUDE_CONFIG_DIR: "/cfg" }, "/home/dev"), join("/cfg", "projects", "-a-b"));
+  assert.equal(transcriptsDirFor("/a/b", { CLAUDE_CONFIG_DIR: "" }, "/home/dev"), join("/home/dev", ".claude", "projects", "-a-b"));
+  for (const env of [{}, { CLAUDE_CONFIG_DIR: "/cfg" }, { CLAUDE_CONFIG_DIR: "" }]) {
+    assert.equal(transcriptsDirFor("/a/b", env, "/home/dev"), join(claudeProjectsDir(env, "/home/dev"), "-a-b"), `same root as the worker ledger for ${JSON.stringify(env)}`);
+  }
+});
+
+test("without --transcripts-dir the collector reads $CLAUDE_CONFIG_DIR/projects/<project dir>, not ~/.claude/projects", () => {
+  const fix = makeFixture();
+  try {
+    const home = join(fix.root, "home");
+    mkdirSync(home);
+    const cfg = join(fix.root, "claude-config");
+    const dir = join(cfg, "projects", resolve(fix.root).replace(/[^A-Za-z0-9]/g, "-"));
+    cpSync(fix.tDir, dir, { recursive: true });
+    const env = { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: cfg };
+    delete env.MMO_SELECT;
+    const r = spawnSync(process.execPath, [SCRIPT, fix.passDir, "--project-root", fix.root, "--dry-run"], { env, encoding: "utf-8" });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(r.stdout.includes(`transcripts: ${dir}`), r.stdout);
+    // msg_A (its duplicate line skipped) and the subagent's msg_B; the synthetic and out-of-window lines are not counted.
+    assert.match(r.stdout, /counted 2 unique API message\(s\)/);
+  } finally {
+    rmSync(fix.root, { recursive: true, force: true });
+  }
 });
 
 /*
