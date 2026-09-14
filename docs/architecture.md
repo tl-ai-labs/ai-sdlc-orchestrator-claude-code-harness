@@ -39,7 +39,7 @@ The hook matcher is a regex because the plugin route namespaces MCP tools with t
 
 ## 2. MCP server
 
-The bundled server exposes four tools over stdio.
+The bundled server exposes five tools over stdio.
 
 | Tool | Purpose |
 |---|---|
@@ -81,7 +81,7 @@ Policies live under [plugin/config/policies/](../plugin/config/policies/) as YAM
 
 Two pre-rename spellings still work, each warning once to stderr instead of failing (MMO-D8): the env var `SDLC_SELECT` (read when `MMO_SELECT` is unset) and the adapter id `mcp:gemini-flash-server` (accepted anywhere `mcp:model-dispatch` is).
 
-`simulate_policy` replays events against a different policy using the current run's slot choices, so a what-if on a slotted policy prices the tier this install would actually dispatch to. It takes the same policy arguments as its siblings — `policy_name`, `project_root`, `policy_path` — and resolves them through the same loader, so a project with a repo-local `routing-policy.yaml` simulates against the policy its runs actually use (the handler used to drop `project_root`, silently pricing the shipped preset instead). Replayed events are priced by the same effective price and `computeCostUsd` the live path uses, on the day in each event's `ts`, so a what-if cannot disagree with the dollars the run logged for the same tokens; events the list cannot price are left out of the total and listed under `unpriced`. `input_tokens` is already the fresh count, and `input_tokens_cache_write_1h` is read as the 1-hour share of `input_tokens_cache_write`, the way both producers of that field write it (reading it as a separate count priced those writes twice). It used to subtract `input_tokens_cached` from `input_tokens` before pricing — a second subtraction that under-priced every cache-hit event and sent cache-heavy replays negative — and it never priced the 1-hour cache-write tier.
+`simulate_policy` replays events against a different policy using the current run's slot choices, so a what-if on a slotted policy prices the tier this install would actually dispatch to. It takes the same policy arguments as its siblings — `policy_name`, `project_root`, `policy_path` — and resolves them through the same loader, so a project with a repo-local `routing-policy.yaml` simulates against the policy its runs actually use (the handler used to drop `project_root`, silently pricing the shipped preset instead). Replayed events are priced by the same effective price and `computeCostUsd` the live path uses, on the day in each event's `ts`, and a Gemini event adds the +10% Vertex regional surcharge the adapters bill at the endpoint this server would dispatch it to (a worker leaf's `region:`, else `GOOGLE_CLOUD_LOCATION`; none through an AI Studio key, at `global`, or on a day before 2026-07-01; the rules live in [geminiEndpoint.ts](../plugin/mcp/model-dispatch/src/adapters/geminiEndpoint.ts)), so a what-if run in the run's own Gemini environment agrees with the dollars the run logged for the same tokens; events the list cannot price are left out of the total and listed under `unpriced`. `input_tokens` is already the fresh count, and `input_tokens_cache_write_1h` is read as the 1-hour share of `input_tokens_cache_write`, the way both producers of that field write it (reading it as a separate count priced those writes twice). It used to subtract `input_tokens_cached` from `input_tokens` before pricing — a second subtraction that under-priced every cache-hit event and sent cache-heavy replays negative — and it never priced the 1-hour cache-write tier.
 
 ## 4. Adapters
 

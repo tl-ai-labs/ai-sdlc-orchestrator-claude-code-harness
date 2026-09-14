@@ -53,13 +53,16 @@ const RETIRED_PATTERNS = [
   { name: "plugin_sdlc_", pattern: /plugin_sdlc_/ },
   { name: "run-ai-sdlc", pattern: /run-ai-sdlc/ },
   {
-    // Bare gemini-flash-server used as a path or server id. The two MMO-D8
+    // Bare gemini-flash-server used as a path or server id. The MMO-D8
     // compat-shim call sites are the one legitimate exception.
     name: "gemini-flash-server",
     pattern: /gemini-flash-server/,
     exceptions: [
       "plugin/mcp/model-dispatch/src/adapters/index.ts",
       "plugin/mcp/model-dispatch/src/server.ts",
+      // v0.7.3 review fix: the what-if replay's endpoint rule must recognise the
+      // alias the adapter registry still accepts, as server.ts does.
+      "plugin/mcp/model-dispatch/src/adapters/geminiEndpoint.ts",
       "docs/architecture.md", // documents the MMO-D8 compat shim by name
       // Pins that the compat shim still validates; must name the alias to test it.
       "plugin/mcp/model-dispatch/test/policyResolution.test.mjs",

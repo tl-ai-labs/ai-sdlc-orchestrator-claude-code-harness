@@ -354,6 +354,45 @@ function renderPolicyYaml(policy, baseId) {
 
 // ── save handler (mirrors app/actions.ts) ─────────────────────────────
 
+// v0.7.3: a model's `pricing:` block is optional. Every dispatch is priced from
+// the dated price list (plugin/mcp/model-dispatch/src/prices.ts), and a block
+// is billed only under `pricing_override: true`. This mirrors the policy
+// loader's validateModel (src/policy.ts), which cannot be imported here, so a
+// block-less policy can be previewed and saved and a saved policy always
+// loads. The console used to require input / input_cached / output on every
+// model, which refused every block-less policy. Stricter than the loader in
+// one place, as the console always was: a negative rate is refused.
+// tools/test/policy-console-pricing.test.mjs holds the two in step.
+function modelPricingErrors(m) {
+  const errors = [];
+  if (m.pricing_override !== undefined && typeof m.pricing_override !== "boolean") {
+    errors.push(`Model "${m.id}": pricing_override must be true or false.`);
+  }
+  if (m.pricing === undefined || m.pricing === null) {
+    if (m.pricing_override === true) {
+      errors.push(
+        `Model "${m.id}": pricing_override: true needs a pricing block to bill. Add the block, or remove pricing_override to price the model from the price list.`,
+      );
+    }
+    return errors;
+  }
+  if (typeof m.pricing !== "object" || Array.isArray(m.pricing)) {
+    errors.push(`Model "${m.id}": pricing must be a map of USD-per-1M rates.`);
+    return errors;
+  }
+  for (const k of ["input", "input_cached", "output"]) {
+    if (typeof m.pricing[k] !== "number" || m.pricing[k] < 0) {
+      errors.push(`Model "${m.id}": pricing.${k} must be a number ≥ 0.`);
+    }
+  }
+  for (const k of ["input_cache_write", "input_cache_write_1h"]) {
+    if (m.pricing[k] !== undefined && (typeof m.pricing[k] !== "number" || m.pricing[k] < 0)) {
+      errors.push(`Model "${m.id}": pricing.${k} must be a number ≥ 0.`);
+    }
+  }
+  return errors;
+}
+
 function validateSaveInput(input) {
   const errors = [];
   const name = (input.name ?? "").trim();
@@ -380,11 +419,7 @@ function validateSaveInput(input) {
       errors.push(`Model "${m.id}" names adapter "${m.adapter}", which has no real implementation. Known: ${KNOWN_ADAPTERS.join(", ")}.`);
     }
     if (!m.model_name?.trim()) errors.push(`Model "${m.id}" is missing a model_name.`);
-    for (const k of ["input", "input_cached", "output"]) {
-      if (typeof m.pricing?.[k] !== "number" || m.pricing[k] < 0) {
-        errors.push(`Model "${m.id}": pricing.${k} must be a number ≥ 0.`);
-      }
-    }
+    errors.push(...modelPricingErrors(m));
   }
   if (errors.length) return { errors };
 

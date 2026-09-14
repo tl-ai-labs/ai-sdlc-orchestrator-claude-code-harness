@@ -45,6 +45,8 @@ const FIX_E_FIELDS = [
   "missing_helper_ids",
   "unreferenced_helper_files",
   "receipt_cli_usd",
+  // v0.7.3 review fix: the booked part's list figure, which Claude Code's receipt_cli_usd is checked against.
+  "booked_cost_usd",
 ];
 
 const readJson = (p) => JSON.parse(readFileSync(p, "utf-8"));

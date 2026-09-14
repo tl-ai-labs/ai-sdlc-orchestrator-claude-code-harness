@@ -305,7 +305,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "input_tokens_cache_write_1h is the 1-hour SHARE of input_tokens_cache_write. " +
               "Pass them as-is. Each event is priced at the model's effective price on the day " +
               "in its `ts` (the dated price list, or the policy block under pricing_override); " +
-              "events the list cannot price are left out of the total and listed under `unpriced`.",
+              "events the list cannot price are left out of the total and listed under `unpriced`. " +
+              "A Gemini event adds the +10% Vertex regional surcharge at the endpoint this server " +
+              "would dispatch it to (a worker leaf's region:, else GOOGLE_CLOUD_LOCATION; none " +
+              "through an AI Studio key or at global), as the adapters bill it.",
           },
           policy_name: { type: "string" },
           project_root: {

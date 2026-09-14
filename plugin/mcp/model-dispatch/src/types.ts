@@ -158,6 +158,8 @@ export interface TelemetryEvent {
   transcript_cost_usd?: number | null;
   receipt_cost_usd?: number | null;
   receipt_cli_usd?: number | null;
+  /** The booked part at the price list: the whole receipt, or a resumed window's last invocation. receipt_cli_usd is checked against it; null unless a receipt was booked. */
+  booked_cost_usd?: number | null;
   unlogged_billed?: OrchestratorUnloggedBilled | null;
   attribution_complete?: boolean | null;
   missing_helper_ids?: string[];

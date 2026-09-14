@@ -294,9 +294,15 @@ rules:
 `;
 const replayEvent = (over) => ({ phase: "requirements_analysis", task_type: "analysis", module: "cross", retry_count: 0, ts: `${DAY}T10:00:00.000Z`, input_tokens: 10_000, input_tokens_cached: 40_000, output_tokens: 2_000, ...over });
 
+// Changed (v0.7.3 review fix): the replay now bills a Gemini event at the
+// endpoint the environment would dispatch it to, with the Vertex regional
+// surcharge. These pins replay with no Gemini environment, so they read the
+// global rate on any machine; test/simulatePolicyCost.test.mjs pins the surcharge.
+const OFFLINE = { env: {}, adcFileExists: false };
+
 test("T9 simulate_policy replays at the list price, not a mismatched block", () => {
   const policy = loadPolicyFromPath(policyFile(REPLAY_POLICY));
-  const out = simulatePolicyCost([replayEvent({})], policy);
+  const out = simulatePolicyCost([replayEvent({})], policy, {}, OFFLINE);
   assert.equal(out.total_cost_usd, computeCostUsd({ input: 10_000, input_cached: 40_000, output: 2_000 }, SONNET_5_LIST));
   assert.deepEqual(out.unpriced, []);
 });
@@ -310,13 +316,13 @@ test("T9 simulate_policy prices each event on its own day and lists what it cann
   // GA is a gap no later period fills, and a 2027 event now replays at the
   // 2027 card.
   const early = replayEvent({ phase: "codegen", ts: "2026-08-12T10:00:00.000Z" });
-  const out = simulatePolicyCost([priced, early], policy);
+  const out = simulatePolicyCost([priced, early], policy, {}, OFFLINE);
   assert.equal(out.total_cost_usd, computeCostUsd(tokens, { input: 0.75, input_cached: 0.075, output: 3.75 }));
   assert.equal(out.unpriced.length, 1);
   assert.equal(out.unpriced[0].model_id, "flash");
   assert.equal(out.unpriced[0].events, 1);
   assert.match(out.unpriced[0].reason, /no price period for gemini-3\.7-flash on 2026-08-12/);
-  const y2027 = simulatePolicyCost([replayEvent({ phase: "codegen", ts: "2027-01-02T10:00:00.000Z" })], policy);
+  const y2027 = simulatePolicyCost([replayEvent({ phase: "codegen", ts: "2027-01-02T10:00:00.000Z" })], policy, {}, OFFLINE);
   assert.equal(y2027.total_cost_usd, computeCostUsd(tokens, { input: 1.5, input_cached: 0.15, output: 7.5 }));
   assert.deepEqual(y2027.unpriced, []);
 });
@@ -325,7 +331,7 @@ test("T9 simulate_policy reads input_tokens_cache_write_1h as a share of input_t
   // Shaped like the collector's orchestrator event: 20,329 writes, all 1-hour.
   const policy = loadPolicyFromPath(policyFile(REPLAY_POLICY));
   const ev = replayEvent({ input_tokens_cache_write: 20_329, input_tokens_cache_write_1h: 20_329 });
-  const out = simulatePolicyCost([ev], policy);
+  const out = simulatePolicyCost([ev], policy, {}, OFFLINE);
   assert.equal(
     out.total_cost_usd,
     computeCostUsd({ input: 10_000, input_cached: 40_000, input_cache_write: 0, input_cache_write_1h: 20_329, output: 2_000 }, SONNET_5_LIST),

@@ -8,10 +8,15 @@
  */
 
 // The what-if replay prices through the live path's own functions (the same
-// effective price and the same computeCostUsd) so the two can never disagree
-// on the same token buckets.
+// effective price, the same computeCostUsd, and for a Gemini event the same
+// endpoint and regional surcharge rules in adapters/geminiEndpoint.ts), so a
+// replay in the run's own Gemini environment agrees with the dollars the run
+// logged for the same token buckets.
 import { computeCostUsd } from "./pricing.js";
 import { effectivePrice } from "./effectivePrice.js";
+import { existsSync } from "node:fs";
+import { utcDay } from "./prices.js";
+import { defaultAdcPath, geminiDispatchEndpoint, vertexSurchargeFactor } from "./adapters/geminiEndpoint.js";
 import type {
   Policy,
   Rule,
@@ -244,15 +249,38 @@ export interface ReplayResult {
   price_warnings: string[];
 }
 
+/** Every declared rate multiplied by `k` (the Vertex regional surcharge on a replayed Gemini event). */
+function scaleRates<T extends { input: number; input_cached: number; output: number; input_cache_write?: number; input_cache_write_1h?: number }>(
+  p: T,
+  k: number
+): T {
+  return {
+    ...p,
+    input: p.input * k,
+    input_cached: p.input_cached * k,
+    output: p.output * k,
+    ...(p.input_cache_write !== undefined ? { input_cache_write: p.input_cache_write * k } : {}),
+    ...(p.input_cache_write_1h !== undefined ? { input_cache_write_1h: p.input_cache_write_1h * k } : {}),
+  };
+}
+
 export function simulatePolicyCost(
   events: ReplayEvent[],
   policy: Policy,
   // Defaulting to no overrides prices the policy's defaults — the right
   // answer when the caller has not said otherwise.
   overrides: SelectOverrides = {},
-  opts: { now?: () => Date } = {}
+  opts: {
+    now?: () => Date;
+    /** The Gemini environment the replay bills endpoints in. Default: this process's, the one the adapters dispatch from. */
+    env?: Record<string, string | undefined>;
+    /** Whether a gcloud ADC file exists. Default: checked on disk. */
+    adcFileExists?: boolean;
+  } = {}
 ): ReplayResult {
   const perModel: Record<string, number> = {};
+  const env = opts.env ?? (process.env as Record<string, string | undefined>);
+  const adcFileExists = opts.adcFileExists ?? existsSync(defaultAdcPath());
   const unpriced = new Map<string, ReplayResult["unpriced"][number]>();
   const priceWarnings = new Set<string>();
   let total = 0;
@@ -265,7 +293,8 @@ export function simulatePolicyCost(
     // pricing_override. A what-if never bills a mismatched block, and an
     // event on a day the list cannot price is left out of the total and
     // listed, never priced at a remembered rate.
-    const price = effectivePrice(model, typeof ev.ts === "string" ? ev.ts : (opts.now ?? (() => new Date()))());
+    const when = typeof ev.ts === "string" ? ev.ts : (opts.now ?? (() => new Date()))();
+    const price = effectivePrice(model, when);
     for (const w of price.warnings) priceWarnings.add(w);
     if (price.unpriced) {
       // `\u0000` is typed as an escape, not a raw NUL byte: the key string is
@@ -279,10 +308,23 @@ export function simulatePolicyCost(
     }
     const written = ev.input_tokens_cache_write ?? 0;
     const oneHour = Math.min(written, ev.input_tokens_cache_write_1h ?? 0);
+    // v0.7.3 review fix: a Gemini event is billed at the endpoint this
+    // environment would dispatch it to, with the +10% Vertex regional
+    // surcharge the adapters apply there (geminiEndpoint.ts holds the rules
+    // both use). Without it, a regional install's what-if read exactly 10%
+    // below the dollars its run logged. The factor also scales a declared
+    // cache-write rate: a replay can move a Claude event that carries cache
+    // writes onto a Gemini leaf, and Vertex surcharges every token class.
+    const endpoint = geminiDispatchEndpoint(model, env, adcFileExists);
+    const factor = endpoint
+      ? vertexSurchargeFactor({ ...endpoint, modelName: model.model_name, day: utcDay(when) ?? undefined })
+      : 1;
+    const billed = factor === 1 ? price.pricing : scaleRates(price.pricing, factor);
     // Price the replayed event with the SAME function the live path uses
     // (pricing.ts computeCostUsd) on the SAME disjoint buckets the event
-    // stores, so a what-if can never disagree with the dollars the run
-    // actually logged for the same tokens.
+    // stores, so a what-if replayed in the run's own Gemini environment
+    // agrees with the dollars the run logged for the same tokens (the
+    // regional surcharge above included).
     //
     // This loop used to compute `inputFresh = ev.input_tokens -
     // ev.input_tokens_cached` first. That assumed `input_tokens` was the
@@ -303,7 +345,7 @@ export function simulatePolicyCost(
         input_cache_write_1h: oneHour,
         output: ev.output_tokens,
       },
-      price.pricing
+      billed
     );
     perModel[model.id] = (perModel[model.id] ?? 0) + cost;
     total += cost;

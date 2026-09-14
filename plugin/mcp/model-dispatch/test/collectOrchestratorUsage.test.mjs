@@ -208,6 +208,8 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
       // Fix D fields (collectReceiptBooking.test.mjs): no receipt, so nothing is booked from one; no
       // command turn and no receipt session, so no session file is pinned and attribution cannot be checked.
       receipt_cli_usd: null,
+      // v0.7.3 review fix: the booked part's list figure; null, since no receipt was booked.
+      booked_cost_usd: null,
       unlogged_billed: null,
       attribution_complete: null,
       missing_helper_ids: [],

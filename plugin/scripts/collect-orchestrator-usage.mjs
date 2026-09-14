@@ -2207,6 +2207,23 @@ export async function main(argv = process.argv.slice(2)) {
     if (renamed(names.transcript).length > 0) console.log(`  transcript names resolved: ${renamed(names.transcript).join(", ")}`);
   }
 
+  // v0.7.3 review fix: a receipt with Claude Code's dollars but no modelUsage
+  // has nothing to check the transcript against and nothing to price, on any
+  // path. Only the no-transcript path used to say so: with transcript lines in
+  // the window, every model read as "in the transcript, none on the receipt",
+  // and the refusal blamed the window (a stale run.start, a reused run id)
+  // instead of the receipt. Every receipt name resolved above, so an empty
+  // re-keyed map means exactly an empty modelUsage.
+  if (names && Object.keys(names.receipt).length === 0) {
+    console.error(
+      `collect-orchestrator-usage FAILED: the receipt ${receipt.path} carries no per-model token counts (modelUsage), so there ` +
+        `is nothing to check the transcript against or to price. Claude Code's own dollar figure is never booked. Keep the ` +
+        `result line of claude -p --output-format json or stream-json, which carries modelUsage, or move this file out of ` +
+        `the pass directory to collect a transcript-priced figure labelled unverified. Nothing was written.`
+    );
+    return 3;
+  }
+
   // A model with no logged message is priced on the window's opening and its
   // last known moment: the last counted message, else the window's (clamped)
   // close, else the last dispatched event.
@@ -2289,13 +2306,7 @@ export async function main(argv = process.argv.slice(2)) {
     // No transcript line fell in the window, but the receipt's token counts
     // did. They are priced from the list like any booked receipt, with every
     // model receipt-only; only attribution to phases is lost, and that is said.
-    if (Object.keys(names.receipt).length === 0) {
-      console.error(
-        `collect-orchestrator-usage FAILED: no transcript lines fell in the window and the receipt ${receipt.path} carries no ` +
-          `per-model token counts (modelUsage) to price. Claude Code's own dollar figure is never booked. Nothing was written.`
-      );
-      return 3;
-    }
+    // A receipt with no modelUsage was refused above, before either path.
     book();
     if (strictRefusesBooking()) return 1;
     costSource = `receipt-only (Anthropic token counts priced at the price list${customTag()})${booking.complete ? "" : "; INCOMPLETE — unpriced tokens excluded"}`;
@@ -2657,6 +2668,9 @@ export async function main(argv = process.argv.slice(2)) {
     // Header, fact 8: Claude Code's own figure, kept as a check; what a booked
     // receipt billed beyond the transcript; whether every helper file was there.
     receipt_cli_usd: receipt?.total_cost_usd ?? null,
+    // v0.7.3 review fix: the booked part at the list (the whole receipt, or a
+    // resumed window's last invocation), which receipt_cli_usd is checked against.
+    booked_cost_usd: booking?.cost_usd ?? null,
     unlogged_billed: booking?.unlogged_billed ?? null,
     attribution_complete: attribution ? attribution.complete : null,
     // The transcript's cost per model and role, and what could not be priced.
@@ -2724,6 +2738,12 @@ export async function main(argv = process.argv.slice(2)) {
     // + unlogged_billed.cost_usd. The attribution fields are null / empty unless
     // the scan was pinned to a session file.
     receipt_cli_usd: receipt?.total_cost_usd ?? null,
+    // v0.7.3 review fix: booked_cost_usd is the booked part at the list: the
+    // whole receipt, or on a resumed window the last invocation alone, which
+    // is all Claude Code's figure bills. tools/report.mjs checks
+    // receipt_cli_usd against it; cost_usd would compare different spans.
+    // null unless a receipt was booked.
+    booked_cost_usd: booking?.cost_usd ?? null,
     unlogged_billed: booking?.unlogged_billed ?? null,
     attribution_complete: attribution ? attribution.complete : null,
     missing_helper_ids: attribution?.missing_helper_ids ?? [],

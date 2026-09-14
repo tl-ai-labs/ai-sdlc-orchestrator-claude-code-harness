@@ -23,7 +23,7 @@ import type {
 } from "../types.js";
 import { computeCostUsd } from "../pricing.js";
 import type { ModelAdapter } from "./ModelAdapter.js";
-import { applyVertexSurcharge, resolveGcpLocation, resolveGcpProject } from "./geminiTransports.js";
+import { applyVertexSurcharge, resolveGcpProject, workerVertexLocation } from "./geminiTransports.js";
 import { DispatchPricer, geminiRates, unpricedRefusal, type BilledPrice, type Clock } from "./dispatchPricer.js";
 import {
   DEFAULT_WORKER_TIMEOUT_SEC,
@@ -84,11 +84,11 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     }
     this.project = project;
 
-    // Same precedence as the Vertex transport: policy leaf's `region:`, then
-    // GOOGLE_CLOUD_LOCATION, then `global`. Passed to the worker explicitly so
-    // the region in the manifest and on the endpoint match by construction.
-    this.location =
-      config.region ?? resolveGcpLocation(process.env as Record<string, string | undefined>);
+    // The policy leaf's `region:`, then GOOGLE_CLOUD_LOCATION, then `global`
+    // (workerVertexLocation, the rule the what-if replay bills by too). Passed
+    // to the worker explicitly so the region in the manifest and on the
+    // endpoint match by construction.
+    this.location = workerVertexLocation(config, process.env as Record<string, string | undefined>);
 
     if (!existsSync(WORKER_SCRIPT)) {
       throw new Error(

@@ -222,7 +222,12 @@ const overheadHow = partlyBooked
 const cliCheck = () => {
   const cli = ohFields?.receipt_cli_usd ?? receiptCost;
   if (cli == null) return "";
-  const booked = ohFields?.cost_usd;
+  // v0.7.3 review fix: Claude Code's figure bills only the booked part, so it is
+  // measured against that part's list figure (booked_cost_usd). On a resumed
+  // run cost_usd also holds the earlier, transcript-priced invocations, and a
+  // run that matched to the cent printed "14.43% below the booked figure".
+  // A manifest from before the field falls back to cost_usd, as it rendered then.
+  const booked = ohFields?.booked_cost_usd ?? ohFields?.cost_usd;
   const pct = booked ? ((cli - booked) / booked) * 100 : 0;
   const drift = Math.abs(pct) > 0.5 ? ` (${Math.abs(pct).toFixed(2)}% ${pct > 0 ? "above" : "below"} the booked figure)` : "";
   return `Claude Code's own figure, $${cli.toFixed(4)}, is a check and never booked${drift}`;

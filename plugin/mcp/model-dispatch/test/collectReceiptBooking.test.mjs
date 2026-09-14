@@ -131,6 +131,8 @@ test("T5: the Sep 10 headless run is booked at $14.197777 — receipt tokens at 
     near(o.cost_usd, 14.197777, 0.000002, "booked");
     assert.equal(o.transcript_cost_usd, 13.868479, "the logged part, priced per message");
     near(o.receipt_cli_usd, 14.19777625, 1e-9, "Claude Code's own figure, kept as a check");
+    // v0.7.3 review fix: the booked part's list figure, the one receipt_cli_usd is checked against; the whole window here.
+    assert.equal(o.booked_cost_usd, o.cost_usd);
     assert.equal(o.receipt_cost_usd, o.receipt_cli_usd, "receipt_cost_usd keeps its meaning");
     assert.deepEqual(o.per_model.map((e) => [e.role, e.model, e.cost_usd]), [["session", "claude-opus-5", 0.499714], ["helper", "claude-opus-4-8", 13.368765]]);
 
@@ -866,10 +868,11 @@ function resumedRun({ receipt = {}, laterTurn = false, helperA3 = true } = {}) {
     ...(receipt.noSession ? {} : { session_id: "sess-r" }),
     total_cost_usd: 2.07555,
     usage: { input_tokens: 10, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 40_000, output_tokens: 4_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 40_000 } },
-    modelUsage: { "claude-opus-5[1m]": opus5, "claude-opus-4-8": opus48 },
+    ...(receipt.noModelUsage ? {} : { modelUsage: { "claude-opus-5[1m]": opus5, "claude-opus-4-8": opus48 } }),
   }));
   const run = () => exec([passDir, "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", tDir]);
-  return { run, passDir, manifest: () => readJson(join(passDir, "manifest.json")), rm: () => rmSync(root, { recursive: true, force: true }) };
+  const event = () => readLines(join(passDir, "telemetry.jsonl")).find((e) => e.tier === "orchestrator");
+  return { run, passDir, manifest: () => readJson(join(passDir, "manifest.json")), event, rm: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 test("Q1: a resumed run whose last invocation is below the receipt and provably its invocation books the receipt for that invocation; the earlier one stays transcript-priced and unverified", () => {
@@ -895,6 +898,10 @@ test("Q1: a resumed run whose last invocation is below the receipt and provably 
     // Earlier invocation's logged tokens plus the receipt's: in 10 + 110, cached 200,000 + 1,400,000, writes 20,000 (1h) + 140,000 (40,000 of them 1h), out 2,000 + 14,000.
     assert.deepEqual([o.input_tokens, o.input_tokens_cached, o.input_tokens_cache_write, o.input_tokens_cache_write_1h, o.output_tokens], [120, 1_600_000, 160_000, 60_000, 16_000]);
     assert.equal(o.receipt_cli_usd, 2.07555);
+    // v0.7.3 review fix: Claude Code's figure bills the last invocation, so the report checks it against
+    // that invocation's list figure ($1.6629 logged + $0.41265 not logged), not the window's $2.4256.
+    assert.equal(o.booked_cost_usd, 2.07555);
+    assert.equal(fix.event().booked_cost_usd, 2.07555);
     assert.equal(o.pricing_complete, true);
     // Attribution covers the booked invocation's helpers: a3333 has its file. The earlier
     // invocation's missing a0000 is in no booked figure, so it is not this check's gap.
@@ -988,4 +995,56 @@ test("Q1 helperAttribution: with a time scope, only Agent/Task uses and results 
     assert.equal(withUndated.complete, false);
     assert.deepEqual(withUndated.unreferenced_helper_files, [undated]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── A receipt with no per-model token counts (v0.7.3 review fix) ────────────
+//
+// What: a receipt that carries a session id and Claude Code's dollars but no
+// modelUsage is refused (exit 3, nothing written) with a message that says the
+// receipt has no per-model token counts, on every path: a single invocation, a
+// resumed window, and a window with no transcript line.
+//
+// Why: only the no-transcript path said so. With transcript lines in the
+// window, every model read as "in the transcript, none on the receipt", and
+// the user was told the window had opened too early (a stale run.start, a
+// reused run id, another run's messages) when the receipt was the problem.
+
+/** Copy the Sep 10 run with its receipt (the live-run.log result line) stripped of modelUsage. */
+function unloggedWithoutModelUsage() {
+  const root = mkdtempSync(join(tmpdir(), "mmo-receipt-nomodelusage-"));
+  cpSync(UNLOGGED, root, { recursive: true });
+  const log = join(root, "pass1", "live-run.log");
+  const lines = readFileSync(log, "utf-8").split("\n");
+  const last = lines.map((l, i) => [l, i]).filter(([l]) => l.includes('"type":"result"')).at(-1);
+  assert.ok(last, "the fixture's live-run.log carries a result line");
+  const result = JSON.parse(last[0]);
+  assert.ok(result.modelUsage, "the fixture's result line has modelUsage to strip");
+  delete result.modelUsage;
+  lines[last[1]] = JSON.stringify(result);
+  writeFileSync(log, lines.join("\n"));
+  return root;
+}
+
+const NO_MODEL_USAGE = /carries no per-model token counts \(modelUsage\)/;
+
+test("a receipt with no modelUsage and transcript lines in the window is refused as a receipt without per-model counts, not as a wrong window", () => {
+  const root = unloggedWithoutModelUsage();
+  try {
+    const r = exec([join(root, "pass1"), "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", join(root, "transcripts")]);
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stderr, NO_MODEL_USAGE);
+    assert.doesNotMatch(r.stderr, /stale run\.start|opened before this invocation/);
+    assert.equal(readJson(join(root, "pass1", "manifest.json")).orchestrator_overhead, undefined, "nothing written");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a resumed window whose receipt has no modelUsage is refused the same way", () => {
+  const fix = resumedRun({ receipt: { noModelUsage: true } });
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stderr, NO_MODEL_USAGE);
+    assert.doesNotMatch(r.stderr, /matches neither the whole window nor its last invocation/);
+    assert.equal(fix.manifest().orchestrator_overhead, undefined, "nothing written");
+  } finally { fix.rm(); }
 });

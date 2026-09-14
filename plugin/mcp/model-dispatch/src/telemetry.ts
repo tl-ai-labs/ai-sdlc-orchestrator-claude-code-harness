@@ -235,6 +235,8 @@ export interface Manifest {
     receipt_path?: string | null;
     /** The same Claude Code total, named for what it is since v0.7.3: a check against the booked figure, never booked. */
     receipt_cli_usd?: number | null;
+    /** v0.7.3 review fix: the booked part at the price list (the whole receipt, or a resumed window's last invocation), which receipt_cli_usd is checked against; null unless a receipt was booked. */
+    booked_cost_usd?: number | null;
     /**
      * When a receipt is booked: the receipt's tokens no transcript message
      * recorded, per model, priced from the list. cost_usd = transcript_cost_usd
