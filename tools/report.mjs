@@ -847,14 +847,19 @@ for (const dir of ["prisma", "test"]) {
 }
 
 // 4. Claude Code session/subagent transcripts under
-// ~/.claude/projects/<project-hash>/. Hash = absolute project path with
-// '/' AND whitespace replaced by '-' (both — missing whitespace loses
-// space-containing paths).
+// ~/.claude/projects/<project-dir>/. Claude Code names that directory after the
+// absolute project path with EVERY character that is not a letter or digit
+// replaced by '-' (`/a/my_app.v0.6.0` -> `-a-my-app-v0-6-0`): the rule
+// transcriptsDirFor in plugin/scripts/collect-orchestrator-usage.mjs uses and
+// docs/methodology.md states. This used to replace only '/' and whitespace, so
+// for a project path holding a dot or an underscore it looked in a directory
+// that never exists and silently listed no session or subagent transcript
+// (tools/test/report-transcript-dir.test.mjs).
 try {
   // Project root is four levels up from passDir
   // (examples/<study>/passes/<run-id>/ → repo root)
   const projectRoot = dirname(dirname(dirname(dirname(passDir))));
-  const projectHash = projectRoot.replace(/[\/\s]/g, "-");
+  const projectHash = resolve(projectRoot).replace(/[^A-Za-z0-9]/g, "-");
   const claudeProjectDir = join(homedir(), ".claude", "projects", projectHash);
   if (existsSync(claudeProjectDir)) {
     const startedAt = Date.parse(manifest.started_at ?? "") || 0;
