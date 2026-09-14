@@ -108,7 +108,10 @@ rules:
 
 const MODELS = [
   { id: "opus", adapter: "builtin-anthropic", model_name: "claude-opus-5", pricing: { input: 5, input_cached: 0.5, output: 25 } },
-  { id: "lite", adapter: "mcp:model-dispatch", model_name: "gemini-3.5-flash-lite", pricing: { input: 0.1, input_cached: 0.01, output: 0.4 } },
+  // Changed fixture: this leaf was gemini-3.5-flash-lite, which is now on the
+  // list. A name no vendor publishes keeps the case about a model the list
+  // cannot know. The real Flash-Lite policy is test/governanceDemoPolicy.test.mjs.
+  { id: "lite", adapter: "mcp:model-dispatch", model_name: "gateway-unlisted-model", pricing: { input: 0.1, input_cached: 0.01, output: 0.4 } },
 ];
 const healthy = () => ({});
 
@@ -123,7 +126,7 @@ test("T9 pre-flight: an unpriced model halts the run before anything is spent, i
     const out = preflight.assessModels(MODELS, mode, healthy, await priceCheckFor(MODELS, mode));
     assert.equal(out.ok, false, `${mode}: unpriced work must never be dispatched`);
     assert.match(out.halt_reason, /Cannot price 1 of 2 models/);
-    assert.match(out.halt_reason, /lite \(gemini-3\.5-flash-lite: unknown model/);
+    assert.match(out.halt_reason, /lite \(gateway-unlisted-model: unknown model/);
     assert.match(out.halt_reason, /pricing_override: true/);
     const lite = out.models.find((m) => m.id === "lite");
     assert.equal(lite.ok, true, "construction succeeded; the price is what failed");
@@ -286,14 +289,22 @@ test("T9 simulate_policy replays at the list price, not a mismatched block", () 
 
 test("T9 simulate_policy prices each event on its own day and lists what it cannot price", () => {
   const policy = loadPolicyFromPath(policyFile(REPLAY_POLICY));
+  const tokens = { input: 10_000, input_cached: 40_000, output: 2_000 };
   const priced = replayEvent({ phase: "codegen" });
-  const later = replayEvent({ phase: "codegen", ts: "2027-01-02T10:00:00.000Z" });
-  const out = simulatePolicyCost([priced, later], policy);
-  assert.equal(out.total_cost_usd, computeCostUsd({ input: 10_000, input_cached: 40_000, output: 2_000 }, { input: 0.75, input_cached: 0.075, output: 3.75 }));
+  // Changed case: the unpriced event was dated 2027-01-02, a gap only until the
+  // list gained Google's 2027 Gemini 3.7 Flash card. The day before 3.7 Flash's
+  // GA is a gap no later period fills, and a 2027 event now replays at the
+  // 2027 card.
+  const early = replayEvent({ phase: "codegen", ts: "2026-08-12T10:00:00.000Z" });
+  const out = simulatePolicyCost([priced, early], policy);
+  assert.equal(out.total_cost_usd, computeCostUsd(tokens, { input: 0.75, input_cached: 0.075, output: 3.75 }));
   assert.equal(out.unpriced.length, 1);
   assert.equal(out.unpriced[0].model_id, "flash");
   assert.equal(out.unpriced[0].events, 1);
-  assert.match(out.unpriced[0].reason, /no price period/);
+  assert.match(out.unpriced[0].reason, /no price period for gemini-3\.7-flash on 2026-08-12/);
+  const y2027 = simulatePolicyCost([replayEvent({ phase: "codegen", ts: "2027-01-02T10:00:00.000Z" })], policy);
+  assert.equal(y2027.total_cost_usd, computeCostUsd(tokens, { input: 1.5, input_cached: 0.15, output: 7.5 }));
+  assert.deepEqual(y2027.unpriced, []);
 });
 
 test("T9 simulate_policy reads input_tokens_cache_write_1h as a share of input_tokens_cache_write", () => {

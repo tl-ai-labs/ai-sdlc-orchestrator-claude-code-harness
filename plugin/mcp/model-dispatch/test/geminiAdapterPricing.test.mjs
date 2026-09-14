@@ -31,7 +31,12 @@ import { loadPolicy } from "../dist/policy.js";
 import { WORKER_PYTHON_ENV } from "../dist/delegation/workerProcess.js";
 
 const TODAY = () => new Date("2026-09-14T12:00:00Z");
-const AFTER_INTRO_CARD = () => new Date("2027-01-02T12:00:00Z");
+// Changed: the unpriced-day cases used 2027-01-02, a gap only until the list
+// gained Google's 2027 Gemini 3.7 Flash card. The day before 3.7 Flash's GA
+// (2026-08-13) is a gap no later period can fill; 2027-01-02 now pins the
+// 2027 card instead.
+const BEFORE_V37_GA = () => new Date("2026-08-12T12:00:00Z");
+const IN_2027 = () => new Date("2027-01-02T12:00:00Z");
 
 const USAGE = { promptTokenCount: 123457, cachedContentTokenCount: 45678, candidatesTokenCount: 2345, thoughtsTokenCount: 6789 };
 const TOKENS = { input: 123457 - 45678, input_cached: 45678, output: 2345 + 6789 };
@@ -160,13 +165,28 @@ test("T10 GeminiFlashAdapter: pricing_override bills the block with the surcharg
 
 test("T10 GeminiFlashAdapter: an unpriced dispatch day is refused before any Gemini call", async () => {
   const leaf = loadPolicy({ policyName: "opus-plus-flash-v37" }).models.find((m) => m.id === "flash-completion");
-  const { out, calls } = await flashRun(leaf, DOORS[0], { now: AFTER_INTRO_CARD });
+  const { out, calls } = await flashRun(leaf, DOORS[0], { now: BEFORE_V37_GA });
   assert.equal(calls.length, 0);
   assert.equal(out.success, false);
   assert.equal(out.terminal_reason, "vendor_error");
   assert.match(out.error, /unpriced/);
-  assert.match(out.error, /no price period for gemini-3\.7-flash on 2027-01-02/);
+  assert.match(out.error, /no price period for gemini-3\.7-flash on 2026-08-12/);
   assert.equal(out.cost_usd, 0);
+});
+
+test("T10 GeminiFlashAdapter: from 2027-01-01 the shipped 3.7 leaf bills the list's 2027 card at every door and warns its block is stale", async () => {
+  // The 2027 behaviour end to end: the dispatch is not refused, the list's
+  // 1.50 / 0.15 / 7.50 card is billed with the regional surcharge where it
+  // applies, and the shipped introductory block draws a mismatch warning.
+  const leaf = loadPolicy({ policyName: "opus-plus-flash-v37" }).models.find((m) => m.id === "flash-completion");
+  for (const door of DOORS) {
+    const { out, calls, stderr } = await flashRun(leaf, door, { now: IN_2027 });
+    assert.equal(calls.length, 1, door.name);
+    assert.equal(out.success, true, door.name);
+    assert.equal(out.cost_usd, developFigure(TOKENS, { input: 1.5, input_cached: 0.15, output: 7.5 }, door, leaf.model_name), door.name);
+    assert.equal(out.attempts[0].price_basis, "list", door.name);
+    assert.match(stderr, /WARN\s+pricing\.policy_mismatch/, door.name);
+  }
 });
 
 // ─── AntigravityWorkerAdapter ───────────────────────────────────────────
@@ -234,7 +254,7 @@ test("T10 AntigravityWorkerAdapter: a wrong block is ignored with a warning; an 
   assert.match(priced.stderr, /WARN\s+pricing\.policy_mismatch/);
 
   const v37 = loadPolicy({ policyName: "flash-agsdk-only" }).models[0];
-  const refused = await workerRun(v37, { now: AFTER_INTRO_CARD });
+  const refused = await workerRun(v37, { now: BEFORE_V37_GA });
   assert.equal(refused.ran, false, "no unpriced work is ever dispatched");
   assert.equal(refused.out.success, false);
   assert.match(refused.out.error, /unpriced/);

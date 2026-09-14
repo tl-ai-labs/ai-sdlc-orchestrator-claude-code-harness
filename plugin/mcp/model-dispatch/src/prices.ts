@@ -24,6 +24,14 @@ import type { ModelPricing } from "./types.js";
 export const PRICE_LIST_VERIFIED = "2026-09-14";
 export const ANTHROPIC_PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing";
 export const GEMINI_PRICING_URL = "https://ai.google.dev/gemini-api/docs/pricing";
+/**
+ * The second page every Gemini rate is checked against (its Global rows), and
+ * the source of the +10% non-global surcharge. Not a period's source_url: the
+ * AI Studio page is, because both doors bill its rates at the global endpoint.
+ */
+export const VERTEX_PRICING_URL = "https://cloud.google.com/vertex-ai/generative-ai/pricing";
+/** Where each Gemini period's first day, the model's GA day, is read. */
+export const GEMINI_CHANGELOG_URL = "https://ai.google.dev/gemini-api/docs/changelog";
 
 export interface PricePeriod {
   from: string;
@@ -104,6 +112,13 @@ function claude(
  * rates cannot change a Gemini figure. The +10% Vertex regional surcharge is
  * not a list modifier: geminiTransports.applyVertexSurcharge applies it at
  * dispatch, where the endpoint is known.
+ *
+ * Every Gemini rate below is on both of Google's pages and the two agree: the
+ * AI Studio Standard paid-tier table (GEMINI_PRICING_URL) and the Vertex
+ * Global rows (VERTEX_PRICING_URL). The Vertex Non-global rows for every row
+ * below are exactly the Global rates x1.10 (3.5 Flash-Lite: "$0.33",
+ * "$0.033", "$2.75"), which is what applyVertexSurcharge applies to Gemini 3+,
+ * so a surcharged list rate matches Vertex's regional price.
  */
 function gemini(from: string, to: string | null, input: number, cacheRead: number, output: number): PricePeriod {
   return {
@@ -146,14 +161,51 @@ export const PRICE_LIST: PriceList = deepFreeze({
   "claude-haiku-4-5":  claude(1, 1.25, 2, 0.1, 5),
   "claude-3-5-haiku":  claude(0.8, 1, 1.6, 0.08, 4),
 
-  // Introductory card, GA 2026-08-13, in force through 2026-12-31. No 2027
-  // period yet: one is added only after its full card is confirmed and
-  // reviewed, and until then a 2027-dated lookup is unpriced.
-  "gemini-3.7-flash":  [gemini("2026-08-13", "2026-12-31", 0.75, 0.075, 3.75)],
-  // GA 2026-05-19, flat card with no published end.
-  "gemini-3.5-flash":  [gemini("2026-05-19", null, 1.5, 0.15, 9)],
-  // gemini-3.5-flash-lite is deliberately absent: Google's pricing page shows
-  // no rate for it (checked 2026-09-14) and no shipped policy prices it.
+  // Gemini rows. Verified 2026-09-14: GEMINI_PRICING_URL and VERTEX_PRICING_URL
+  // each fetched twice with identical text, the two pages agreeing on every
+  // number below, and each first day read from GEMINI_CHANGELOG_URL. Quotes
+  // are verbatim ("AI Studio" = the Standard, paid-tier table; "Vertex" = the
+  // Global rows). A model on Google's pages but not here (Gemini 3.6 Flash,
+  // 3.1 Flash-Lite, and others) stays unpriced until its period is added the
+  // same way.
+
+  // Changelog "September 2, 2026": "Gemini 3.8 Flash generally available (GA)".
+  // AI Studio: input "$0.75 through December 31, 2026. $1.50 starting January
+  // 1, 2027."; output "$3.75 through December 31, 2026. $7.50 starting January
+  // 1, 2027."; context caching "$0.075 through December 31, 2026. $0.15
+  // starting January 1, 2027.". Vertex: "Gemini 3.8 Flash* through December
+  // 31, 2026" input $0.75, cached $0.075, output $3.75; "Gemini 3.8 Flash
+  // Starting January 1, 2027" input $1.50, cached $0.15, output $7.50.
+  "gemini-3.8-flash": [
+    gemini("2026-09-02", "2026-12-31", 0.75, 0.075, 3.75),
+    gemini("2027-01-01", null, 1.5, 0.15, 7.5),
+  ],
+  // Changelog "August 13, 2026": "Gemini 3.7 Flash generally available (GA)",
+  // "available at an introductory price through December 31, 2026."
+  // AI Studio: the same three strings as 3.8 Flash above. Vertex: "Gemini 3.7
+  // Flash * through December 31, 2026" input $0.75, cached $0.075, output
+  // $3.75; "Gemini 3.7 Flash starting January 1, 2027" input $1.50, cached
+  // $0.15, output $7.50; page banner "Starting January 1, 2027, standard
+  // pricing of $1.5 / $7.5 per 1M tokens input / output will apply." The 2027
+  // period was missing before, so a 3.7 Flash run on or after 2027-01-01
+  // halted at pre-flight instead of billing the published card.
+  "gemini-3.7-flash": [
+    gemini("2026-08-13", "2026-12-31", 0.75, 0.075, 3.75),
+    gemini("2027-01-01", null, 1.5, 0.15, 7.5),
+  ],
+  // Changelog "May 19, 2026": "Released gemini-3.5-flash, the generally
+  // available (GA) version". AI Studio: input "$1.50", output "$9.00", context
+  // caching "$0.15". Vertex "Gemini 3.5 Flash": input $1.50, cached $0.15,
+  // output $9.00. No end date is published.
+  "gemini-3.5-flash": [gemini("2026-05-19", null, 1.5, 0.15, 9)],
+  // Changelog "July 21, 2026": "Gemini 3.6 Flash and Gemini 3.5 Flash-Lite
+  // generally available (GA)". AI Studio: input "$0.30 (text / image / video /
+  // audio)", output "$2.50", context caching "$0.03". Vertex "Gemini 3.5
+  // Flash-Lite": input $0.30, cached $0.03, output $2.50 (Non-global* $0.33 /
+  // $0.033 / $2.75). No end date is published. It was absent before, so the
+  // governance demo policy, whose codegen rule routes to it, halted at
+  // pre-flight (test/governanceDemoPolicy.test.mjs).
+  "gemini-3.5-flash-lite": [gemini("2026-07-21", null, 0.3, 0.03, 2.5)],
 });
 
 export interface ResolvedModel {

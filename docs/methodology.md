@@ -189,7 +189,20 @@ The list gives each model one or more periods (`from`, `to`, the five token rate
 | `resolveModel(name)` | The list id for an exact id, an id plus `-YYYYMMDD`, or either followed by one bracketed option such as `[1m]`. `null` for anything else. The longest id wins, so `claude-fable-5-1` never reads as `claude-fable-5`. |
 | `lookupPrice(name, date, {speed, service_tier, inference_geo})` | The period's rates, with fast mode (Opus 5 and Opus 4.8) or US-only inference (×1.1, Claude 4.6 and later) applied. Otherwise `unpriced` with the reason: an unknown model, no period for the date, or a modifier value the list has no price for. A rate is never borrowed from a similar model. It also returns the period's fee per web search, `web_search_per_request` ($0.01 on every Claude period; `null` where the list has none, so searches there are unpriced). |
 
-`npm test` fails when a shipped card differs from the list for today's date, or when today falls outside every period for a card's model. Gemini 3.7 Flash's introductory period ends on 31 Dec 2026, so from 1 Jan 2027 the suite stays red until its next period is on the list and the cards match it.
+The Gemini periods on the list were verified on 2026-09-14 against both of Google's pages, the [AI Studio](https://ai.google.dev/gemini-api/docs/pricing) Standard paid tier and the [Vertex AI](https://cloud.google.com/vertex-ai/generative-ai/pricing) Global rows, which agree on every rate. Each model's first period starts on its GA day in the [Gemini API changelog](https://ai.google.dev/gemini-api/docs/changelog). Rates are USD per 1M tokens. Gemini has no cache-write premium, so cache writes bill at the input rate.
+
+| Model | Period | Input | Cached input | Output |
+|---|---|---|---|---|
+| `gemini-3.8-flash` | 2 Sep 2026 – 31 Dec 2026 (introductory) | 0.75 | 0.075 | 3.75 |
+| `gemini-3.8-flash` | from 1 Jan 2027 | 1.50 | 0.15 | 7.50 |
+| `gemini-3.7-flash` | 13 Aug 2026 – 31 Dec 2026 (introductory) | 0.75 | 0.075 | 3.75 |
+| `gemini-3.7-flash` | from 1 Jan 2027 | 1.50 | 0.15 | 7.50 |
+| `gemini-3.5-flash` | from 19 May 2026 | 1.50 | 0.15 | 9.00 |
+| `gemini-3.5-flash-lite` | from 21 Jul 2026 | 0.30 | 0.03 | 2.50 |
+
+Vertex's non-global rows for these models are the rates above ×1.10, the surcharge applied at dispatch (below). A Gemini model Google prices but the list does not carry (Gemini 3.6 Flash or 3.1 Flash-Lite, for example) is unpriced, and so is any day before a listed model's first period.
+
+`npm test` fails when a shipped card differs from the list for today's date, or when today falls outside every period for a card's model. The shipped Gemini 3.7 Flash cards carry the introductory rates, so from 1 Jan 2027, when the list moves to 1.50 / 0.15 / 7.50, the suite stays red until those cards are changed to match. A run on those days does not halt: it bills the list's 2027 card, and a card still carrying the introductory rates draws a `pricing.policy_mismatch` warning.
 
 **Which price a dispatch bills** ([`effectivePrice.ts`](../plugin/mcp/model-dispatch/src/effectivePrice.ts)). Every adapter prices a dispatch on the day it starts:
 
@@ -232,7 +245,8 @@ Figures that move on the same tokens:
 | Sonnet 5 dispatched through the API (`opus-plus-sonnet`) | Card 3.00 / 0.30 / 15.00 | List 2.00 / 0.20 / 10.00 (verified 2026-09-14: the launch price became the standing price), so two thirds of the earlier dollars |
 | Claude Fable 5.1 session with Claude Opus 5 helpers (fixture `fable-session-opus-helpers`) | $12.577352 | $13.933431 |
 | Headless run with two Opus 4.8 calls no transcript recorded (fixture `headless-unlogged-calls`) | exit 3, nothing written | $14.197776, 2.32% billed but not logged |
-| A run using Gemini 3.7 Flash on or after 1 Jan 2027 | Billed at the introductory card | Halts at pre-flight: the list's introductory period ends 31 Dec 2026 and no later period is on it yet |
+| Gemini 3.5 Flash-Lite leaf whose block says 0.50 / 0.05 / 3.00 (the governance demo policy's `flash-lite`) | Billed at the block | List 0.30 / 0.03 / 2.50 (GA 21 Jul 2026, verified 2026-09-14); the block draws a `pricing.policy_mismatch` warning |
+| A run using Gemini 3.7 Flash or 3.8 Flash on or after 1 Jan 2027 | Billed at the policy block (the introductory card, in the shipped 3.7 Flash policies) | Billed at the list's 2027 card, 1.50 / 0.15 / 7.50, published on both Google pages; a block still carrying the introductory card draws a `pricing.policy_mismatch` warning and does not halt |
 
 Shipped Opus and Gemini leaves bill the same dollars as before: their cards already equalled the list, and the Vertex regional surcharge is still applied at dispatch.
 

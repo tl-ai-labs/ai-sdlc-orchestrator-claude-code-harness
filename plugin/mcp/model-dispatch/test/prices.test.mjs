@@ -80,6 +80,10 @@ test("T1 resolveModel: the longest id wins, so a point release never collapses o
   assert.equal(resolveModel("claude-opus-4-20250514").id, "claude-opus-4");
   assert.equal(resolveModel("claude-opus-4-5").id, "claude-opus-4-5");
   assert.equal(resolveModel("gemini-3.7-flash").id, "gemini-3.7-flash");
+  // Flash-Lite is tried before 3.5 Flash, and 3.5 Flash never absorbs "-lite".
+  assert.equal(resolveModel("gemini-3.5-flash-lite").id, "gemini-3.5-flash-lite");
+  assert.equal(resolveModel("gemini-3.5-flash").id, "gemini-3.5-flash");
+  assert.equal(resolveModel("gemini-3.8-flash").id, "gemini-3.8-flash");
 });
 
 test("T1 resolveModel returns null for everything else: no pairing guesses", () => {
@@ -91,7 +95,11 @@ test("T1 resolveModel returns null for everything else: no pairing guesses", () 
     "claude-opus-5[]", "claude-opus-5[1m]x", "claude-opus-5[1m][2]", "claude-opus-5[[1m]]",
     "claude-opus-5@20260101", "us.anthropic.claude-opus-5", "anthropic/claude-opus-5",
     "claude-mythos-5-1", "claude-mythos-5",  // limited availability, deliberately not listed
-    "<synthetic>", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash-preview",
+    // gemini-3.5-flash-lite and gemini-3.8-flash left this list when their
+    // verified periods were added. Gemini 3.6 Flash is on Google's page but
+    // not on the list (no shipped or demo policy routes to it), so it, and
+    // near-miss spellings of the listed ids, must not resolve.
+    "<synthetic>", "gemini-3.7-flash-preview", "gemini-3.6-flash", "gemini-3.5-flash-lite-preview", "gemini-3.8-flash-lite",
   ];
   for (const name of junk) assert.equal(resolveModel(name), null, `${JSON.stringify(name)} must not resolve`);
   for (const notString of [undefined, null, 5, {}, ["claude-opus-5"]]) assert.equal(resolveModel(notString), null);
@@ -192,31 +200,110 @@ test("T2 absent modifiers take the API defaults and say so", () => {
   assert.deepEqual(priced("claude-opus-5", DAY, { speed: null, service_tier: "standard", inference_geo: "not_available" }).applied_modifiers.defaulted, ["speed"]);
 });
 
+// ── T2: every Gemini period, pinned to Google's pages ────────────────────
+//
+// Verified 2026-09-14 on both of Google's pages, each fetched twice with
+// identical text: ai.google.dev/gemini-api/docs/pricing (Standard, paid tier)
+// and cloud.google.com/vertex-ai/generative-ai/pricing (Global rows). GA days
+// come from ai.google.dev/gemini-api/docs/changelog. The exact quotes sit
+// beside each row in src/prices.ts. Gemini has no cache-write premium, so both
+// write rates equal input.
+
+const gcard = (input, cacheRead, output) => card(input, input, input, cacheRead, output);
+const GEMINI_PAGE = {
+  "gemini-3.8-flash": [
+    { from: "2026-09-02", to: "2026-12-31", rates: gcard(0.75, 0.075, 3.75) },
+    { from: "2027-01-01", to: null, rates: gcard(1.5, 0.15, 7.5) },
+  ],
+  "gemini-3.7-flash": [
+    { from: "2026-08-13", to: "2026-12-31", rates: gcard(0.75, 0.075, 3.75) },
+    { from: "2027-01-01", to: null, rates: gcard(1.5, 0.15, 7.5) },
+  ],
+  "gemini-3.5-flash": [{ from: "2026-05-19", to: null, rates: gcard(1.5, 0.15, 9) }],
+  "gemini-3.5-flash-lite": [{ from: "2026-07-21", to: null, rates: gcard(0.3, 0.03, 2.5) }],
+};
+
+test("T2 the list carries exactly these Gemini periods, each equal to Google's pages as verified 2026-09-14", () => {
+  const geminiIds = Object.keys(PRICE_LIST).filter((id) => id.startsWith("gemini-")).sort();
+  assert.deepEqual(geminiIds, Object.keys(GEMINI_PAGE).sort());
+  for (const [id, expected] of Object.entries(GEMINI_PAGE)) {
+    const listed = PRICE_LIST[id].map((p) => ({
+      from: p.from,
+      to: p.to,
+      rates: card(p.input, p.input_cache_write, p.input_cache_write_1h, p.input_cached, p.output),
+    }));
+    assert.deepEqual(listed, expected, id);
+    for (const p of PRICE_LIST[id]) {
+      assert.equal(p.source_url, GEMINI_URL, id);
+      assert.equal(p.verified, DAY, id);
+      assert.equal(p.web_search_per_request, undefined, `${id}: the list has no per-search price for Gemini`);
+    }
+    // Each period prices on its own first and last day, with no multiplier.
+    for (const { from, to, rates } of expected) {
+      for (const day of to === null ? [from] : [from, to]) {
+        const r = priced(id, day, {});
+        assert.deepEqual(r.pricing, rates, `${id} on ${day}`);
+        assert.deepEqual(r.period, { from, to, source_url: GEMINI_URL, verified: DAY }, `${id} on ${day}`);
+        assert.equal(r.applied_modifiers.multiplier, 1, `${id} on ${day}`);
+      }
+    }
+    // Nothing before GA.
+    const gaEve = new Date(Date.parse(`${expected[0].from}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+    assert.match(unpriced(id, gaEve, {}).reason, new RegExp(`no price period for ${id.replace(/\./g, "\\.")} on ${gaEve}`));
+  }
+});
+
 // ── T3: dated lookups ────────────────────────────────────────────────────
 
-test("T3 Gemini 3.7 Flash: introductory card on 2026-09-14, unpriced on 2027-01-02 (no 2027 period on the list)", () => {
+test("T3 Gemini 3.7 Flash: introductory card through 2026-12-31, the 2027 card from 2027-01-01, nothing before GA", () => {
   const r = priced("gemini-3.7-flash", DAY, {});
   assert.deepEqual(r.pricing, card(0.75, 0.75, 0.75, 0.075, 3.75));
   assert.deepEqual(r.period, { from: "2026-08-13", to: "2026-12-31", source_url: GEMINI_URL, verified: DAY });
-  assert.match(unpriced("gemini-3.7-flash", "2027-01-02", {}).reason, /no price period/);
-  // Both ends are inclusive, and nothing before launch is priced.
-  priced("gemini-3.7-flash", "2026-08-13", {});
-  priced("gemini-3.7-flash", "2026-12-31", {});
-  unpriced("gemini-3.7-flash", "2027-01-01", {});
-  unpriced("gemini-3.7-flash", "2026-08-12", {});
+  // Changed expectation: a 2027 day used to be unpriced because the list had
+  // no 2027 period, so a 3.7 Flash run halted at pre-flight on 2027-01-01.
+  // Both of Google's pages publish the 2027 card, so it now bills
+  // 1.50 / 0.15 / 7.50.
+  const y2027 = priced("gemini-3.7-flash", "2027-01-02", {});
+  assert.deepEqual(y2027.pricing, card(1.5, 1.5, 1.5, 0.15, 7.5));
+  assert.deepEqual(y2027.period, { from: "2027-01-01", to: null, source_url: GEMINI_URL, verified: DAY });
+  // Both ends are inclusive, the card switches on 2027-01-01, and nothing
+  // before launch is priced.
+  assert.equal(priced("gemini-3.7-flash", "2026-08-13", {}).pricing.input, 0.75);
+  assert.equal(priced("gemini-3.7-flash", "2026-12-31", {}).pricing.input, 0.75);
+  assert.equal(priced("gemini-3.7-flash", "2027-01-01", {}).pricing.input, 1.5);
+  assert.match(unpriced("gemini-3.7-flash", "2026-08-12", {}).reason, /no price period for gemini-3\.7-flash on 2026-08-12/);
 });
 
-test("T3 Gemini 3.5 Flash is priced from its GA date; Flash-Lite has no verified price and stays unpriced", () => {
+test("T3 Gemini 3.8 Flash: introductory card from GA (2026-09-02) through 2026-12-31, the 2027 card from 2027-01-01", () => {
+  const r = priced("gemini-3.8-flash", DAY, {});
+  assert.deepEqual(r.pricing, card(0.75, 0.75, 0.75, 0.075, 3.75));
+  assert.deepEqual(r.period, { from: "2026-09-02", to: "2026-12-31", source_url: GEMINI_URL, verified: DAY });
+  assert.deepEqual(priced("gemini-3.8-flash", "2027-01-01", {}).pricing, card(1.5, 1.5, 1.5, 0.15, 7.5));
+  assert.equal(priced("gemini-3.8-flash", "2026-09-02", {}).pricing.input, 0.75);
+  assert.match(unpriced("gemini-3.8-flash", "2026-09-01", {}).reason, /no price period for gemini-3\.8-flash on 2026-09-01/);
+});
+
+test("T3 Gemini 3.5 Flash and 3.5 Flash-Lite are priced from their GA days; Flash-Lite never reads as 3.5 Flash", () => {
   const r = priced("gemini-3.5-flash", DAY, {});
   assert.deepEqual(r.pricing, card(1.5, 1.5, 1.5, 0.15, 9));
   assert.deepEqual(r.period, { from: "2026-05-19", to: null, source_url: GEMINI_URL, verified: DAY });
   unpriced("gemini-3.5-flash", "2026-05-18", {});
-  assert.match(unpriced("gemini-3.5-flash-lite", DAY, {}).reason, /gemini-3\.5-flash-lite/);
+  // Changed expectation: Flash-Lite was unpriced on every day (not on the
+  // list), which halted the governance demo policy at pre-flight. Google's
+  // pages publish 0.30 / 0.03 / 2.50 and the changelog dates GA 2026-07-21,
+  // so the unpriced check moves to the day before GA.
+  const lite = priced("gemini-3.5-flash-lite", DAY, {});
+  assert.deepEqual(lite.model, { id: "gemini-3.5-flash-lite", tag: null, snapshotDate: null });
+  assert.deepEqual(lite.pricing, card(0.3, 0.3, 0.3, 0.03, 2.5));
+  assert.deepEqual(lite.period, { from: "2026-07-21", to: null, source_url: GEMINI_URL, verified: DAY });
+  assert.match(unpriced("gemini-3.5-flash-lite", "2026-07-20", {}).reason, /no price period for gemini-3\.5-flash-lite on 2026-07-20/);
 });
 
 test("T3 Gemini carries no Anthropic modifiers: fast or US-only on Gemini is unpriced", () => {
-  unpriced("gemini-3.7-flash", DAY, { speed: "fast" });
-  unpriced("gemini-3.7-flash", DAY, { inference_geo: "us" });
+  for (const id of Object.keys(GEMINI_PAGE)) {
+    unpriced(id, DAY, { speed: "fast" });
+    unpriced(id, DAY, { inference_geo: "us" });
+  }
 });
 
 test("T3 dates: a Claude row starts at the list's coverage start; timestamps use their UTC day; bad dates are unpriced", () => {
@@ -224,8 +311,11 @@ test("T3 dates: a Claude row starts at the list's coverage start; timestamps use
   priced("claude-opus-5", "2026-01-01");
   // Transcript timestamps work directly, and the UTC day decides the period.
   priced("gemini-3.7-flash", "2026-09-08T11:45:25.809Z", {});
-  unpriced("gemini-3.7-flash", "2026-12-31T23:30:00-05:00", {}); // 2027-01-01T04:30Z
-  priced("gemini-3.7-flash", "2027-01-01T01:00:00+05:30", {});   // 2026-12-31T19:30Z
+  // Changed expectation: with the 2027 period on the list these two pin WHICH
+  // period the UTC day selects, instead of priced versus unpriced.
+  assert.equal(priced("gemini-3.7-flash", "2026-12-31T23:30:00-05:00", {}).period.from, "2027-01-01"); // 2027-01-01T04:30Z
+  assert.equal(priced("gemini-3.7-flash", "2027-01-01T01:00:00+05:30", {}).period.from, "2026-08-13"); // 2026-12-31T19:30Z
+  unpriced("gemini-3.5-flash-lite", "2026-07-21T01:00:00+05:30", {});                                   // 2026-07-20T19:30Z
   // lookupPrice is called directly: the helpers' default date would silently replace `undefined`.
   for (const bad of ["", "yesterday", "2026-02-30", "2026-13-01", "20260914", "2026-09-08T11:45:25", undefined, null, 20260914]) {
     const r = lookupPrice("claude-opus-5", bad, STD);
