@@ -72,16 +72,25 @@ export interface OrchestratorModelCost {
   rates: ModelPricing;
   messages: number;
   tokens: OrchestratorTokens;
+  /** Web search requests these messages made (`usage.server_tool_use.web_search_requests`, once per message). Absent when none. */
+  web_search_requests?: number;
+  /** Their fee at the list's per-search price, inside cost_usd. Absent when no search was made. */
+  web_search_cost_usd?: number;
+  /** Tokens at `rates`, plus web_search_cost_usd. */
   cost_usd: number;
 }
 
-/** Transcript tokens the collector could not price (unknown model, no period for the day, unpriced modifier value). */
+/**
+ * Transcript tokens the collector could not price (unknown model, no period for the day, unpriced modifier value),
+ * or web search requests with no per-search price (`tokens` all zero, `web_search_requests` set).
+ */
 export interface OrchestratorUnpriced {
   model: string;
   role: "session" | "helper";
   reason: string;
   messages: number;
   tokens: OrchestratorTokens;
+  web_search_requests?: number;
 }
 
 /**
@@ -119,6 +128,10 @@ export interface OrchestratorUnloggedModel {
   ttl_split: string;
   /** Every assumption the price needed, in words; empty when the logged mix priced every non-zero bucket. */
   assumed: string[];
+  /** Web searches the receipt bills beyond the logged ones. Absent when none. */
+  web_search_requests?: number;
+  /** Their fee at the list's per-search price, inside cost_usd. Absent when none. */
+  web_search_cost_usd?: number;
   cost_usd: number;
 }
 
@@ -128,6 +141,8 @@ export interface OrchestratorUnloggedUnpriced {
   reported_as: string[];
   reason: string;
   tokens: ReceiptTokens;
+  /** Web searches the receipt bills beyond the logged ones that have no per-search price. Absent when none. */
+  web_search_requests?: number;
 }
 
 /** What a booked receipt billed beyond the transcript, in total and per model. */

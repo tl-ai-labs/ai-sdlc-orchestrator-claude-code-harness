@@ -303,3 +303,27 @@ test("the Gemini adapters bill no cache-write bucket, so the list's Gemini write
     assert.doesNotMatch(readFileSync(join(DIST, rel), "utf-8"), /input_cache_write/, rel);
   }
 });
+
+// ── Review finding M3: web search is billed per search, not per token ─────
+//
+// Anthropic's page (verified 2026-09-14): "Web search is available on the
+// Claude API for $10 per 1,000 searches, plus standard token costs". Each
+// search is one use whatever it returns; web fetch has no additional charge.
+// The fee is not a token pricing category, so the US-only multiplier ("all
+// token pricing categories") and fast mode (token rates) do not scale it.
+// Receipts count searches in modelUsage[*].webSearchRequests and transcripts in
+// usage.server_tool_use.web_search_requests. Booking a receipt's token counts
+// without this fee under-booked any run that searched, while pricing_complete
+// still said true. Gemini carries no per-search price on this list, so a
+// Gemini search is unpriced, never borrowed from Claude's fee.
+test("M3 every Claude period bills web search at $0.01 per search ($10 per 1,000), unscaled by fast mode or US-only inference; Gemini has no per-search price", () => {
+  for (const id of Object.keys(CLAUDE_PAGE)) {
+    assert.equal(PRICE_LIST[id][0].web_search_per_request, 0.01, id);
+    assert.equal(priced(id).web_search_per_request, 0.01, id);
+  }
+  assert.equal(priced("claude-opus-5", DAY, { ...STD, speed: "fast" }).web_search_per_request, 0.01, "fast mode prices tokens, not searches");
+  assert.equal(priced("claude-opus-5", DAY, { ...STD, inference_geo: "us" }).web_search_per_request, 0.01, "US-only multiplies token categories only");
+  assert.equal(priced("claude-haiku-4-5-20251001").web_search_per_request, 0.01);
+  assert.equal(priced("gemini-3.5-flash", DAY, {}).web_search_per_request, null);
+  assert.equal(PRICE_LIST["gemini-3.7-flash"][0].web_search_per_request, undefined);
+});

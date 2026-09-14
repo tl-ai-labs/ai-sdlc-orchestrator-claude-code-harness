@@ -275,6 +275,14 @@ export interface WorkerModelCost {
    * was assumed.
    */
   assumed?: string[];
+  /** Web search requests the result bills for this model (`modelUsage[*].webSearchRequests`). Absent when none. */
+  web_search_requests?: number;
+  /**
+   * Their fee at the list's per-search price, included in cost_usd. Null when
+   * the list has no per-search price for the model (the searches are then in
+   * `unpriced_models`). Absent when none.
+   */
+  web_search_cost_usd?: number | null;
 }
 
 export interface ModelPricing {

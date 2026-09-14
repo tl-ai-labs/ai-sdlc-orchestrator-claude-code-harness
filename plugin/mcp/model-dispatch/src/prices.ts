@@ -48,6 +48,15 @@ export interface PricePeriod {
    * earlier models reject the parameter).
    */
   geo_us_multiplier?: number;
+  /**
+   * USD per server-side web search request: a transcript message's
+   * `usage.server_tool_use.web_search_requests`, a receipt's
+   * `modelUsage[*].webSearchRequests`. It is billed on top of tokens and is
+   * not a token rate, so fast mode and the US-only multiplier (both token
+   * pricing) never scale it. Absent: the list has no per-search price for this
+   * period, and searches on it are unpriced, never borrowed.
+   */
+  web_search_per_request?: number;
 }
 
 export type PriceList = Readonly<Record<string, ReadonlyArray<Readonly<PricePeriod>>>>;
@@ -55,6 +64,14 @@ export type PriceList = Readonly<Record<string, ReadonlyArray<Readonly<PricePeri
 const CLAUDE_FROM = "2026-01-01";
 const US_ONLY = { geo_us_multiplier: 1.1 };
 const OPUS_FAST = { fast: { input: 10, output: 50 } };
+/**
+ * Anthropic's page, verified 2026-09-14: web search "is available on the
+ * Claude API for $10 per 1,000 searches, plus standard token costs", each
+ * search one use whatever it returns; web fetch has no additional charge.
+ * The fee is not model-specific, so every Claude period carries it. Review
+ * finding M3: booking only token counts under-booked any run that searched.
+ */
+const CLAUDE_WEB_SEARCH_PER_REQUEST = 10 / 1000;
 
 /** Arguments follow the price page's column order: base input, 5m write, 1h write, cache read, output. */
 function claude(
@@ -75,6 +92,7 @@ function claude(
     output,
     source_url: ANTHROPIC_PRICING_URL,
     verified: PRICE_LIST_VERIFIED,
+    web_search_per_request: CLAUDE_WEB_SEARCH_PER_REQUEST,
     ...modifiers,
   }];
 }
@@ -200,6 +218,8 @@ export interface PricedLookup {
   pricing: Required<ModelPricing>;
   period: PeriodRef;
   applied_modifiers: AppliedModifiers;
+  /** USD per web search request for this model and day, never scaled by modifiers; null when the period has no per-search price. */
+  web_search_per_request: number | null;
 }
 
 export interface UnpricedLookup {
@@ -310,6 +330,7 @@ export function lookupPrice(modelName: unknown, date: unknown, modifiers: PriceM
     pricing,
     period: { from: period.from, to: period.to, source_url: period.source_url, verified: period.verified },
     applied_modifiers: { speed, service_tier: "standard", inference_geo: geo, multiplier, defaulted },
+    web_search_per_request: period.web_search_per_request ?? null,
   };
 }
 

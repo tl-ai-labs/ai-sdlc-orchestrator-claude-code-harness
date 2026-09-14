@@ -450,6 +450,80 @@ test("bookReceiptTokens: the gap is priced at the model's logged TTL and modifie
   assert.equal(early.unlogged_billed.per_model.some((g) => g.model === "claude-haiku-4-5"), false);
 });
 
+// ── M3: web searches are billed per search, on top of tokens ────────────────
+
+/**
+ * Review finding M3. A receipt counts server-side web searches per model
+ * (modelUsage[*].webSearchRequests) and a transcript message counts them in
+ * usage.server_tool_use.web_search_requests; Anthropic bills $10 per 1,000 on
+ * top of tokens (price page, verified 2026-09-14). The collector read only the
+ * four token counts, so a booked receipt left the fee out and still said
+ * pricing_complete true, where the pre-v0.7.3 collector had booked Claude
+ * Code's total, fee included.
+ *
+ * The T6 fixture, with the receipt saying the Opus 5 session searched 3 times
+ * and the Haiku side call twice, and the session's first message recording 2
+ * searches on each of its lines (counted once per message).
+ */
+test("M3: a booked receipt bills $0.01 per web search: the logged searches in the per-message figure, the rest in unlogged_billed", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-receipt-websearch-"));
+  try {
+    cpSync(SIDE_CALL, root, { recursive: true });
+    const receiptPath = join(root, "claude-session.json");
+    const rec = readJson(receiptPath);
+    rec.modelUsage["claude-opus-5[1m]"].webSearchRequests = 3;
+    rec.modelUsage["claude-opus-5[1m]"].costUSD += 0.03;
+    rec.modelUsage["claude-haiku-4-5-20251001"].webSearchRequests = 2;
+    rec.modelUsage["claude-haiku-4-5-20251001"].costUSD += 0.02;
+    rec.total_cost_usd += 0.05;
+    writeFileSync(receiptPath, JSON.stringify(rec));
+    const session = join(root, "transcripts", "58591543-407d-4a7a-8a86-b29f035f1e7d.jsonl");
+    const lines = readFileSync(session, "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const firstId = lines.find((o) => o.type === "assistant").message.id;
+    for (const o of lines) if (o.type === "assistant" && o.message.id === firstId) o.message.usage.server_tool_use = { web_search_requests: 2, web_fetch_requests: 0 };
+    writeFileSync(session, lines.map((o) => JSON.stringify(o)).join("\n") + "\n");
+
+    const r = exec([root, "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", join(root, "transcripts")]);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const o = readJson(join(root, "manifest.json")).orchestrator_overhead;
+    // Logged: the fixture's $0.183168 of tokens plus 2 searches.
+    assert.equal(o.transcript_cost_usd, 0.203168);
+    const session5 = o.per_model.find((e) => e.role === "session" && e.model === "claude-opus-5");
+    assert.deepEqual([session5.web_search_requests, session5.web_search_cost_usd], [2, 0.02]);
+    const gap = Object.fromEntries(o.unlogged_billed.per_model.map((g) => [g.model, g]));
+    assert.deepEqual([gap["claude-opus-5"].web_search_requests, gap["claude-opus-5"].cost_usd], [1, 0.01], "3 billed, 2 logged");
+    assert.deepEqual(gap["claude-opus-5"].tokens, { input: 0, input_cached: 0, input_cache_write: 0, output: 0 });
+    assert.deepEqual([gap["claude-haiku-4-5"].web_search_requests, gap["claude-haiku-4-5"].cost_usd], [2, 0.021003], "$0.001003 of tokens + 2 searches");
+    assert.equal(o.unlogged_billed.cost_usd, 0.031003);
+    assert.equal(o.cost_usd, 0.234171, "the receipt's tokens at the list ($0.184171) + 5 searches");
+    assert.equal(o.pricing_complete, true);
+    assert.doesNotMatch(r.stderr, /price table differs/, "Claude Code's total includes the fee, and so does the booked figure");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("M3: web searches on a model with no per-search price are unpriced, never borrowed — in priceMessages and in a booked receipt's gap", async () => {
+  const { resolveBucketNames, bookReceiptTokens, priceMessages, makeMessagePricer } = await helpers();
+  const pricer = makeMessagePricer({ models: [] }, { pricesMod, effectiveMod, pricingMod });
+  const ts = "2026-09-10T10:00:00.000Z";
+  const zero = { input: 0, input_cached: 0, input_cache_write_5m: 0, input_cache_write_1h: 0, output: 0 };
+  const gem = { model: "gemini-3.5-flash", role: "session", timestamp: ts, modifiers: { speed: null, service_tier: null, inference_geo: null }, conflicts: [], web_search_requests: 4, tokens: { ...zero, input: 1_000_000 } };
+  const priced = priceMessages([gem], pricer);
+  assert.equal(priced.cost_usd, 1.5, "the tokens are still priced");
+  assert.equal(priced.complete, false);
+  const u = priced.unpriced.find((x) => x.model === "gemini-3.5-flash");
+  assert.equal(u.web_search_requests, 4);
+  assert.deepEqual(u.tokens, zero, "only the searches are unpriced");
+  assert.match(u.reason, /4 web search request\(s\) have no per-search price for gemini-3\.5-flash/);
+
+  const { receipt } = resolveBucketNames({}, { "gemini-3.5-flash": { input: 0, input_cached: 0, input_cache_write: 0, output: 0, web_search_requests: 3, cost_usd: null } }, pricesMod.resolveModel);
+  const b = bookReceiptTokens({ receipt, priced: priceMessages([], pricer), pricer, referenceTimes: [ts, ts] });
+  assert.equal(b.complete, false);
+  assert.equal(b.unlogged_billed.unpriced.length, 1);
+  assert.equal(b.unlogged_billed.unpriced[0].web_search_requests, 3);
+  assert.match(b.unlogged_billed.unpriced[0].reason, /no per-search price for gemini-3\.5-flash/);
+  assert.equal(b.cost_usd, 0);
+});
+
 // ── F1: a human turn AFTER the window means the receipt may bill a later leg ──
 
 /**

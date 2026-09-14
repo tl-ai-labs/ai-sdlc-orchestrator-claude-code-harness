@@ -391,3 +391,44 @@ test("M1 (c) lines of ONE message recording \"standard\" and \"fast\" leave the 
   assert.match(ledger.unpriced_models[0].reason, /lines of one claude-opus-4-8 message .*disagree on speed/);
   assert.equal(ledger.cost_usd, 0);
 });
+
+// ── Review finding M3: web search requests are billed per search ─────────
+//
+// A result's modelUsage[*].webSearchRequests counts server-side web searches,
+// billed at $10 per 1,000 on top of tokens (Anthropic's price page, verified
+// 2026-09-14). The ledger read only the four token counts, so a worker that
+// searched booked less than it cost. Claude Code's own costUSD includes the
+// fee, so the per-model CLI check agrees only when the ledger includes it too.
+
+test("M3 web searches on the result are billed at $0.01 each on top of that model's tokens; the transcript records none, so they are outside the logged share", async () => {
+  const opus5 = RESULT.modelUsage["claude-opus-5[1m]"];
+  const searching = {
+    ...RESULT,
+    total_cost_usd: RESULT.total_cost_usd + 0.03,
+    modelUsage: { ...RESULT.modelUsage, "claude-opus-5[1m]": { ...opus5, webSearchRequests: 3, costUSD: opus5.costUSD + 0.03 } },
+  };
+  const [out, stderr] = await captureStderr(() => adapterFor(searching).execute(PACKET));
+  const attempt = out.attempts[0];
+  const byModel = Object.fromEntries(attempt.per_model.map((m) => [m.model, m]));
+  assert.equal(byModel["claude-opus-5"].web_search_requests, 3);
+  assert.equal(byModel["claude-opus-5"].web_search_cost_usd, 0.03);
+  assert.equal(byModel["claude-opus-5"].cost_usd, round6(OPUS_5_USD + 0.03));
+  assert.equal("web_search_requests" in byModel["claude-opus-4-8"], false, "a model that did not search carries no search fields");
+  assert.equal(out.cost_usd, round6(LEDGER_USD + 0.03));
+  assert.deepEqual(attempt.unpriced_models, []);
+  assert.equal(attempt.transcript_logged_cost_usd, round6(OPUS_5_USD + OPUS_4_8_USD), "no transcript line records a search");
+  assert.doesNotMatch(stderr, /pricing\.cli_cost_mismatch/, "Claude Code's figure includes the fee, and now so does the ledger");
+});
+
+test("M3 web searches on a model the list gives no per-search price are unpriced with the reason; that model's tokens stay priced", () => {
+  const ledger = priceClaudeCliResult(
+    { session_id: "wrk-gem", total_cost_usd: 0, usage: {}, modelUsage: { "gemini-3.5-flash": { inputTokens: 1_000_000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, webSearchRequests: 2 } } },
+    { config: { id: "gem-cli", adapter: "claude-cli", model_name: "gemini-3.5-flash" }, date: new Date(FAST_DAY), transcript: null },
+  );
+  assert.equal(ledger.cost_usd, 1.5, "1M input tokens at $1.50; the searches are never priced at Claude's fee");
+  assert.equal(ledger.per_model[0].web_search_requests, 2);
+  assert.equal(ledger.per_model[0].web_search_cost_usd, null);
+  assert.equal(ledger.unpriced_models.length, 1);
+  assert.equal(ledger.unpriced_models[0].model, "gemini-3.5-flash");
+  assert.match(ledger.unpriced_models[0].reason, /2 web search request\(s\) have no per-search price for gemini-3\.5-flash/);
+});

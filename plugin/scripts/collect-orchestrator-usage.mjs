@@ -116,7 +116,11 @@
  *      model and role (`session` for a top-level session file, `helper` for a
  *      file under `subagents/`) into `per_model[]`, one entry per price, and
  *      the transcript figure is the sum of those entries. The policy's
- *      derived driver model now only labels the event.
+ *      derived driver model now only labels the event. Web searches
+ *      (`usage.server_tool_use.web_search_requests`, once per message) bill
+ *      per request on top of tokens at the list's per-search price ($10 per
+ *      1,000 for Claude); with no such price they are listed in `unpriced[]`
+ *      and the tokens stay priced.
  *   7. IDEMPOTENT: re-running replaces the prior orchestrator event for
  *      this pass (telemetry.jsonl is rewritten atomically without any
  *      `tier: "orchestrator"` lines, then the fresh event is appended) and
@@ -155,7 +159,10 @@
  *         with no logged message (a CLI side call, a helper whose file is
  *         missing) at API-default modifiers with 5-minute writes unless the
  *         receipt's own top-level usage proves its split, every assumption
- *         written down. The gap is `unlogged_billed` {per_model, unpriced,
+ *         written down. Searches the receipt bills
+ *         (`modelUsage[*].webSearchRequests`) beyond the logged ones are in
+ *         the gap too, at the list's per-search price, or unpriced when there
+ *         is none. The gap is `unlogged_billed` {per_model, unpriced,
  *         cost_usd, pct_of_booked}, and the label is "receipt (Anthropic token
  *         counts priced at the price list); N% billed but not logged". A
  *         transcript EQUAL to the receipt on every bucket is the receipt's
@@ -497,6 +504,7 @@ export function resolveBucketNames(perModel, receiptModels, resolve) {
     const r = (receipt[id] ??= { input: 0, input_cached: 0, input_cache_write: 0, output: 0, cost_usd: null, names: [] });
     for (const k of RECEIPT_BUCKETS) r[k] += b[k] ?? 0;
     if (b.cost_usd != null) r.cost_usd = (r.cost_usd ?? 0) + b.cost_usd;
+    if (b.web_search_requests > 0) r.web_search_requests = (r.web_search_requests ?? 0) + b.web_search_requests;
     r.names.push(name);
   }
   for (const v of [...Object.values(transcript), ...Object.values(receipt)]) v.names.sort();
@@ -713,6 +721,9 @@ export function bookReceiptTokens({ receipt, priced, pricer, referenceTimes, rec
       input_cache_write: Math.max(0, R.input_cache_write - loggedWrites),
       output: Math.max(0, R.output - logged.output),
     };
+    // Review finding M3: the searches the receipt bills beyond the logged ones.
+    const loggedSearches = [...entries, ...priced.unpriced.filter((u) => u.model === id)].reduce((s, e) => s + (e.web_search_requests ?? 0), 0);
+    const gapSearches = Math.max(0, (R.web_search_requests ?? 0) - loggedSearches);
     for (const b of RECEIPT_BUCKETS) tokens[b] += R[b];
 
     // The logged mix: token-weighted rates per bucket.
@@ -774,19 +785,38 @@ export function bookReceiptTokens({ receipt, priced, pricer, referenceTimes, rec
 
     const loggedCost = round6(entries.reduce((s, e) => s + e.cost_usd, 0));
     const hasGap = RECEIPT_BUCKETS.some((b) => gap[b] > 0);
+    // The per-search fee is the list's for the model's day. It is not a token
+    // rate, so no logged mix applies. No price: the searches are unpriced.
+    let searchFee = null;
+    let searchReason = null;
+    if (gapSearches > 0) {
+      const f = reference();
+      if (f.unpriced) searchReason = f.reason;
+      else if (f.web_search_per_request == null) searchReason = `${gapSearches} web search request(s) have no per-search price for ${id} on the price list, so their fee is in no figure`;
+      else searchFee = f.web_search_per_request;
+    }
+    const pricedSearches = gapSearches > 0 && searchFee != null;
     let gapCost = 0;
     if (hasGap && reason) {
       unpriced.push({ model: id, reported_as: R.names, reason, tokens: gap });
-    } else if (hasGap) {
-      gapCost = round6(RECEIPT_BUCKETS.reduce((s, b) => s + (gap[b] > 0 ? (gap[b] / 1_000_000) * rate[b] : 0), 0));
+    }
+    if (gapSearches > 0 && searchReason) {
+      unpriced.push({ model: id, reported_as: R.names, reason: searchReason, tokens: { input: 0, input_cached: 0, input_cache_write: 0, output: 0 }, web_search_requests: gapSearches });
+    }
+    if ((hasGap && !reason) || pricedSearches) {
+      const tokenCost = hasGap && !reason ? round6(RECEIPT_BUCKETS.reduce((s, b) => s + (gap[b] > 0 ? (gap[b] / 1_000_000) * rate[b] : 0), 0)) : 0;
+      const searchCost = pricedSearches ? round6(gapSearches * searchFee) : 0;
+      gapCost = round6(tokenCost + searchCost);
       perModel.push({
         model: id,
         reported_as: R.names,
         receipt_only: receiptOnly,
-        tokens: gap,
+        // Unpriced token gaps are listed in unpriced, so a searches-only entry shows none.
+        tokens: hasGap && !reason ? gap : { input: 0, input_cached: 0, input_cache_write: 0, output: 0 },
         rates: Object.fromEntries(RECEIPT_BUCKETS.map((b) => [b, rate[b] == null ? null : roundRate(rate[b])])),
         ttl_split: ttlSplit,
         assumed,
+        ...(pricedSearches ? { web_search_requests: gapSearches, web_search_cost_usd: searchCost } : {}),
         cost_usd: gapCost,
       });
     }
@@ -975,7 +1005,9 @@ export function candidateTranscripts(dir, windowStartMs) {
  * disjoint 5-minute / 1-hour write split and the booked output. Each of
  * `modifiers.{speed, service_tier, inference_geo}` is the non-null value any
  * line of the message recorded, and a modifier two lines record differently
- * is named in `conflicts`.
+ * is named in `conflicts`. `web_search_requests`, set only when non-zero, is
+ * the largest `usage.server_tool_use.web_search_requests` any line of the
+ * message records: once per message, never summed across its lines.
  */
 export function sumTranscriptUsage(files, windowStartMs, windowEndMs, { roleOf = () => "session" } = {}) {
   const messages = [];
@@ -1032,6 +1064,7 @@ export function sumTranscriptUsage(files, windowStartMs, windowEndMs, { roleOf =
           // Streaming lines before the terminal one often omit `speed`, so a
           // fast-mode message would be priced standard from its first line.
           noteModifiers(rec, usage);
+          noteSearches(rec, usage);
           // A terminal line always wins; otherwise only a larger value does,
           // and never over a value already taken from a terminal line.
           if (!prev?.terminal && (terminal || out > prev.out)) {
@@ -1082,6 +1115,7 @@ export function sumTranscriptUsage(files, windowStartMs, windowEndMs, { roleOf =
         },
       };
       noteModifiers(rec, usage);
+      noteSearches(rec, usage);
       messages.push(rec);
       if (msg.id) recordById.set(msg.id, rec);
     }
@@ -1093,6 +1127,16 @@ const MODIFIER_KEYS = ["speed", "service_tier", "inference_geo"];
 const TOKEN_KEYS = ["input", "input_cached", "input_cache_write_5m", "input_cache_write_1h", "output"];
 const zeroTokens = () => ({ input: 0, input_cached: 0, input_cache_write_5m: 0, input_cache_write_1h: 0, output: 0 });
 const ROLE_ORDER = { session: 0, helper: 1 };
+
+/**
+ * Records a line's web search count on its message record (review finding M3):
+ * the largest count any line of the message reports, so a message is counted
+ * once however many lines repeat it, and a partial snapshot never undercounts.
+ */
+function noteSearches(rec, usage) {
+  const n = usage.server_tool_use?.web_search_requests;
+  if (typeof n === "number" && Number.isFinite(n) && n > (rec.web_search_requests ?? 0)) rec.web_search_requests = n;
+}
 
 /** Records one line's request modifiers on its message record (see sumTranscriptUsage). */
 function noteModifiers(rec, usage) {
@@ -1153,7 +1197,16 @@ export function makeMessagePricer(policy, { pricesMod, effectiveMod, pricingMod 
       : pricesMod.lookupPrice(name, timestamp, modifiers ?? {});
     for (const w of r.warnings ?? []) if (!warnings.includes(w)) warnings.push(w);
     if (r.unpriced) return { unpriced: true, model, reason: r.reason };
-    return { unpriced: false, model, basis: r.basis ?? "list", pricing: r.pricing, period: r.period ?? null, applied_modifiers: r.applied_modifiers ?? null };
+    return {
+      unpriced: false,
+      model,
+      basis: r.basis ?? "list",
+      pricing: r.pricing,
+      period: r.period ?? null,
+      applied_modifiers: r.applied_modifiers ?? null,
+      // The list's per-search fee for the model's day (a custom card has none of its own); null: searches unpriced.
+      web_search_per_request: r.web_search_per_request ?? null,
+    };
   };
   pricer.warnings = warnings;
   pricer.computeCostUsd = pricingMod.computeCostUsd;
@@ -1186,6 +1239,9 @@ export const RECEIPT_CLI_DRIFT = 0.005;
 export function priceMessages(messages, pricer) {
   const entries = new Map();
   const missing = new Map();
+  // Review finding M3: searches with no per-search price, per role and model, and each entry's fee.
+  const searchesMissing = new Map();
+  const searchFees = new Map();
   // The grouping keys below join their parts with the escape \u0000, written
   // as six printable characters. It is the same NUL character at run time, so
   // no part can collide with another. A raw NUL byte used to sit here, and it
@@ -1201,6 +1257,7 @@ export function priceMessages(messages, pricer) {
       const u = missing.get(key) ?? { model: r.model, role: msg.role, reason: r.reason, messages: 0, tokens: zeroTokens() };
       u.messages++;
       for (const k of TOKEN_KEYS) u.tokens[k] += msg.tokens[k] ?? 0;
+      if ((msg.web_search_requests ?? 0) > 0) u.web_search_requests = (u.web_search_requests ?? 0) + msg.web_search_requests;
       missing.set(key, u);
       continue;
     }
@@ -1227,6 +1284,22 @@ export function priceMessages(messages, pricer) {
     if (am) for (const d of am.defaulted) if (!e.applied_modifiers.defaulted.includes(d)) e.applied_modifiers.defaulted.push(d);
     e.messages++;
     for (const k of TOKEN_KEYS) e.tokens[k] += msg.tokens[k] ?? 0;
+    // Web searches bill per request on top of tokens, at the list's per-search
+    // price for the model's day. With no such price the searches are unpriced
+    // (the tokens stay priced), never billed at another model's fee.
+    const searches = msg.web_search_requests ?? 0;
+    if (searches > 0) {
+      if (r.web_search_per_request == null) {
+        const sk = JSON.stringify([msg.role, r.model]);
+        const s = searchesMissing.get(sk) ?? { model: r.model, role: msg.role, reason: "", messages: 0, tokens: zeroTokens(), web_search_requests: 0 };
+        s.messages++;
+        s.web_search_requests += searches;
+        searchesMissing.set(sk, s);
+      } else {
+        e.web_search_requests = (e.web_search_requests ?? 0) + searches;
+        searchFees.set(e, r.web_search_per_request);
+      }
+    }
   }
   const per_model = [...entries.values()];
   for (const e of per_model) {
@@ -1235,6 +1308,10 @@ export function priceMessages(messages, pricer) {
       { input: e.tokens.input, input_cached: e.tokens.input_cached, output: e.tokens.output, input_cache_write: e.tokens.input_cache_write_5m, input_cache_write_1h: e.tokens.input_cache_write_1h },
       e.rates
     );
+    if (e.web_search_requests > 0) {
+      e.web_search_cost_usd = pricer.round6(e.web_search_requests * searchFees.get(e));
+      e.cost_usd = pricer.round6(e.cost_usd + e.web_search_cost_usd);
+    }
   }
   const byRoleModel = (a, b) => (ROLE_ORDER[a.role] ?? 2) - (ROLE_ORDER[b.role] ?? 2) || a.model.localeCompare(b.model);
   per_model.sort((a, b) =>
@@ -1242,7 +1319,10 @@ export function priceMessages(messages, pricer) {
     (a.price_period?.from ?? "").localeCompare(b.price_period?.from ?? "") ||
     JSON.stringify(a.applied_modifiers).localeCompare(JSON.stringify(b.applied_modifiers))
   );
-  const unpriced = [...missing.values()].sort((a, b) => byRoleModel(a, b) || a.reason.localeCompare(b.reason));
+  for (const s of searchesMissing.values()) {
+    s.reason = `${s.web_search_requests} web search request(s) have no per-search price for ${s.model} on the price list for their day, so their fee is in no figure`;
+  }
+  const unpriced = [...missing.values(), ...searchesMissing.values()].sort((a, b) => byRoleModel(a, b) || a.reason.localeCompare(b.reason));
   return {
     per_model,
     unpriced,
@@ -1308,6 +1388,9 @@ export function readReceipt(path, { required = false } = {}) {
       input_cache_write: v.cacheCreationInputTokens ?? v.cache_creation_input_tokens ?? 0,
       output: v.outputTokens ?? v.output_tokens ?? 0,
       cost_usd: v.costUSD ?? v.cost_usd ?? null,
+      // Review finding M3: server-side web searches, billed per request on top
+      // of tokens. Recorded only when non-zero.
+      ...((v.webSearchRequests ?? v.web_search_requests ?? 0) > 0 ? { web_search_requests: v.webSearchRequests ?? v.web_search_requests } : {}),
     };
   }
   const modelCost = Object.values(models).reduce((a, m) => a + (m.cost_usd ?? 0), 0);

@@ -55,6 +55,13 @@ export interface EffectivePriced {
   period: PeriodRef | null;
   /** The modifiers the list applied; null for a custom price (a block is one flat card). */
   applied_modifiers: AppliedModifiers | null;
+  /**
+   * USD per web search request: the list period's fee for this model on this
+   * day, for a custom price too (a policy block declares token rates only, and
+   * the search fee is the model's own dated list fee). Null when the list has
+   * no per-search price, so searches are unpriced.
+   */
+  web_search_per_request: number | null;
   warnings: string[];
 }
 
@@ -105,6 +112,9 @@ export function effectivePrice(
   // 1. A deliberate custom price. The loader refuses pricing_override without
   //    a block, so `pricing` is present whenever the flag is true.
   if (ownModel && model.pricing_override === true && model.pricing) {
+    // The block has no search fee; the list's fee for the model's day applies,
+    // and a model or day the list cannot price leaves searches unpriced.
+    const listed = lookupPrice(name, dateArg(date), {});
     return {
       unpriced: false,
       basis: "custom",
@@ -112,6 +122,7 @@ export function effectivePrice(
       pricing: { ...model.pricing },
       period: null,
       applied_modifiers: null,
+      web_search_per_request: listed.unpriced ? null : listed.web_search_per_request,
       warnings,
     };
   }
@@ -145,6 +156,7 @@ export function effectivePrice(
     pricing: looked.pricing,
     period: looked.period,
     applied_modifiers: looked.applied_modifiers,
+    web_search_per_request: looked.web_search_per_request,
     warnings,
   };
 }

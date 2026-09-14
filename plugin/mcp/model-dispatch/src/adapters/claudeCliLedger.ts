@@ -13,6 +13,9 @@
  *   written to a transcript (a Haiku call, for instance). The top-level
  *   `usage` holds the session model only, so it is used only when an older
  *   CLI prints no `modelUsage`, and then as the requested model.
+ * - Web searches: `modelUsage[*].webSearchRequests`, billed at the list's
+ *   per-search price ($10 per 1,000 for Claude) on top of that model's
+ *   tokens; a model with no per-search price lists them unpriced.
  * - Model identity: resolveModel, so `claude-opus-5[1m]` is Opus 5 and
  *   `claude-haiku-4-5-20251001` is Haiku 4.5. An unresolvable name is
  *   unpriced, never matched to a similar model.
@@ -123,7 +126,7 @@ export interface TranscriptModelWrites {
    * (stop_reason) line, else the largest value any line recorded. With the
    * writes above, this is what a collector scan of this transcript counts.
    */
-  logged: { input: number; input_cached: number; output: number };
+  logged: { input: number; input_cached: number; output: number; web_search_requests: number };
 }
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
@@ -142,6 +145,8 @@ interface MessageRecord {
   output: number;
   /** Whether `output` came from the terminal (stop_reason) line. */
   terminal: boolean;
+  /** `usage.server_tool_use.web_search_requests`: the largest any line records, once per message (a count never falls). */
+  searches: number;
 }
 
 /**
@@ -214,6 +219,7 @@ export function readWorkerTranscript(files: string[], sessionId: string): Map<st
           counted.output = out;
           counted.terminal = terminal;
         }
+        counted.searches = Math.max(counted.searches, num(usage.server_tool_use?.web_search_requests));
         continue;
       }
       const key = modelKey(String(msg.model ?? "(unlabeled)"));
@@ -223,7 +229,7 @@ export function readWorkerTranscript(files: string[], sessionId: string): Map<st
         split_known: true,
         modifiers: new Set<string>(),
         modifier_conflicts: [],
-        logged: { input: 0, input_cached: 0, output: 0 },
+        logged: { input: 0, input_cached: 0, output: 0, web_search_requests: 0 },
       };
       const written = num(usage.cache_creation_input_tokens);
       const split = usage.cache_creation;
@@ -241,6 +247,7 @@ export function readWorkerTranscript(files: string[], sessionId: string): Map<st
         input_cached: num(usage.cache_read_input_tokens),
         output: num(usage.output_tokens),
         terminal: msg.stop_reason != null,
+        searches: num(usage.server_tool_use?.web_search_requests),
       };
       noteModifiers(rec, usage);
       messages.push(rec);
@@ -255,6 +262,7 @@ export function readWorkerTranscript(files: string[], sessionId: string): Map<st
     entry.logged.input += rec.input;
     entry.logged.input_cached += rec.input_cached;
     entry.logged.output += rec.output;
+    entry.logged.web_search_requests += rec.searches;
   }
   return readAny ? byModel : null;
 }
@@ -273,6 +281,7 @@ export interface ClaudeCliResultLike {
     service_tier?: string;
     speed?: string;
     inference_geo?: string;
+    server_tool_use?: { web_search_requests?: number };
   };
   modelUsage?: Record<string, any>;
 }
@@ -324,6 +333,8 @@ interface Row {
   input_cached: number;
   writes: number;
   output: number;
+  /** Web search requests billed per search on top of tokens (review finding M3). */
+  searches: number;
   cli: number;
   cliKnown: boolean;
 }
@@ -352,12 +363,13 @@ export function priceClaudeCliResult(
     // and `claude-opus-5[1m]`): their tokens and CLI dollars add up.
     for (const [name, v] of reported) {
       const key = modelKey(name);
-      const row = rows.get(key) ?? { key, names: [], input: 0, input_cached: 0, writes: 0, output: 0, cli: 0, cliKnown: true };
+      const row = rows.get(key) ?? { key, names: [], input: 0, input_cached: 0, writes: 0, output: 0, searches: 0, cli: 0, cliKnown: true };
       row.names.push(name);
       row.input += num(v?.inputTokens ?? v?.input_tokens);
       row.input_cached += num(v?.cacheReadInputTokens ?? v?.cache_read_input_tokens);
       row.writes += num(v?.cacheCreationInputTokens ?? v?.cache_creation_input_tokens);
       row.output += num(v?.outputTokens ?? v?.output_tokens);
+      row.searches += num(v?.webSearchRequests ?? v?.web_search_requests);
       const c = v?.costUSD ?? v?.cost_usd;
       if (typeof c === "number" && Number.isFinite(c)) row.cli += c;
       else row.cliKnown = false;
@@ -375,6 +387,7 @@ export function priceClaudeCliResult(
       input_cached: num(usage.cache_read_input_tokens),
       writes: num(usage.cache_creation_input_tokens),
       output: typeof usage.output_tokens === "number" ? usage.output_tokens : estimateTokens(response.result ?? ""),
+      searches: num(usage.server_tool_use?.web_search_requests),
       cli: 0,
       cliKnown: false,
     });
@@ -504,10 +517,33 @@ export function priceClaudeCliResult(
     if (!price || price.unpriced) {
       const reason = problem ?? (price as { reason: string }).reason;
       unpriced.push({ model: row.names.join(", "), reason });
-      perModel.push({ model: row.key, reported_as: row.names, tokens: rowTokens, price_basis: null, cost_usd: null, cli_cost_usd: cliCost, ttl_split: split, unpriced_reason: reason, ...(assumed.length > 0 ? { assumed } : {}) });
+      perModel.push({
+        model: row.key,
+        reported_as: row.names,
+        tokens: rowTokens,
+        price_basis: null,
+        cost_usd: null,
+        cli_cost_usd: cliCost,
+        ttl_split: split,
+        unpriced_reason: reason,
+        ...(assumed.length > 0 ? { assumed } : {}),
+        ...(row.searches > 0 ? { web_search_requests: row.searches, web_search_cost_usd: null } : {}),
+      });
       continue;
     }
-    const rowCost = computeCostUsd(rowTokens, price.pricing);
+    // Review finding M3: web searches bill per request on top of tokens, at the
+    // list's per-search price for the model's day. Only token counts were read,
+    // so a worker that searched booked less than it cost. With no per-search
+    // price the searches are listed unpriced and the tokens stay priced.
+    const fee = price.web_search_per_request;
+    const searchCost = row.searches > 0 && fee !== null ? round6(row.searches * fee) : 0;
+    if (row.searches > 0 && fee === null) {
+      unpriced.push({
+        model: row.names.join(", "),
+        reason: `${row.searches} web search request(s) have no per-search price for ${row.key} on the price list, so their fee is not in cost_usd`,
+      });
+    }
+    const rowCost = round6(computeCostUsd(rowTokens, price.pricing) + searchCost);
     cost += rowCost;
     if (fromTranscript) {
       // The tokens this model's transcript explains, priced at the same card,
@@ -524,8 +560,19 @@ export function priceClaudeCliResult(
         },
         price.pricing,
       );
+      if (fee !== null) loggedCost += Math.min(row.searches, fromTranscript.logged.web_search_requests) * fee;
     }
-    perModel.push({ model: row.key, reported_as: row.names, tokens: rowTokens, price_basis: price.basis, cost_usd: rowCost, cli_cost_usd: cliCost, ttl_split: split, ...(assumed.length > 0 ? { assumed } : {}) });
+    perModel.push({
+      model: row.key,
+      reported_as: row.names,
+      tokens: rowTokens,
+      price_basis: price.basis,
+      cost_usd: rowCost,
+      cli_cost_usd: cliCost,
+      ttl_split: split,
+      ...(assumed.length > 0 ? { assumed } : {}),
+      ...(row.searches > 0 ? { web_search_requests: row.searches, web_search_cost_usd: fee === null ? null : searchCost } : {}),
+    });
   }
 
   const splits = perModel.map((m) => m.ttl_split);
