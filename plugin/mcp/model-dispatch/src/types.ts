@@ -138,6 +138,12 @@ export interface TelemetryEvent {
   cli_reported_cost_usd?: number;
   /** claude-cli only: where the cache-write TTL split came from. */
   ttl_split?: TtlSplit;
+  /**
+   * claude-cli only, copied from the attempt: the share of cost_usd for the
+   * tokens the worker's own transcript explains. The collector subtracts only
+   * this share of an in-session worker; absent on events written before it existed.
+   */
+  transcript_logged_cost_usd?: number;
   /*
    * Orchestrator event only (`tier: "orchestrator"`, written by
    * collect-orchestrator-usage.mjs): the Fix E fields of the manifest's
@@ -211,6 +217,17 @@ export interface AttemptRecord {
    * (2026-08-24: Opus at 0.6x), so it is never the cost.
    */
   cli_reported_cost_usd?: number;
+  /**
+   * claude-cli only, when the worker's transcript was read: the dollars of
+   * `cost_usd` for the tokens that transcript explains (each model's logged
+   * tokens at that model's price). The rest of cost_usd is what the result
+   * billed that no transcript line logged: receipt-only side calls (a Haiku
+   * call) and unlogged tokens. collect-orchestrator-usage.mjs subtracts only
+   * this share of a worker its scan swept in, because the scan counts only the
+   * logged tokens; subtracting the whole cost took the unlogged dollars out of
+   * the true total (review finding M4).
+   */
+  transcript_logged_cost_usd?: number;
   /**
    * claude-cli only: where the 5-minute / 1-hour cache-write split came from.
    * `transcript` = the worker session's own transcript explained every

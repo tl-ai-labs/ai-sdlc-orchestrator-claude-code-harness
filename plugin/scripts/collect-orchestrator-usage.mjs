@@ -194,9 +194,14 @@
  *      worker whose session was not scanned (receipt-booked figures, or a
  *      scan pinned to the driver's session). Measured +21% over the receipt
  *      without it. A claude-cli worker's event is billed from the same price
- *      list as this scan (its modelUsage tokens, TTL split from its own
- *      transcript), so the subtraction removes exactly what its swept-in
- *      session added and the net stays transcript-priced.
+ *      list as this scan (its modelUsage tokens, TTL split and modifiers from
+ *      its own transcript), but its cost_usd also holds what the worker's
+ *      result billed that its transcript never logged (a Haiku side call,
+ *      unlogged tokens), and the scan cannot see that part. Such an event
+ *      carries `transcript_logged_cost_usd`, the dollars for the tokens its
+ *      transcript explains, and only that share is subtracted, so the
+ *      unlogged dollars stay in the true total. An event written before that
+ *      field existed subtracts its whole cost_usd, as before.
  *
  *
  * Usage:
@@ -1349,6 +1354,14 @@ export function readReceipt(path, { required = false } = {}) {
  * `vendor` events on any other adapter are real API calls made by the
  * dispatch server outside the session: they are NOT in the transcript and
  * must stay in the total.
+ *
+ * A claude-cli event's cost_usd is the worker's whole ledger, including
+ * receipt-only side calls and tokens its transcript never logged; the scan
+ * added only the logged part. When the event carries
+ * `transcript_logged_cost_usd`, only that share (never more than cost_usd) is
+ * subtracted. Review finding M4: subtracting the whole cost took the unlogged
+ * dollars out of the true total. Older events without the field subtract
+ * cost_usd, as before.
  */
 export function inSessionDispatched(events, policy, manifest, dispatched, { claudeCliScanned = true } = {}) {
   const models = policy?.models ?? [];
@@ -1371,6 +1384,14 @@ export function inSessionDispatched(events, policy, manifest, dispatched, { clau
     ev.provenance === "estimated" ||
     ev.provenance === "apportioned_from_measured_total" ||
     viaClaudeCli(ev);
+  // What subtracting one inside event removes: its whole cost, except a
+  // claude-cli worker that says which share of it its transcript logged.
+  const insideShare = (ev) => {
+    const whole = ev.cost_usd ?? 0;
+    const logged = ev.transcript_logged_cost_usd;
+    if (viaClaudeCli(ev) && typeof logged === "number" && Number.isFinite(logged) && logged >= 0) return Math.min(whole, logged);
+    return whole;
+  };
   const work = events.filter((ev) => ev && ev.tier !== "orchestrator");
   const allCost = work.reduce((a, ev) => a + (ev.cost_usd ?? 0), 0);
   // Only events whose model the manifest's dispatched figure actually
@@ -1378,7 +1399,7 @@ export function inSessionDispatched(events, policy, manifest, dispatched, { clau
   // events to the telemetry did not change what buildManifest summed.
   const modelsUsed = Array.isArray(manifest?.totals?.models_used) ? new Set(manifest.totals.models_used) : null;
   const inside = work.filter((ev) => isInside(ev) && (!modelsUsed || modelsUsed.has(ev.model)));
-  const insideSum = inside.reduce((a, ev) => a + (ev.cost_usd ?? 0), 0);
+  const insideSum = inside.reduce((a, ev) => a + insideShare(ev), 0);
   const outsideSum = work.filter((ev) => !inside.includes(ev)).reduce((a, ev) => a + (ev.cost_usd ?? 0), 0);
   const notes = [];
   // buildManifest summed these same events into `dispatched`. The in-session

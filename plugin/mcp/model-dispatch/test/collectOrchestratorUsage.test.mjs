@@ -644,6 +644,23 @@ test("inSessionDispatched: a claude-cli worker is inside only when its session w
   assert.equal(inSessionDispatched([{ ...ambiguous[0], model_id: "d" }], policy, {}, 1).cost, 0, "model_id names the API seat");
 });
 
+test("inSessionDispatched: a claude-cli event carrying transcript_logged_cost_usd subtracts only that share, so its receipt-only and unlogged dollars stay in the total (review finding M4)", async () => {
+  const { inSessionDispatched } = await helpers();
+  const policy = { models: [{ id: "w", model_name: "claude-sonnet-5", adapter: "claude-cli" }, { id: "g", model_name: "gemini-3.7-flash", adapter: "mcp:model-dispatch" }] };
+  const events = [
+    // Ledger $6, of which $4.50 is tokens the worker's transcript explains (the rest: a side call and unlogged tokens).
+    { model: "claude-sonnet-5", model_id: "w", provenance: "vendor", cost_usd: 6, transcript_logged_cost_usd: 4.5 },
+    // Written before the field existed: its whole cost is subtracted, as before.
+    { model: "claude-sonnet-5", model_id: "w", provenance: "vendor", cost_usd: 2 },
+    { model: "gemini-3.7-flash", model_id: "g", provenance: "vendor", cost_usd: 1 },
+  ];
+  const r = inSessionDispatched(events, policy, { totals: { models_used: ["claude-sonnet-5", "gemini-3.7-flash"] } }, 9, { claudeCliScanned: true });
+  assert.deepEqual([r.cost, r.count, r.consistent], [6.5, 2, true]);
+  assert.equal(inSessionDispatched(events, policy, {}, 9, { claudeCliScanned: false }).cost, 0, "an unscanned worker session subtracts nothing");
+  // A logged share is never more than the event's own cost.
+  assert.equal(inSessionDispatched([{ ...events[0], transcript_logged_cost_usd: 7 }], policy, {}, 6, { claudeCliScanned: true }).cost, 6);
+});
+
 test("filesForSession: pins to the receipt's session when a file carries the id, falls back to everything otherwise", async () => {
   const { filesForSession } = await helpers();
   const files = ["/t/aaaa-1111.jsonl", "/t/bbbb-2222.jsonl", "/t/aaaa-1111/subagents/x.jsonl"];

@@ -117,6 +117,13 @@ export interface TranscriptModelWrites {
    * no single price is provable for that message, so the model is unpriced.
    */
   modifier_conflicts: string[];
+  /**
+   * The model's other logged tokens, by the collector's rules: input and cache
+   * reads from each message's first line, output from its terminal
+   * (stop_reason) line, else the largest value any line recorded. With the
+   * writes above, this is what a collector scan of this transcript counts.
+   */
+  logged: { input: number; input_cached: number; output: number };
 }
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
@@ -125,11 +132,16 @@ const modelKey = (name: string): string => resolveModel(name)?.id ?? name;
 const MODIFIER_KEYS = ["speed", "service_tier", "inference_geo"] as const;
 type ModifierKey = (typeof MODIFIER_KEYS)[number];
 
-/** One transcript message's model and the request modifiers merged from all of its lines. */
-interface MessageModifiers {
+/** One transcript message: its model, the request modifiers merged from all of its lines, and its logged tokens. */
+interface MessageRecord {
   key: string;
   values: Record<ModifierKey, unknown>;
   conflicts: Set<ModifierKey>;
+  input: number;
+  input_cached: number;
+  output: number;
+  /** Whether `output` came from the terminal (stop_reason) line. */
+  terminal: boolean;
 }
 
 /**
@@ -138,7 +150,7 @@ interface MessageModifiers {
  * leaves the message's value alone, a value fills an empty slot, and a
  * different value is a conflict.
  */
-function noteModifiers(rec: MessageModifiers, usage: Record<string, unknown>): void {
+function noteModifiers(rec: MessageRecord, usage: Record<string, unknown>): void {
   for (const k of MODIFIER_KEYS) {
     const v = usage[k];
     if (v == null) continue;
@@ -164,8 +176,8 @@ function noteModifiers(rec: MessageModifiers, usage: Record<string, unknown>): v
  */
 export function readWorkerTranscript(files: string[], sessionId: string): Map<string, TranscriptModelWrites> | null {
   const byModel = new Map<string, TranscriptModelWrites>();
-  const byId = new Map<string, MessageModifiers>();
-  const messages: MessageModifiers[] = [];
+  const byId = new Map<string, MessageRecord>();
+  const messages: MessageRecord[] = [];
   let readAny = false;
   for (const file of files) {
     let text: string;
@@ -194,10 +206,25 @@ export function readWorkerTranscript(files: string[], sessionId: string): Map<st
         // A repeat line of a message already counted: its cache fields repeat
         // the first line's, but it may be the only line that records `speed`.
         noteModifiers(counted, usage);
+        // Output is a streaming snapshot: the terminal line's value wins, else
+        // the largest seen, exactly as the collector books it.
+        const out = num(usage.output_tokens);
+        const terminal = msg.stop_reason != null;
+        if (!counted.terminal && (terminal || out > counted.output)) {
+          counted.output = out;
+          counted.terminal = terminal;
+        }
         continue;
       }
       const key = modelKey(String(msg.model ?? "(unlabeled)"));
-      const entry = byModel.get(key) ?? { write_5m: 0, write_1h: 0, split_known: true, modifiers: new Set<string>(), modifier_conflicts: [] };
+      const entry = byModel.get(key) ?? {
+        write_5m: 0,
+        write_1h: 0,
+        split_known: true,
+        modifiers: new Set<string>(),
+        modifier_conflicts: [],
+        logged: { input: 0, input_cached: 0, output: 0 },
+      };
       const written = num(usage.cache_creation_input_tokens);
       const split = usage.cache_creation;
       if (written > 0 && (!split || typeof split !== "object")) entry.split_known = false;
@@ -206,7 +233,15 @@ export function readWorkerTranscript(files: string[], sessionId: string): Map<st
       entry.write_5m += written - oneHour;
       byModel.set(key, entry);
       // A line with no string id is a message of its own.
-      const rec: MessageModifiers = { key, values: { speed: null, service_tier: null, inference_geo: null }, conflicts: new Set() };
+      const rec: MessageRecord = {
+        key,
+        values: { speed: null, service_tier: null, inference_geo: null },
+        conflicts: new Set(),
+        input: num(usage.input_tokens),
+        input_cached: num(usage.cache_read_input_tokens),
+        output: num(usage.output_tokens),
+        terminal: msg.stop_reason != null,
+      };
       noteModifiers(rec, usage);
       messages.push(rec);
       if (id !== null) byId.set(id, rec);
@@ -217,6 +252,9 @@ export function readWorkerTranscript(files: string[], sessionId: string): Map<st
     const entry = byModel.get(rec.key) as TranscriptModelWrites;
     entry.modifiers.add(JSON.stringify([rec.values.speed ?? null, rec.values.service_tier ?? null, rec.values.inference_geo ?? null]));
     for (const k of rec.conflicts) if (!entry.modifier_conflicts.includes(k)) entry.modifier_conflicts.push(k);
+    entry.logged.input += rec.input;
+    entry.logged.input_cached += rec.input_cached;
+    entry.logged.output += rec.output;
   }
   return readAny ? byModel : null;
 }
@@ -263,6 +301,17 @@ export interface WorkerLedger {
   /** `custom` when any model was custom-priced; absent when nothing was priced. */
   price_basis?: PriceBasis;
   cli_reported_cost_usd?: number;
+  /**
+   * Present when a worker transcript was read: the dollars of `cost_usd` for
+   * the tokens that transcript explains (each priced model's logged tokens,
+   * writes at their recorded TTL, at that model's price; never more than the
+   * model's billed tokens, never more than cost_usd). The rest of cost_usd is
+   * what the result billed that no transcript line logged: receipt-only side
+   * calls and unlogged tokens. A collector scan of the worker's transcript
+   * counts exactly this share, so it is the share the collector subtracts
+   * (review finding M4).
+   */
+  transcript_logged_cost_usd?: number;
   cli_mismatch: CliCostMismatch | null;
   /** Policy-block warnings from effectivePrice, for the caller to log. */
   warnings: string[];
@@ -361,6 +410,7 @@ export function priceClaudeCliResult(
   const warnings: string[] = [];
   const tokens = { input: 0, input_cached: 0, input_cache_write: 0, input_cache_write_1h: 0, output: 0 };
   let cost = 0;
+  let loggedCost = 0;
 
   for (const row of rows.values()) {
     const fromTranscript = opts.transcript?.get(row.key);
@@ -459,6 +509,22 @@ export function priceClaudeCliResult(
     }
     const rowCost = computeCostUsd(rowTokens, price.pricing);
     cost += rowCost;
+    if (fromTranscript) {
+      // The tokens this model's transcript explains, priced at the same card,
+      // with writes at the TTL each line recorded (as the collector prices
+      // them), each bucket capped at what the result billed.
+      const logged1h = Math.min(row.writes, fromTranscript.write_1h);
+      loggedCost += computeCostUsd(
+        {
+          input: Math.min(row.input, fromTranscript.logged.input),
+          input_cached: Math.min(row.input_cached, fromTranscript.logged.input_cached),
+          input_cache_write: Math.min(row.writes - logged1h, fromTranscript.write_5m),
+          input_cache_write_1h: logged1h,
+          output: Math.min(row.output, fromTranscript.logged.output),
+        },
+        price.pricing,
+      );
+    }
     perModel.push({ model: row.key, reported_as: row.names, tokens: rowTokens, price_basis: price.basis, cost_usd: rowCost, cli_cost_usd: cliCost, ttl_split: split, ...(assumed.length > 0 ? { assumed } : {}) });
   }
 
@@ -503,6 +569,7 @@ export function priceClaudeCliResult(
     ttl_split,
     ...(price_basis ? { price_basis } : {}),
     ...(cliTotal !== undefined ? { cli_reported_cost_usd: cliTotal } : {}),
+    ...(opts.transcript ? { transcript_logged_cost_usd: round6(Math.min(loggedCost, cost)) } : {}),
     cli_mismatch,
     warnings,
   };

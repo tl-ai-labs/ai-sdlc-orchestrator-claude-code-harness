@@ -547,6 +547,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           unpriced_models: att.unpriced_models?.length ? att.unpriced_models : undefined,
           cli_reported_cost_usd: att.cli_reported_cost_usd,
           ttl_split: att.ttl_split,
+          // claude-cli only: the dollars for the tokens the worker's own
+          // transcript explains. collect-orchestrator-usage.mjs subtracts only
+          // this share of an in-session worker, so its receipt-only side calls
+          // and unlogged tokens stay in the true total (review finding M4).
+          transcript_logged_cost_usd: att.transcript_logged_cost_usd,
         }));
         if (a.telemetry_path) {
           for (const ev of events) appendEvent(a.telemetry_path, ev);

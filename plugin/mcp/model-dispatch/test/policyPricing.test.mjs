@@ -180,7 +180,8 @@ test("T9 pre-flight server wiring: the tool prices every reachable model for tod
 
 test("T9 dispatch server wiring: every telemetry event carries the attempt's price fields", () => {
   const src = readFileSync(join(HERE, "..", "dist", "server.js"), "utf-8");
-  for (const field of ["price_basis: att.price_basis", "cli_reported_cost_usd: att.cli_reported_cost_usd", "ttl_split: att.ttl_split"]) {
+  // transcript_logged_cost_usd (review finding M4): the collector subtracts only this share of a claude-cli event.
+  for (const field of ["price_basis: att.price_basis", "cli_reported_cost_usd: att.cli_reported_cost_usd", "ttl_split: att.ttl_split", "transcript_logged_cost_usd: att.transcript_logged_cost_usd"]) {
     assert.ok(src.includes(field), `server.js must map ${field} into the event`);
   }
   assert.match(src, /unpriced_models: att\.unpriced_models\?\.length \? att\.unpriced_models : undefined/);

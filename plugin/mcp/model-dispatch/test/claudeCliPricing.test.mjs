@@ -122,6 +122,10 @@ test("T8 a claude-cli worker is priced from its ledger: modelUsage per model, TT
   assert.equal(attempt.price_basis, "list");
   assert.equal(attempt.ttl_split, "transcript");
   assert.deepEqual(attempt.unpriced_models, []);
+  // Review finding M4: the dollars for the tokens the worker's own transcript
+  // explains, which a transcript-priced collector scan also counts. The Haiku
+  // side call is billed but never logged, so it is outside this share.
+  assert.equal(attempt.transcript_logged_cost_usd, round6(OPUS_5_USD + OPUS_4_8_USD));
 
   // Tokens now cover every model the CLI billed (the top-level `usage` holds
   // the session model only), with the 5-minute and 1-hour writes disjoint.

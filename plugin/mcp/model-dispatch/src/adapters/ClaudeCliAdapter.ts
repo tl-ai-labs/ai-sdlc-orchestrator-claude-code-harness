@@ -165,6 +165,10 @@ export class ClaudeCliAdapter implements ModelAdapter {
       ...(ledger.price_basis ? { price_basis: ledger.price_basis } : {}),
       unpriced_models: ledger.unpriced_models,
       ...(ledger.cli_reported_cost_usd !== undefined ? { cli_reported_cost_usd: ledger.cli_reported_cost_usd } : {}),
+      // Present when the worker's transcript was read: the share of cost_usd
+      // its transcript explains, which is all the collector's scan can see of
+      // this worker, so the collector subtracts only this (review finding M4).
+      ...(ledger.transcript_logged_cost_usd !== undefined ? { transcript_logged_cost_usd: ledger.transcript_logged_cost_usd } : {}),
       ttl_split: ledger.ttl_split,
       per_model: ledger.per_model,
     };
