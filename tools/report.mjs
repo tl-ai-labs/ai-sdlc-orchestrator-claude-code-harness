@@ -177,7 +177,10 @@ const costSource = manifest.orchestrator_overhead?.cost_source ?? null;
 //   "receipt (transcript agrees…)"   collected before v0.7.3: every bucket equal, Claude Code's own dollars booked
 //   "receipt-only"                   no transcript message fell in the window; the receipt's token counts at the list stand
 //                                    alone (before v0.7.3, its dollars)
-//   "transcript (receipt covers only the last invocation…)"   a --resume continuation: only the last leg was verified
+//   "receipt for the last invocation (Anthropic token counts…)"   a --resume continuation (v0.7.3 Q1): the last leg's receipt
+//                                    booked at the price list, the earlier legs transcript-priced: partly verified
+//   "transcript (receipt covers only the last invocation…)"   the same case collected before Q1: only the last leg was
+//                                    checked, and the whole window was transcript-priced
 //   "transcript (receipt pending…)"  the headless capture has no result line yet
 //   "transcript (no receipt…)"       nothing to verify against
 //   "transcript (receipt-verified…)" / "transcript"   written by the collector BEFORE the exact rule (a 5% tolerance,
@@ -206,7 +209,12 @@ const unlogged = ohFields?.unlogged_billed != null && typeof ohFields.unlogged_b
 // Only a booked receipt writes unlogged_billed: the figure is the receipt's
 // token counts at the price list, not a transcript measurement, and the labels say so.
 const receiptBooked = unlogged != null;
-const overheadHow = receiptBooked ? "receipt tokens at the price list" : "transcript-measured";
+// Q1: a receipt booked for a resumed window's last invocation covers that
+// invocation only; the earlier invocations in the figure are still transcript-measured.
+const partlyBooked = typeof costSource === "string" && costSource.startsWith("receipt for the last invocation");
+const overheadHow = partlyBooked
+  ? "last invocation's receipt tokens at the price list, earlier invocations transcript-measured"
+  : receiptBooked ? "receipt tokens at the price list" : "transcript-measured";
 
 // Claude Code's own figure beside a v0.7.3 booked receipt: a check, never the
 // booked figure. Its distance from the booked figure is stated past 0.5%, the
@@ -222,7 +230,11 @@ const cliCheck = () => {
 
 const verifiedLine = costSource == null
   ? null
-  // v0.7.3 labels first: both also start with the pre-v0.7.3 prefixes below.
+  // v0.7.3 labels first: each also starts with a pre-v0.7.3 prefix below.
+  // Q1: a resumed window whose receipt was booked for its last invocation only.
+  // It starts with "receipt", so without this branch it would read as fully verified.
+  : costSource.startsWith("receipt for the last invocation")
+    ? `PARTLY VERIFIED — ${costSource}; the receipt's token counts are booked for the last invocation only, the earlier ones are transcript-priced${cliCheck() ? `; ${cliCheck()}` : ""}`
   : costSource.startsWith("receipt-only (Anthropic token counts")
     ? `Booked from the receipt's token counts at the price list (${costSource}); no transcript message fell inside the window to cross-check it${cliCheck() ? `, and ${cliCheck()}` : ""}`
   : costSource.startsWith("receipt (Anthropic token counts")

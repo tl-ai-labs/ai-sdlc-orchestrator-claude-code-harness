@@ -220,6 +220,15 @@ test("an approximate window says so, and a receipt-only figure is booked, not ca
 test("a receipt that covered only the last --resume leg is PARTLY VERIFIED; pending and absent receipts are provisional and unverified", () => {
   const partly = withSource("transcript (receipt covers only the last invocation, verified +0.4%; 1 earlier invocation(s) unverified)", { receipt_cost_usd: 1.2 });
   assert.match(partly, /PARTLY VERIFIED — transcript \(receipt covers only the last invocation, verified \+0\.4%; 1 earlier invocation\(s\) unverified\); the receipt \(\$1\.2000\) bills only the last invocation/);
+  // Q1 (v0.7.3): the collector now books the last invocation's receipt at the list. That
+  // label starts with "receipt", so without its own branch it would read as fully verified.
+  const booked = withSource(
+    "receipt for the last invocation (Anthropic token counts priced at the price list); 19.9% of it billed but not logged; 1 earlier invocation(s) transcript-priced, unverified",
+    { receipt_cost_usd: 2.07555, receipt_cli_usd: 2.07555, cost_usd: 2.4256, unlogged_billed: { per_model: [], unpriced: [], cost_usd: 0.41265, pct_of_booked: 19.88 } },
+  );
+  assert.match(booked, /PARTLY VERIFIED — receipt for the last invocation \(Anthropic token counts priced at the price list\); 19\.9% of it billed but not logged; 1 earlier invocation\(s\) transcript-priced, unverified; the receipt's token counts are booked for the last invocation only, the earlier ones are transcript-priced/);
+  assert.doesNotMatch(booked, /Verified against/);
+  assert.match(booked, /last invocation's receipt tokens at the price list, earlier invocations transcript-measured/);
   const pending = withSource("transcript (receipt pending; provisional; approximate window)", { receipt_cost_usd: null });
   assert.match(pending, /PROVISIONAL — transcript \(receipt pending; provisional; approximate window\); the headless capture has no result line yet/);
   const none = withSource("transcript (no receipt; unverified)", { receipt_cost_usd: null });

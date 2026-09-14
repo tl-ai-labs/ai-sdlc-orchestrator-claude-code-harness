@@ -17,7 +17,9 @@
  *      pricing_override: true, exactly or with one [option]) and compared per
  *      model; a name that does not resolve is exit 3; a log
  *      bucket above the receipt, or a log model the receipt does not bill, takes
- *      the unchanged ABOVE path (the last invocation alone, else exit 3);
+ *      the ABOVE path: with a second human turn in the window, the last
+ *      invocation alone by rules 3 and 4 (Q1: booked for that invocation, the
+ *      earlier ones transcript-priced), else exit 3;
  *   3. log at or below the receipt on every bucket: the receipt is booked, as
  *      its token counts priced from the list: the logged part per message, the
  *      gap (receipt minus log, per bucket) at that model's logged cache-write
@@ -806,4 +808,184 @@ test("Q2 runModelResolver: the price list first; then a pricing_override model's
   }
   // Two override entries declaring one name are both named; which card bills is the pricer's decision (it refuses two different cards).
   assert.deepEqual(runModelResolver({ models: [gw, { ...gw, id: "gw2" }] }, pricesMod.resolveModel)(GATEWAY).declared_by, ["gw", "gw2"]);
+});
+
+// ── Q1: a resumed run, whose receipt bills only its last invocation ─────────
+//
+// Claude Code bills per invocation, and a runner's `--resume` continuation
+// restarts the bill, so a window holding two invocations is ABOVE the receipt
+// and the last invocation is checked alone. That check used to demand every
+// bucket equal: a last invocation that was BELOW the receipt (a call Claude
+// Code bills but never logs) was exit 3, and an equal one was written
+// transcript-priced. The last invocation now gets the main path's rule: below
+// or equal on every bucket books the receipt (its token counts at the list,
+// the gap in unlogged_billed); a bucket below also needs the last invocation to
+// be provably the receipt's (pinned to its session, opened at that invocation's
+// human turn, no later human turn, an exact close). Attribution is checked over
+// that invocation's helpers only. The earlier invocations stay
+// transcript-priced and labelled unverified.
+
+/**
+ * Session sess-r (run r-r). Earlier invocation, from the command turn at
+ * 10:00:00: two Opus 5 messages (in 10 / cached 200,000 / 1h writes 20,000 /
+ * out 2,000 together, $0.35005) and a helper a0000 whose transcript file is
+ * missing. Last invocation, from the resume turn at 10:02:00: two Opus 5
+ * messages (in 10 / 400,000 / 1h 40,000 / 4,000, $0.70005) and helper a3333 on
+ * Opus 4.8 (in 70 / 700,000 / 5m 70,000 / 7,000, $0.96285). The receipt bills
+ * the last invocation: Opus 5 exactly, Opus 4.8 at 100 / 1,000,000 / 100,000 /
+ * 10,000 ($1.3755 at the list), so $0.41265 of it is billed but not logged.
+ */
+function resumedRun({ receipt = {}, laterTurn = false, helperA3 = true } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "mmo-receipt-resumed-"));
+  const passDir = join(root, "pass"); mkdirSync(passDir);
+  const tDir = join(root, "transcripts");
+  const sub = join(tDir, "sess-r", "subagents");
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(join(root, "policy.yaml"), "version: 1\nname: h-policy\nmodels:\n  - id: driver\n    adapter: builtin-anthropic\n    model_name: claude-opus-4-8\nrules:\n  - default: driver\n");
+  writeFileSync(join(passDir, "manifest.json"), JSON.stringify({ pass: "r-r", policy_name: "h-policy", started_at: AT("10:00:20"), ended_at: AT("10:03:20"), totals: { dispatched_cost_usd: 0, models_used: [] } }));
+  writeFileSync(join(passDir, "telemetry.jsonl"), "");
+  mkdirSync(join(root, ".sdlc", "runs", "r-r"), { recursive: true });
+  writeFileSync(join(root, ".sdlc", "runs", "r-r", "orchestrator.log"), `MMO: ${AT("10:00:05")} INFO   run.start run_id=r-r mode=greenfield\nMMO: ${AT("10:04:00")} INFO   run.end run_id=r-r outcome=completed\n`);
+  const result = (ts, toolUseId, agentId) => JSON.stringify({ type: "user", timestamp: ts, sessionId: "sess-r", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId }] }, toolUseResult: { agentId } });
+  writeFileSync(join(tDir, "sess-r.jsonl"), [
+    human("sess-r", AT("10:00:00"), COMMAND.replace("--run-id=r-h", "--run-id=r-r")),
+    asst("sess-r", "e1", "claude-opus-5", usage(10, 100_000, 0, 10_000, 1_000), AT("10:00:10"), [{ type: "tool_use", id: "toolu_e", name: "Agent" }]),
+    result(AT("10:00:50"), "toolu_e", "a0000"),
+    asst("sess-r", "e2", "claude-opus-5", usage(0, 100_000, 0, 10_000, 1_000), AT("10:01:00")),
+    human("sess-r", AT("10:02:00"), "Continue the run from where it stopped."),
+    asst("sess-r", "s1", "claude-opus-5", usage(10, 200_000, 0, 20_000, 2_000), AT("10:02:10"), [{ type: "tool_use", id: "toolu_l", name: "Agent" }]),
+    result(AT("10:03:00"), "toolu_l", "a3333"),
+    asst("sess-r", "s2", "claude-opus-5", usage(0, 200_000, 0, 20_000, 2_000), AT("10:03:10")),
+    ...(laterTurn ? [human("sess-r", AT("11:00:00"), "one more thing"), asst("sess-r", "x1", "claude-opus-5", usage(5, 50_000, 0, 5_000, 500), AT("11:00:10"))] : []),
+  ].join("\n") + "\n");
+  if (helperA3) writeFileSync(join(sub, "agent-a3333.jsonl"), asst("sess-r", "h3", "claude-opus-4-8", usage(70, 700_000, 70_000, 0, 7_000), AT("10:02:30")) + "\n");
+  const opus5 = { inputTokens: 10, cacheReadInputTokens: 400_000, cacheCreationInputTokens: 40_000, outputTokens: 4_000, costUSD: 0.70005, ...(receipt.opus5 ?? {}) };
+  const opus48 = { inputTokens: 100, cacheReadInputTokens: 1_000_000, cacheCreationInputTokens: 100_000, outputTokens: 10_000, costUSD: 1.3755, ...(receipt.opus48 ?? {}) };
+  writeFileSync(join(passDir, "claude-session.json"), JSON.stringify({
+    type: "result",
+    ...(receipt.noSession ? {} : { session_id: "sess-r" }),
+    total_cost_usd: 2.07555,
+    usage: { input_tokens: 10, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 40_000, output_tokens: 4_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 40_000 } },
+    modelUsage: { "claude-opus-5[1m]": opus5, "claude-opus-4-8": opus48 },
+  }));
+  const run = () => exec([passDir, "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", tDir]);
+  return { run, passDir, manifest: () => readJson(join(passDir, "manifest.json")), rm: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+test("Q1: a resumed run whose last invocation is below the receipt and provably its invocation books the receipt for that invocation; the earlier one stays transcript-priced and unverified", () => {
+  const fix = resumedRun();
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    // The whole window is over the receipt: it also holds the earlier invocation.
+    assert.match(r.stdout, /claude-opus-5: in 20>10 · cached 600000>400000 · cache_write 60000>40000 · out 6000>4000 → over the receipt/);
+    assert.match(r.stdout, /last invocation \(from the human turn at 2026-09-10T10:02:00\.000Z, 1 earlier turn\(s\) in the window\):/);
+    assert.match(r.stdout, /claude-opus-4-8: in 70<100 · cached 700000<1000000 · cache_write 70000<100000 · out 7000≤10000 → short of the receipt/);
+    // $2.01295 logged (earlier $0.35005 + last $1.6629) + $0.41265 billed but not logged = $2.4256;
+    // the booked invocation is $2.07555, of which $0.41265 (19.9%) no transcript message recorded.
+    assert.match(r.stdout, /= \$2\.4256 \[receipt for the last invocation \(Anthropic token counts priced at the price list\); 19\.9% of it billed but not logged; 1 earlier invocation\(s\) transcript-priced, unverified\]/);
+    const o = fix.manifest().orchestrator_overhead;
+    assert.equal(o.cost_usd, 2.4256);
+    assert.equal(o.transcript_cost_usd, 2.01295);
+    assert.equal(o.unlogged_billed.cost_usd, 0.41265);
+    assert.equal(o.unlogged_billed.pct_of_booked, 19.88, "the share of the booked invocation");
+    assert.deepEqual(o.unlogged_billed.per_model.map((g) => [g.model, g.tokens, g.ttl_split]), [["claude-opus-4-8", { input: 30, input_cached: 300_000, input_cache_write: 30_000, output: 3_000 }, "logged mix"]]);
+    // cost_usd = transcript_cost_usd + unlogged_billed.cost_usd, as on the main path.
+    assert.equal(o.cost_usd, Math.round((o.transcript_cost_usd + o.unlogged_billed.cost_usd) * 1e6) / 1e6);
+    // Earlier invocation's logged tokens plus the receipt's: in 10 + 110, cached 200,000 + 1,400,000, writes 20,000 (1h) + 140,000 (40,000 of them 1h), out 2,000 + 14,000.
+    assert.deepEqual([o.input_tokens, o.input_tokens_cached, o.input_tokens_cache_write, o.input_tokens_cache_write_1h, o.output_tokens], [120, 1_600_000, 160_000, 60_000, 16_000]);
+    assert.equal(o.receipt_cli_usd, 2.07555);
+    assert.equal(o.pricing_complete, true);
+    // Attribution covers the booked invocation's helpers: a3333 has its file. The earlier
+    // invocation's missing a0000 is in no booked figure, so it is not this check's gap.
+    assert.equal(o.attribution_complete, true);
+    assert.deepEqual([o.missing_helper_ids, o.unreferenced_helper_files], [[], []]);
+    assert.match(r.stdout, /last invocation helpers: 1 named by Agent\/Task results, 1 transcript file\(s\) → attribution complete/);
+  } finally { fix.rm(); }
+});
+
+test("Q1: a helper file missing from the last invocation is still booked, and the scoped attribution names only that helper", () => {
+  const fix = resumedRun({ helperA3: false });
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const o = fix.manifest().orchestrator_overhead;
+    // The receipt is the bill: the unread helper's whole Opus 4.8 count is in the gap ($1.3755).
+    assert.equal(o.unlogged_billed.cost_usd, 1.3755);
+    assert.equal(o.cost_usd, 2.4256, "the total is the same either way");
+    assert.equal(o.attribution_complete, false);
+    assert.deepEqual(o.missing_helper_ids, ["a3333"], "a0000 belongs to the earlier invocation");
+  } finally { fix.rm(); }
+});
+
+test("Q1 refusal: a last invocation below the receipt with a human turn after the window cannot be proven to be the receipt's invocation — exit 3, nothing written", () => {
+  const fix = resumedRun({ laterTurn: true });
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stderr, /the receipt matches neither the whole window nor its last invocation/);
+    assert.match(r.stderr, /last invocation \(from 2026-09-10T10:02:00\.000Z\) is BELOW the receipt/);
+    assert.match(r.stderr, /cannot be proven to be the receipt's invocation: 1 human turn\(s\) follow the window \(from 2026-09-10T11:00:00\.000Z\)/);
+    assert.equal(fix.manifest().orchestrator_overhead, undefined, "nothing written");
+  } finally { fix.rm(); }
+});
+
+test("Q1 refusal: a last invocation below a receipt that names no session is exit 3", () => {
+  const fix = resumedRun({ receipt: { noSession: true } });
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stderr, /cannot be proven to be the receipt's invocation: the receipt names no session/);
+    assert.equal(fix.manifest().orchestrator_overhead, undefined, "nothing written");
+  } finally { fix.rm(); }
+});
+
+test("Q1 refusal: a last invocation ABOVE the receipt is exit 3 even when it is provably the receipt's invocation", () => {
+  const fix = resumedRun({ receipt: { opus5: { cacheReadInputTokens: 390_000 } } });
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.match(r.stderr, /the receipt matches neither the whole window nor its last invocation/);
+    assert.match(r.stderr, /claude-opus-5 input_cached: transcript 400000 > receipt 390000/);
+    assert.equal(fix.manifest().orchestrator_overhead, undefined, "nothing written");
+  } finally { fix.rm(); }
+});
+
+test("Q1 provableInvocation: a window opened at the last invocation's own human turn counts as opened at the invocation", async () => {
+  const { provableInvocation, LAST_INVOCATION_ANCHOR } = await helpers();
+  assert.equal(typeof LAST_INVOCATION_ANCHOR, "string");
+  const ok = { receiptSessionId: "s", pinnedId: "s", startAnchor: LAST_INVOCATION_ANCHOR, humanTurnsInWindow: 1, laterHumanTurns: 0, laterHumanTurnFrom: null, windowExact: true, lowerBound: false };
+  assert.deepEqual(provableInvocation(ok), { provable: true, reasons: [] });
+  assert.match(provableInvocation({ ...ok, laterHumanTurns: 1, laterHumanTurnFrom: "x" }).reasons.join("; "), /follow the window/);
+  assert.match(provableInvocation({ ...ok, windowExact: false }).reasons.join("; "), /approximate/);
+});
+
+test("Q1 helperAttribution: with a time scope, only Agent/Task uses and results inside it name helpers, and only helper files that start inside it are compared", async () => {
+  const { helperAttribution } = await helpers();
+  const dir = mkdtempSync(join(tmpdir(), "mmo-attrib-scope-"));
+  try {
+    const sub = join(dir, "sess", "subagents");
+    mkdirSync(sub, { recursive: true });
+    const tu = (id) => ({ type: "tool_use", id, name: "Agent" });
+    const res = (ts, id, agentId) => JSON.stringify({ type: "user", timestamp: ts, message: { content: [{ type: "tool_result", tool_use_id: id }] }, toolUseResult: { agentId } });
+    const sessionFile = join(dir, "sess.jsonl");
+    writeFileSync(sessionFile, [
+      JSON.stringify({ type: "assistant", timestamp: AT("10:00:10"), message: { id: "m1", content: [tu("t_old")] } }),
+      res(AT("10:00:50"), "t_old", "aold"),
+      JSON.stringify({ type: "assistant", timestamp: AT("10:02:10"), message: { id: "m2", content: [tu("t_new")] } }),
+      res(AT("10:03:00"), "t_new", "anew"),
+    ].join("\n") + "\n");
+    const file = (id, ts) => { const p = join(sub, `agent-${id}.jsonl`); writeFileSync(p, JSON.stringify({ type: "assistant", timestamp: ts, message: { id: `h-${id}` } }) + "\n"); return p; };
+    const files = [file("anew", AT("10:02:30")), file("astray", AT("10:00:30"))];
+    const whole = helperAttribution(sessionFile, files);
+    assert.deepEqual([whole.complete, whole.missing_helper_ids, whole.unreferenced_helper_files.length], [false, ["aold"], 1]);
+    const scoped = helperAttribution(sessionFile, files, { fromMs: Date.parse(AT("10:02:00")), toMs: Number.POSITIVE_INFINITY });
+    assert.deepEqual(scoped, { complete: true, referenced: ["anew"], missing_helper_ids: [], unreferenced_helper_files: [] });
+    // A helper file with no timestamp cannot be placed: it is compared, so it can only make the check incomplete.
+    const undated = join(sub, "agent-aundated.jsonl");
+    writeFileSync(undated, JSON.stringify({ type: "assistant", message: { id: "h-u" } }) + "\n");
+    const withUndated = helperAttribution(sessionFile, [...files, undated], { fromMs: Date.parse(AT("10:02:00")), toMs: Number.POSITIVE_INFINITY });
+    assert.equal(withUndated.complete, false);
+    assert.deepEqual(withUndated.unreferenced_helper_files, [undated]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

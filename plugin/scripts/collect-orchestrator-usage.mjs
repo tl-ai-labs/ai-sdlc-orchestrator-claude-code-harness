@@ -154,11 +154,23 @@
  *         bill: the window holds messages the receipt never billed. Claude
  *         Code bills per invocation and a runner's `--resume` continuations
  *         each restart the bill, so when the pinned session file carries two
- *         or more human turns inside the window the LAST invocation alone is
- *         checked, every bucket equal (output at most): agreement writes the
- *         whole-window transcript figure as "transcript (receipt covers only
- *         the last invocation, verified; N earlier invocation(s)
- *         unverified)"; anything else is exit 3.
+ *         or more human turns inside the window the LAST invocation alone
+ *         (from the last human turn to the window's close) is checked by d
+ *         and e below, with that turn as its opening anchor: no bucket above,
+ *         and either every bucket equal or the invocation provable (pinned to
+ *         the receipt's session, opened at that human turn, no later human
+ *         turn, an exact close), books the receipt for that invocation — its
+ *         token counts at the list, its gap in `unlogged_billed`
+ *         (`pct_of_booked` is the gap's share of that invocation), attribution
+ *         checked over that invocation's helpers only — and adds the earlier
+ *         invocations transcript-priced: "receipt for the last invocation
+ *         (Anthropic token counts priced at the price list); N% of it billed
+ *         but not logged; K earlier invocation(s) transcript-priced,
+ *         unverified". Anything else is exit 3. (Before v0.7.3 Q1 the last
+ *         invocation had to equal the receipt on every bucket, and the whole
+ *         window was written transcript-priced as "transcript (receipt covers
+ *         only the last invocation, verified; N earlier invocation(s)
+ *         unverified)".)
  *      d. AT OR BELOW on every bucket — the receipt is BOOKED as its token
  *         counts priced from the list (bookReceiptTokens), never as Claude
  *         Code's own dollars (its price table priced Opus 5 at Sonnet rates
@@ -265,7 +277,9 @@
  * project-root/transcripts-dir — nothing is written), or --strict-pricing
  * with a token the price list cannot price. 3 = the transcript and the
  * receipt cannot be reconciled — the transcript is over the receipt with no
- * continuation turn to account for the excess, or short of it in a window
+ * continuation turn to account for the excess, or its last invocation is over
+ * the receipt, or short of it without proof that it is the receipt's
+ * invocation (fact 8c), or the transcript is short of the receipt in a window
  * that cannot be proven to be the receipt's invocation, or a model name on
  * either side is neither on the price list nor a `model_name` the run's policy
  * declares under `pricing_override: true`, or the receipt names a session other
@@ -621,17 +635,49 @@ export function sessionHelperFiles(dir, sessionId) {
  * line in the result text (no toolUseResult on nested results). Results of any
  * other tool are ignored, so a Bash output that prints "agentId:" names nothing.
  * `complete` is true iff the named ids equal the ids of `helperFiles`.
+ *
+ * Q1 (v0.7.3): `fromMs` / `toMs` scope the check to one invocation, for a
+ * resumed window whose receipt bills only its last invocation. Only session-file
+ * lines timestamped inside [fromMs, toMs) name helpers (a line with no parseable
+ * timestamp cannot be placed and is left out), and only helper files whose
+ * earliest timestamp falls inside it are compared: a helper runs after the tool
+ * use that spawns it, so it starts inside the invocation that spawned it. A
+ * helper file with no parseable timestamp cannot be placed either, so it is
+ * compared; a file nothing in scope names then makes the check incomplete,
+ * never falsely complete. Without the two bounds the whole session is checked,
+ * as before.
  */
-export function helperAttribution(sessionFile, helperFiles, { root } = {}) {
-  const objects = [];
-  const agentUses = new Set();
-  for (const f of [sessionFile, ...helperFiles]) {
+export function helperAttribution(sessionFile, helperFiles, { root, fromMs = null, toMs = null } = {}) {
+  const scoped = fromMs != null;
+  const inScope = (ms) => ms >= fromMs && ms < (toMs ?? Number.POSITIVE_INFINITY);
+  const readObjects = (f) => {
+    const out = [];
     let lines;
-    try { lines = readFileSync(f, "utf-8").split("\n"); } catch { continue; }
+    try { lines = readFileSync(f, "utf-8").split("\n"); } catch { return null; }
     for (const line of lines) {
       if (!line.trim()) continue;
-      let o;
-      try { o = JSON.parse(line); } catch { continue; }
+      try { out.push(JSON.parse(line)); } catch { /* not a JSON line */ }
+    }
+    return out;
+  };
+  const objects = [];
+  const agentUses = new Set();
+  const comparedHelperFiles = [];
+  for (const f of [sessionFile, ...helperFiles]) {
+    let fileObjects = readObjects(f);
+    if (fileObjects === null) {
+      // An unreadable helper file is still a file the session wrote; compare it as before.
+      if (f !== sessionFile) comparedHelperFiles.push(f);
+      continue;
+    }
+    if (scoped && f === sessionFile) {
+      fileObjects = fileObjects.filter((o) => inScope(Date.parse(o?.timestamp)));
+    } else if (scoped) {
+      const stamps = fileObjects.map((o) => Date.parse(o?.timestamp)).filter(Number.isFinite);
+      if (stamps.length > 0 && !inScope(Math.min(...stamps))) continue;
+    }
+    if (f !== sessionFile) comparedHelperFiles.push(f);
+    for (const o of fileObjects) {
       objects.push(o);
       if (o?.type === "assistant" && Array.isArray(o.message?.content)) {
         for (const b of o.message.content) {
@@ -655,7 +701,8 @@ export function helperAttribution(sessionFile, helperFiles, { root } = {}) {
     }
   }
   const fileById = new Map();
-  for (const f of helperFiles) {
+  // Scoped (Q1): only the helper files placed inside the invocation are compared.
+  for (const f of comparedHelperFiles) {
     const id = HELPER_FILE.exec(basename(f))?.[1];
     if (id) fileById.set(id, f);
   }
@@ -691,7 +738,10 @@ export function provableInvocation({ receiptSessionId, pinnedId, startAnchor, hu
   if (!receiptSessionId) reasons.push("the receipt names no session");
   else if (pinnedId !== receiptSessionId) reasons.push(`the scan is not pinned to the receipt's session ${receiptSessionId}${pinnedId ? ` (it is pinned to ${pinnedId})` : ""}`);
   if (lowerBound) reasons.push("the window opens at the first dispatch (a lower bound)");
-  else if (startAnchor !== "command turn") reasons.push(`the window opens at ${startAnchor}, not at the run's command turn`);
+  // Q1: the last invocation of a resumed window opens at its own human turn,
+  // which is where that invocation's bill begins, exactly as the command turn is
+  // for a single invocation. Both are real events in the pinned session file.
+  else if (startAnchor !== "command turn" && startAnchor !== LAST_INVOCATION_ANCHOR) reasons.push(`the window opens at ${startAnchor}, not at the run's command turn`);
   if (humanTurnsInWindow > 1) reasons.push(`${humanTurnsInWindow} human turns fall inside the window, so the receipt may bill only the last invocation`);
   if (laterHumanTurns > 0) {
     reasons.push(
@@ -702,6 +752,15 @@ export function provableInvocation({ receiptSessionId, pinnedId, startAnchor, hu
   if (!windowExact) reasons.push("the window is approximate");
   return { provable: reasons.length === 0, reasons };
 }
+
+/**
+ * Q1 (v0.7.3): the opening anchor of the last invocation of a resumed window,
+ * as provableInvocation reads it. A runner's `--resume` continuation leaves a
+ * human turn in the session file, and the invocation the receipt bills begins
+ * at that turn, so a last invocation checked alone opens at an exact event just
+ * as a single invocation opens at its command turn.
+ */
+export const LAST_INVOCATION_ANCHOR = "the last invocation's human turn";
 
 /** Removes float noise from a blended rate (13.125000000000002 → 13.125); display only, costs use the unrounded rate. */
 const roundRate = (n) => Math.round(n * 1e9) / 1e9;
@@ -2099,7 +2158,9 @@ export async function main(argv = process.argv.slice(2)) {
   // pinned to a session file can check it; the result is recorded whatever
   // the cost source (header, fact 8).
   const helperFiles = pinned && mainFile && pinnedId ? sessionHelperFiles(tDir, pinnedId) : [];
-  const attribution = pinned && mainFile && pinnedId ? helperAttribution(mainFile, helperFiles, { root: tDir }) : null;
+  // `let`: a receipt booked for the last invocation of a resumed window replaces
+  // this whole-session check with one scoped to that invocation (Q1).
+  let attribution = pinned && mainFile && pinnedId ? helperAttribution(mainFile, helperFiles, { root: tDir }) : null;
   if (attribution) {
     console.log(
       `helpers: ${attribution.referenced.length} named by Agent/Task results, ${helperFiles.length} transcript file(s) → ` +
@@ -2156,14 +2217,29 @@ export async function main(argv = process.argv.slice(2)) {
   const referenceEndMs = Number.isFinite(lastMessageMs) ? lastMessageMs : finiteEnd ? Math.min(windowEndMs, collectedAtMs) : lastDispatchMs;
   const referenceTimes = [isoOf(windowStartMs), isoOf(Math.max(windowStartMs, referenceEndMs))];
 
-  /** Books the receipt's token counts at the list (bookReceiptTokens) into cost and the token fields, and prints the gap. */
-  const book = () => {
-    booking = bookReceiptTokens({ receipt: names.receipt, priced, pricer, referenceTimes, receiptUsage: receipt.usage });
-    for (const k of ["input", "input_cached", "input_cache_write", "input_cache_write_5m", "input_cache_write_1h", "output"]) tokens[k] = booking.tokens[k];
-    cost = booking.cost_usd;
+  /**
+   * Books the receipt's token counts at the list (bookReceiptTokens) for the
+   * part of the window the receipt bills, and prints the gap. The part is the
+   * whole window by default; for a resumed window it is the last invocation
+   * (Q1), passed as its re-keyed receipt map, its priced messages, its token
+   * counts and its reference days. Either way:
+   *   - the token fields become the window's minus the part's logged tokens plus
+   *     the receipt's (for the whole window, exactly the receipt's, as before);
+   *   - cost_usd = transcript_cost_usd + unlogged_billed.cost_usd, because the
+   *     logged part of the booking is the part's own per-message figure, which
+   *     the whole-window transcript figure already holds (for the whole window
+   *     this is bookReceiptTokens' own cost, as before).
+   * Returns the gap's share of the booked part, in percent.
+   */
+  const book = ({ receiptMap = names.receipt, part = priced, partTokens = { ...tokens }, refTimes = referenceTimes, label = "  booked" } = {}) => {
+    booking = bookReceiptTokens({ receipt: receiptMap, priced: part, pricer, referenceTimes: refTimes, receiptUsage: receipt.usage });
+    for (const k of ["input", "input_cached", "input_cache_write", "input_cache_write_5m", "input_cache_write_1h", "output"]) {
+      tokens[k] = tokens[k] - partTokens[k] + booking.tokens[k];
+    }
+    cost = pricingMod.round6(transcriptCost + booking.unlogged_billed.cost_usd);
     const share = booking.cost_usd > 0 ? (booking.unlogged_billed.cost_usd / booking.cost_usd) * 100 : 0;
     console.log(
-      `  booked: logged $${booking.logged_cost_usd} + billed but not logged $${booking.unlogged_billed.cost_usd} ` +
+      `${label}: logged $${booking.logged_cost_usd} + billed but not logged $${booking.unlogged_billed.cost_usd} ` +
         `(${share.toFixed(1)}%) = $${booking.cost_usd}`
     );
     for (const g of booking.unlogged_billed.per_model) {
@@ -2286,31 +2362,119 @@ export async function main(argv = process.argv.slice(2)) {
       const turnsInWindow = mainTurns.filter((t) => t.ms >= windowStartMs && t.ms < windowEndMs);
       if (turnsInWindow.length >= 2) {
         const last = turnsInWindow[turnsInWindow.length - 1];
+        const earlierCount = turnsInWindow.length - 1;
         const lastInv = sumTranscriptUsage(files, last.ms, effectiveEndMs, { roleOf });
         // The last leg is compared per price-list model too (header, fact 8).
         const lastNames = resolveBucketNames(lastInv.perModel, receipt.models, resolveName);
         const cmpLast = compareBuckets(lastNames.transcript, lastNames.receipt);
-        console.log(`  last invocation (from the human turn at ${last.iso}, ${turnsInWindow.length - 1} earlier turn(s) in the window):`);
+        console.log(`  last invocation (from the human turn at ${last.iso}, ${earlierCount} earlier turn(s) in the window):`);
         for (const l of cmpLast.lines) console.log(`    ${l}`);
-        if (!cmpLast.ok) {
+        // Priced per message like the whole window, so no policy rate is needed.
+        const pricedLast = priceMessages(lastInv.messages, pricer);
+        const lastPct = fmtPct((pricedLast.cost_usd - receipt.total_cost_usd) / receipt.total_cost_usd);
+        console.log(`    transcript $${pricedLast.cost_usd} vs receipt $${receipt.total_cost_usd} → ${lastPct} (informational; the decision is per token bucket)`);
+        // Q1 (v0.7.3): the last invocation gets the main path's rule (header,
+        // fact 8c-d), where it used to need every bucket EQUAL. Claude Code bills
+        // calls it never logs in an invocation (2.3% and 22% on two measured
+        // single-invocation runs), and nothing about a --resume leg stops that,
+        // so equality refused a last leg with such calls with exit 3, and an
+        // equal leg was written transcript-priced while its receipt sat unused. Now:
+        //   - a bucket ABOVE the receipt: exit 3, as before;
+        //   - a bucket BELOW: booked only when the last invocation is provably
+        //     the receipt's invocation (pinned to the receipt's session, opened
+        //     at its own human turn, no later human turn, an exact close);
+        //   - otherwise (every bucket equal, output at most): booked, the
+        //     equality being its own proof, as on the main path.
+        // Booking prices the receipt's tokens at the list for that invocation
+        // only; the earlier invocations stay transcript-priced and unverified.
+        if (cmpLast.above.length > 0) {
           console.error(
             `collect-orchestrator-usage FAILED: the receipt matches neither the whole window nor its last invocation. ` +
               `Whole window: ${cmp.above.join("; ")}. Last invocation (from ${last.iso}): ` +
-              `${[...cmpLast.above, ...cmpLast.short].join("; ") || "no bucket differs"}. Nothing was written; no number is guessed.`
+              `${[...cmpLast.above, ...cmpLast.short].join("; ")}. Nothing was written; no number is guessed.`
           );
           return 3;
         }
-        // Priced per message like the whole window, so no policy rate is needed.
-        const lastCost = priceMessages(lastInv.messages, pricer).cost_usd;
-        const lastPct = fmtPct((lastCost - receipt.total_cost_usd) / receipt.total_cost_usd);
-        console.log(`    transcript $${lastCost} vs receipt $${receipt.total_cost_usd} → ${lastPct}; the last invocation agrees with the receipt`);
-        cost = transcriptCost;
-        costSource = `transcript (receipt covers only the last invocation, verified ${lastPct}; ${turnsInWindow.length - 1} earlier invocation(s) unverified${transcriptTags})`;
+        if (cmpLast.short.length > 0) {
+          // Human turns at or after the window's close, exactly as the main path counts them.
+          const laterTurns = mainTurns.filter((t) => t.ms >= windowEndMs);
+          const proof = provableInvocation({
+            receiptSessionId: receipt.session_id,
+            pinnedId,
+            startAnchor: LAST_INVOCATION_ANCHOR,
+            // 1 by construction (last is the window's last human turn); counted, not assumed.
+            humanTurnsInWindow: mainTurns.filter((t) => t.ms >= last.ms && t.ms < windowEndMs).length,
+            laterHumanTurns: laterTurns.length,
+            laterHumanTurnFrom: laterTurns[0]?.iso ?? null,
+            // The last invocation opens at a human turn, which is exact whatever
+            // anchored the whole window's opening, so only the close can be approximate.
+            windowExact: endExact,
+            lowerBound: false,
+          });
+          if (!proof.provable) {
+            console.error(
+              `collect-orchestrator-usage FAILED: the receipt matches neither the whole window nor its last invocation. ` +
+                `Whole window: ${cmp.above.join("; ")}. The last invocation (from ${last.iso}) is BELOW the receipt ` +
+                `(${cmpLast.short.join("; ")}) and cannot be proven to be the receipt's invocation: ${proof.reasons.join("; ")}. ` +
+                `A last invocation below the receipt is booked only when it provably is that invocation (pinned to the receipt's ` +
+                `session, opened at its own human turn, no later human turn, an exact close), because the gap is then calls ` +
+                `Claude Code bills but never logs. Nothing was written; no number is guessed.`
+            );
+            return 3;
+          }
+          console.log(
+            `    below the receipt, and the last invocation is provably its invocation (session ${pinnedId}, opened at its human ` +
+              `turn ${last.iso}, no later human turn, exact close): the difference is billed but not logged`
+          );
+        }
+        // Attribution over the booked invocation's helpers only: a helper file
+        // missing from an earlier invocation is in no booked figure, while one
+        // missing from this invocation moves its tokens into unlogged_billed.
+        if (pinned && mainFile && pinnedId) {
+          attribution = helperAttribution(mainFile, helperFiles, { root: tDir, fromMs: last.ms, toMs: windowEndMs });
+          const compared = attribution.referenced.length - attribution.missing_helper_ids.length + attribution.unreferenced_helper_files.length;
+          console.log(
+            `    last invocation helpers: ${attribution.referenced.length} named by Agent/Task results, ${compared} transcript file(s) → ` +
+              `attribution ${attribution.complete ? "complete" : "INCOMPLETE"}`
+          );
+          if (!attribution.complete) {
+            console.error(
+              `NOTE: the last invocation's attribution is incomplete — ` +
+                [
+                  ...attribution.missing_helper_ids.map((id) => `helper ${id} named by an Agent/Task result has no transcript file`),
+                  ...attribution.unreferenced_helper_files.map((f) => `${f} is named by no Agent/Task result`),
+                ].join("; ") +
+                `. The booked total is unaffected, but a missing helper's tokens are counted in unlogged_billed instead of per_model.`
+            );
+          }
+        }
+        const lastMsgMs = lastInv.messages.reduce((mx, m) => {
+          const t = Date.parse(m.timestamp);
+          return Number.isFinite(t) && t > mx ? t : mx;
+        }, Number.NEGATIVE_INFINITY);
+        const lastRefEnd = Number.isFinite(lastMsgMs) ? lastMsgMs : referenceEndMs;
+        const share = book({
+          receiptMap: lastNames.receipt,
+          part: pricedLast,
+          partTokens: lastInv.tokens,
+          refTimes: [isoOf(last.ms), isoOf(Math.max(last.ms, lastRefEnd))],
+          label: "    last invocation booked",
+        });
+        if (strictRefusesBooking()) return 1;
+        const earlierCost = pricingMod.round6(transcriptCost - pricedLast.cost_usd);
+        console.log(`    + ${earlierCount} earlier invocation(s) transcript-priced $${earlierCost} = $${cost}`);
+        costSource =
+          `receipt for the last invocation (Anthropic token counts priced at the price list${customTag()}); ${share.toFixed(1)}% of it ` +
+          `billed but not logged; ${earlierCount} earlier invocation(s) transcript-priced, unverified${approxTag}` +
+          (booking.complete && priced.complete ? "" : "; INCOMPLETE — unpriced tokens excluded");
+        pricingBasis +=
+          "; the last invocation's receipt tokens that no transcript message recorded at each model's logged cache-write and modifier mix (unlogged_billed)";
         console.error(
-          `NOTE: the receipt bills only the last invocation (from the human turn at ${last.iso}); the ${turnsInWindow.length - 1} ` +
-            `earlier invocation(s) in the window are transcript-priced and unverified. The whole-window transcript figure ` +
-            `($${transcriptCost}) is written. A receipt for each invocation would verify them all.`
+          `NOTE: the receipt bills only the last invocation (from the human turn at ${last.iso}): its token counts are booked at ` +
+            `the price list ($${booking.cost_usd}). The ${earlierCount} earlier invocation(s) in the window are transcript-priced and ` +
+            `unverified ($${earlierCost}). A receipt for each invocation would verify them all.`
         );
+        noteDrift();
       } else {
         console.error(
           `collect-orchestrator-usage FAILED: the window holds messages the receipt never billed (${cmp.above.join("; ")}) ` +
@@ -2504,7 +2668,7 @@ export async function main(argv = process.argv.slice(2)) {
     // attribution picture. Same values as the manifest block below;
     // TelemetryEvent declares every field written here
     // (orchestratorOverheadFields.test.mjs type-checks this output).
-    pricing_complete: booking ? booking.complete : priced.complete,
+    pricing_complete: booking ? booking.complete && priced.complete : priced.complete,
     price_list_verified: pricesMod.PRICE_LIST_VERIFIED,
     missing_helper_ids: attribution?.missing_helper_ids ?? [],
     unreferenced_helper_files: attribution?.unreferenced_helper_files ?? [],
@@ -2552,7 +2716,7 @@ export async function main(argv = process.argv.slice(2)) {
     per_model: priced.per_model,
     unpriced: priced.unpriced,
     // A booked receipt is complete only when its unlogged gap was priced too.
-    pricing_complete: booking ? booking.complete : priced.complete,
+    pricing_complete: booking ? booking.complete && priced.complete : priced.complete,
     price_list_verified: pricesMod.PRICE_LIST_VERIFIED,
     // Header, fact 8. receipt_cli_usd is Claude Code's own total, never booked
     // (receipt_cost_usd keeps the same value under its old name). unlogged_billed

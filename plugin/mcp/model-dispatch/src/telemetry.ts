@@ -150,7 +150,12 @@ export interface OrchestratorUnloggedBilled {
   per_model: OrchestratorUnloggedModel[];
   unpriced: OrchestratorUnloggedUnpriced[];
   cost_usd: number;
-  /** cost_usd as a percentage of the booked overhead, to 2 decimals. */
+  /**
+   * cost_usd as a percentage of the booked receipt's figure, to 2 decimals: the
+   * whole overhead, or, for a resumed window booked for its last invocation
+   * (v0.7.3 Q1), that invocation's booked figure, which excludes the earlier
+   * transcript-priced invocations.
+   */
   pct_of_booked: number;
 }
 
@@ -207,6 +212,11 @@ export interface Manifest {
      * receipt's token counts are booked at the list and N% of the figure is
      * receipt tokens no transcript message recorded (`unlogged_billed`);
      * "receipt-only (Anthropic token counts priced at the price list)";
+     * "receipt for the last invocation (Anthropic token counts priced at the
+     * price list); N% of it billed but not logged; K earlier invocation(s)
+     * transcript-priced, unverified" — a resumed window (v0.7.3 Q1): the last
+     * invocation's receipt is booked by the same rule, and the earlier
+     * invocations are added transcript-priced; before Q1 that window was
      * "transcript (receipt covers only the last invocation, verified ±x%; N
      * earlier invocation(s) unverified)"; "transcript (receipt pending;
      * provisional)"; "transcript (no receipt; unverified)". Collected before
@@ -237,6 +247,11 @@ export interface Manifest {
      * when the scan is not pinned to a session file.
      */
     attribution_complete?: boolean | null;
+    // v0.7.3 Q1: for a resumed window whose receipt is booked for its last
+    // invocation only, attribution_complete, missing_helper_ids and
+    // unreferenced_helper_files cover that invocation's helpers only (the
+    // helper files that start inside it, and the Agent/Task results it wrote),
+    // because only its helpers' tokens can land in unlogged_billed.
     /** Helper ids named by an Agent/Task result with no transcript file. */
     missing_helper_ids?: string[];
     /** Helper transcript files (relative to the transcript directory) no Agent/Task result names. */

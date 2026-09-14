@@ -1092,7 +1092,13 @@ test("SHORT: below the receipt with a receipt that names no session — the wind
   } finally { fix.rm(); }
 });
 
-test("two invocations on one session: the receipt covers only the last leg, which verifies; the whole window is written transcript-priced and labelled so", () => {
+test("two invocations on one session: the receipt covers only the last leg, which equals it; that leg's receipt is booked and the earlier one stays transcript-priced, labelled so", () => {
+  // RE-DERIVED (Q1, v0.7.3): the last leg gets the main path's rule, so a leg
+  // EQUAL to the receipt books it (equality is its own proof; this receipt names
+  // no session, which only a leg BELOW the receipt would need). Same $30: the
+  // leg's logged $10 plus a zero gap, plus the earlier $20 transcript-priced.
+  // The label was "transcript (receipt covers only the last invocation,
+  // verified +0.0%; 1 earlier invocation(s) unverified)".
   const [mOld, mSetup, mPre, mIn] = ANCHOR_LINES;
   const lastLeg = { total_cost_usd: 10, modelUsage: { "claude-opus-4-8": { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 1_000_000, costUSD: 10 } } };
   const fix = anchorRun([commandTurn(), mOld, mSetup, mPre, uLine("2026-09-05T18:58:00.000Z", "Continue the run from where it stopped."), mIn], lastLeg);
@@ -1103,8 +1109,8 @@ test("two invocations on one session: the receipt covers only the last leg, whic
     assert.match(r.stdout, /claude-opus-4-8: in 0=0 · cached 0=0 · cache_write 0=0 · out 3000000>1000000 → over the receipt/);
     assert.match(r.stdout, /last invocation \(from the human turn at 2026-09-05T18:58:00\.000Z, 1 earlier turn\(s\) in the window\):/);
     assert.match(r.stdout, /claude-opus-4-8: in 0=0 · cached 0=0 · cache_write 0=0 · out 1000000≤1000000 → agrees/);
-    assert.match(r.stdout, /transcript \$10 vs receipt \$10 → \+0\.0%; the last invocation agrees with the receipt/);
-    assert.match(r.stdout, /= \$30 \[transcript \(receipt covers only the last invocation, verified \+0\.0%; 1 earlier invocation\(s\) unverified\)\]/);
+    assert.match(r.stdout, /transcript \$10 vs receipt \$10 → \+0\.0% \(informational; the decision is per token bucket\)/);
+    assert.match(r.stdout, /= \$30 \[receipt for the last invocation \(Anthropic token counts priced at the price list; custom policy price for claude-opus-4-8\); 0\.0% of it billed but not logged; 1 earlier invocation\(s\) transcript-priced, unverified\]/);
     assert.match(r.stderr, /NOTE: the receipt bills only the last invocation/);
   } finally { fix.rm(); }
 });
