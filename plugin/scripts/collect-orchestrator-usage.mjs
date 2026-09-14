@@ -2271,6 +2271,16 @@ export async function main(argv = process.argv.slice(2)) {
     // The transcript's cost per model and role, and what could not be priced.
     per_model: priced.per_model,
     unpriced: priced.unpriced,
+    // v0.7.3 (Fix E): the rest of the manifest block's Fix E fields, so the
+    // event alone (telemetry.jsonl before the manifest is patched, which
+    // tools/report.mjs falls back to) carries the whole per-model, receipt and
+    // attribution picture. Same values as the manifest block below;
+    // TelemetryEvent declares every field written here
+    // (orchestratorOverheadFields.test.mjs type-checks this output).
+    pricing_complete: booking ? booking.complete : priced.complete,
+    price_list_verified: pricesMod.PRICE_LIST_VERIFIED,
+    missing_helper_ids: attribution?.missing_helper_ids ?? [],
+    unreferenced_helper_files: attribution?.unreferenced_helper_files ?? [],
     latency_ms: null,
     success: true,
     retry_count: 0,

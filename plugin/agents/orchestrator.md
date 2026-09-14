@@ -101,9 +101,11 @@ hook, which matches on the MCP tool call and therefore never fires.
    passing the run's policy the same way `preflight_dispatch` received it (`--policy=<name>` for a
    named policy, `--policy-path=<file>` for an explicit file; a repo-local `routing-policy.yaml`
    resolves via `--project-root` alone). On non-zero exit, print the script's output verbatim and
-   STOP. Do not try to repair it in-session: the variable must be exported before the `claude`
+   STOP. Do not try to repair it in-session: the variable must be set before the `claude`
    process launches, and a Bash `export` here runs in a child shell that cannot reach it — the
-   script's output already contains the exact export line and the relaunch instruction. Under
+   script's output already says where to set it (from a terminal, an export or the project's
+   `.claude/settings.local.json`; from the desktop app, `~/.claude/settings.json`) and gives the
+   relaunch instruction. Under
    `vendor` skip this check: every call, your own tier included, dispatches through the server, so
    the env var cannot misprice anything.
 1. **Read the brief first.** Confirm scope; if anything is ambiguous, surface it before starting.
@@ -331,7 +333,8 @@ the logger drops missing fields rather than printing them empty.
    example, no transcripts found where it looked), say so in the final report and present the cost as
    *dispatched work only — excludes orchestrator overhead*; never block the run on it. When it succeeds,
    the final report and `node tools/report.mjs` show three numbers — dispatched, orchestrator overhead,
-   true total — and architecture comparisons must quote the true total.
+   true total, with the orchestrator figure by model (session and helpers) under it — and
+   architecture comparisons must quote the true total.
 
 **Fail-open by design**, same as the provenance helper: a logging call never blocks the run. If
 `mmo-log.mjs` errors, it warns to stderr and exits 0 — treat every one of these calls as fire-and-forget.

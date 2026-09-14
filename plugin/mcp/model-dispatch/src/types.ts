@@ -2,6 +2,10 @@
  * Shared types for the multi-model orchestration layer.
  */
 
+// Type-only (erased at build): the orchestrator event's Fix E fields reuse the
+// manifest block's shapes, which live beside Manifest in telemetry.ts.
+import type { OrchestratorModelCost, OrchestratorUnloggedBilled, OrchestratorUnpriced } from "./telemetry.js";
+
 export type Phase =
   | "requirements_analysis"
   | "architecture_design"
@@ -134,6 +138,28 @@ export interface TelemetryEvent {
   cli_reported_cost_usd?: number;
   /** claude-cli only: where the cache-write TTL split came from. */
   ttl_split?: TtlSplit;
+  /*
+   * Orchestrator event only (`tier: "orchestrator"`, written by
+   * collect-orchestrator-usage.mjs): the Fix E fields of the manifest's
+   * `orchestrator_overhead` block, with the same meanings (see Manifest in
+   * telemetry.ts), so telemetry.jsonl alone says which model each dollar ran
+   * on, what a booked receipt billed beyond the transcript, and whether every
+   * helper's transcript was read. The collector wrote most of these from the
+   * per-message and receipt fixes on while this interface did not declare
+   * them; since v0.7.3 orchestratorOverheadFields.test.mjs type-checks its real
+   * output against this interface so the two cannot drift again.
+   */
+  transcript_cost_usd?: number | null;
+  receipt_cost_usd?: number | null;
+  receipt_cli_usd?: number | null;
+  unlogged_billed?: OrchestratorUnloggedBilled | null;
+  attribution_complete?: boolean | null;
+  missing_helper_ids?: string[];
+  unreferenced_helper_files?: string[];
+  per_model?: OrchestratorModelCost[];
+  unpriced?: OrchestratorUnpriced[];
+  pricing_complete?: boolean;
+  price_list_verified?: string;
   /** `null` on the direct tier — no stopwatch ever ran. `0` would mean "instant". */
   latency_ms: number | null;
   success: boolean;

@@ -244,7 +244,7 @@ Every artifact lands under `./.sdlc/` (for `/mmo:greenfield`) or `examples/<stud
 | `provenance.json` | Every file the run touched, with pre-run hash — the input `/mmo:revert` reads. |
 | `delegation/` | Only on runs that used the agent path. Three files per delegated packet: task brief, worker usage sidecar, receipt. |
 | `.hook-logs/hook.jsonl` | One line per `execute_with_model` call. Backup heartbeat; safe to delete. |
-| Cost report | `node tools/report.mjs <pass-dir>` — per-phase table, delegation table if any, total cost labeled by scope (dispatched-only, or true total once the orchestrator-overhead collector has run), methodology footer. |
+| Cost report | `node tools/report.mjs <pass-dir>` — per-phase table, delegation table if any, total cost labeled by scope (dispatched-only, or true total once the orchestrator-overhead collector has run), the orchestrator figure by model (session and helpers) with what a booked receipt billed but no transcript logged, or a floor note when no receipt was booked, methodology footer. |
 
 Full reference in [docs/understanding-output.md](docs/understanding-output.md).
 
