@@ -174,6 +174,15 @@ The rates that turn tokens into dollars live in the `pricing:` block of each pol
 - `pricing_source:` — the vendor URL these rates were taken from
 - `pricing_last_verified:` — the ISO date the maintainer last checked the source page
 
-Before publishing a study that relies on these numbers, check both fields against the current vendor page. If the vendor changed rates and this repo hasn't caught up, submit a PR updating the YAML — the report will then compute costs at the correct schedule automatically.
+Every shipped card is checked against one dated price list, [`plugin/mcp/model-dispatch/src/prices.ts`](../plugin/mcp/model-dispatch/src/prices.ts). The list gives each model one or more periods (`from`, `to`, the five token rates, `source_url`, `verified`) and prices a model name on a day:
+
+| Call | Returns |
+|---|---|
+| `resolveModel(name)` | The list id for an exact id, an id plus `-YYYYMMDD`, or either followed by one bracketed option such as `[1m]`. `null` for anything else. The longest id wins, so `claude-fable-5-1` never reads as `claude-fable-5`. |
+| `lookupPrice(name, date, {speed, service_tier, inference_geo})` | The period's rates, with fast mode (Opus 5 and Opus 4.8) or US-only inference (×1.1, Claude 4.6 and later) applied. Otherwise `unpriced` with the reason: an unknown model, no period for the date, or a modifier value the list has no price for. A rate is never borrowed from a similar model. |
+
+`npm test` fails when a shipped card differs from the list for today's date, or when today falls outside every period for a card's model. Gemini 3.7 Flash's introductory period ends on 31 Dec 2026, so from 1 Jan 2027 the suite stays red until its next period is on the list and the cards match it. In this version the adapters and the collector still price from the policy card; the check is what keeps those cards equal to the list.
+
+Before publishing a study that relies on these numbers, check both fields against the current vendor page. If the vendor changed rates and this repo hasn't caught up, submit a PR that updates the period in `prices.ts` and the matching YAML cards together — the report will then compute costs at the correct schedule automatically.
 
 The orchestrator subagent is instructed (via `plugin/agents/orchestrator.md` rule 6) to read pricing constants ONLY from the loaded policy YAML, never from its own trained knowledge. If the policy's pricing block is missing or malformed, the run aborts rather than guessing.

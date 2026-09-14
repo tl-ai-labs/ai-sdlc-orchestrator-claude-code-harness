@@ -66,7 +66,7 @@ Policies live under [plugin/config/policies/](../plugin/config/policies/) as YAM
 |---|---|---|
 | `models[].id` | string | Referenced by rules and by `MMO_SELECT`. |
 | `models[].adapter` | `builtin-anthropic` \| `mcp:model-dispatch` \| `antigravity-worker` | Selects the adapter class. |
-| `models[].pricing` | `{input, input_cached, output}` USD per 1M | Flat global/AI-Studio rates. Vertex regional surcharge is applied at dispatch, not written in the file. |
+| `models[].pricing` | `{input, input_cached, output}` USD per 1M | Flat global/AI-Studio rates. Vertex regional surcharge is applied at dispatch, not written in the file. Must equal the model's period in [prices.ts](../plugin/mcp/model-dispatch/src/prices.ts) for today's date; `test/prices.test.mjs` fails otherwise. |
 | `models[].pricing_source`, `pricing_last_verified` | URL, ISO date | Vendor page and last verify date. |
 | `models[].max_output_tokens_absolute` | number | Doubling-loop clamp for completion adapters. Absent on `antigravity-worker`. |
 | `select.<slot>.default` | model id | Used when no `MMO_SELECT` names this slot. |
@@ -93,6 +93,7 @@ One interface, three implementations, plus a factory.
 | [AntigravityWorkerAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/AntigravityWorkerAdapter.ts) | `AntigravityWorkerAdapter` | Gemini as an agent. Launches the Python worker. See §6. |
 | [index.ts](../plugin/mcp/model-dispatch/src/adapters/index.ts) | `createAdapter(model)` | Factory keyed on `model.adapter`. |
 | [pricing.ts](../plugin/mcp/model-dispatch/src/pricing.ts) | — | `computeCostUsd(tokens, pricing)` on disjoint cached/fresh counts. |
+| [prices.ts](../plugin/mcp/model-dispatch/src/prices.ts) | — | Dated price list. `resolveModel(name)` and `lookupPrice(name, date, modifiers)`; an unknown model, a date outside every period, or a modifier with no price returns `unpriced`, never a borrowed rate. |
 
 The two completion adapters share an **output-cap doubling loop**: on a vendor `max_tokens` signal, retry with `2×` the previous ceiling, up to 3 doublings or `max_output_tokens_absolute`. Every attempt emits its own TelemetryEvent with `attempt_number` and `ceiling_used`, all sharing the packet's `task_id`. The agent adapter has no such loop — an agent session sets its own per-turn limits and a retry would be a fresh, fully-billed session.
 
