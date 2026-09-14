@@ -380,6 +380,15 @@ test("in-session invariant: a claude-cli worker event priced from its ledger equ
   const workerUsage = (out, stop) => ({ input_tokens: 40, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 12_000, cache_creation: { ephemeral_5m_input_tokens: 2_000, ephemeral_1h_input_tokens: 10_000 }, output_tokens: out, service_tier: "standard", speed: "standard", inference_geo: "not_available" });
   const wLine = (id, out, stop = "end_turn") => JSON.stringify({ type: "assistant", timestamp: ts, sessionId: "wrk-1", message: { id, model: "claude-sonnet-5", stop_reason: stop, usage: workerUsage(out, stop) } });
   const workerLines = [wLine("w1", 700), wLine("w2", 300)];
+  // Review findings M1 / R1: a second worker, on a fast-capable model, whose one
+  // message is streamed as two lines and records `speed: "fast"` only on its
+  // stop_reason line (the shape Claude Code writes). The ledger read modifiers
+  // from the first line only and priced it standard; the collector merges every
+  // line and prices it fast. The two must agree to the micro-dollar, or the
+  // in-session subtraction removes a different figure from the one the scan added.
+  const fastUsage = (out, extra) => ({ input_tokens: 25, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 30_000, cache_creation: { ephemeral_5m_input_tokens: 30_000, ephemeral_1h_input_tokens: 0 }, output_tokens: out, service_tier: "standard", inference_geo: "not_available", ...extra });
+  const fastLine = (out, stop, extra = {}) => JSON.stringify({ type: "assistant", timestamp: ts, sessionId: "wrk-2", message: { id: "f1", model: "claude-opus-4-8", stop_reason: stop, usage: fastUsage(out, extra) } });
+  const fastLines = [fastLine(2, null), fastLine(4_000, "end_turn", { speed: "fast" })];
   const policy = `
 version: 1
 name: cli-invariant
@@ -390,20 +399,26 @@ models:
   - id: worker
     adapter: claude-cli
     model_name: claude-sonnet-5
+  - id: fast-worker
+    adapter: claude-cli
+    model_name: claude-opus-4-8
   - id: flash
     adapter: mcp:model-dispatch
     model_name: gemini-3.5-flash
 rules:
   - when: { phase: codegen }
     use: worker
+  - when: { phase: tests }
+    use: fast-worker
   - when: { phase: docs }
     use: flash
   - default: driver
 `;
-  // What ClaudeCliAdapter books for this worker call: its modelUsage tokens
-  // priced from the list, TTL split read from the worker's own transcript.
+  // What ClaudeCliAdapter books for each worker call: its modelUsage tokens
+  // priced from the list, TTL split and modifiers read from the worker's own transcript.
   const scratch = mkdtempSync(join(tmpdir(), "mmo-permodel-ledger-"));
   let workerCost;
+  let fastLedger;
   try {
     const wf = join(scratch, "wrk-1.jsonl");
     writeFileSync(wf, workerLines.join("\n") + "\n");
@@ -413,19 +428,30 @@ rules:
     );
     assert.deepEqual(ledger.unpriced_models, []);
     workerCost = ledger.cost_usd;
+    const ff = join(scratch, "wrk-2.jsonl");
+    writeFileSync(ff, fastLines.join("\n") + "\n");
+    fastLedger = priceClaudeCliResult(
+      { session_id: "wrk-2", total_cost_usd: 0.9, usage: {}, modelUsage: { "claude-opus-4-8": { inputTokens: 25, cacheReadInputTokens: 400_000, cacheCreationInputTokens: 30_000, outputTokens: 4_000, costUSD: 0.9 } } },
+      { config: { id: "fast-worker", adapter: "claude-cli", model_name: "claude-opus-4-8" }, date: new Date(ts), transcript: readWorkerTranscript([ff], "wrk-2") },
+    );
+    assert.deepEqual(fastLedger.unpriced_models, []);
+    // 25 x $10 + 400,000 x $1 + 30,000 x $12.50 + 4,000 x $50, per 1M, at the fast rates.
+    assert.equal(fastLedger.cost_usd, 0.97525);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 
   const flashCost = 0.25;
   const fix = mkRun({
     policy,
-    manifest: { pass: "p", policy_name: "cli-invariant", started_at: T0, ended_at: T2, totals: { dispatched_cost_usd: round6(workerCost + flashCost), models_used: ["claude-sonnet-5", "gemini-3.5-flash"] } },
+    manifest: { pass: "p", policy_name: "cli-invariant", started_at: T0, ended_at: T2, totals: { dispatched_cost_usd: round6(workerCost + fastLedger.cost_usd + flashCost), models_used: ["claude-sonnet-5", "claude-opus-4-8", "gemini-3.5-flash"] } },
     telemetry: [
       { ts, pass: "p", phase: "codegen", model: "claude-sonnet-5", model_id: "worker", provenance: "vendor", cost_usd: workerCost },
+      { ts, pass: "p", phase: "tests", model: "claude-opus-4-8", model_id: "fast-worker", provenance: "vendor", cost_usd: fastLedger.cost_usd },
       { ts, pass: "p", phase: "docs", model: "gemini-3.5-flash", model_id: "flash", provenance: "vendor", cost_usd: flashCost },
     ],
     transcripts: {
       "drv-1.jsonl": [JSON.stringify({ type: "assistant", timestamp: ts, sessionId: "drv-1", message: { id: "d1", model: "claude-opus-5", stop_reason: "end_turn", usage: { input_tokens: 10, cache_read_input_tokens: 500_000, cache_creation_input_tokens: 20_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 20_000 }, output_tokens: 2_000, service_tier: "standard", speed: "standard", inference_geo: "not_available" } } })],
       "wrk-1.jsonl": workerLines,
+      "wrk-2.jsonl": fastLines,
     },
   });
   try {
@@ -435,12 +461,15 @@ rules:
     const m = readJson(join(fix.passDir, "manifest.json"));
     const o = m.orchestrator_overhead;
     const worker = o.per_model.find((e) => e.model === "claude-sonnet-5");
+    const fastWorker = o.per_model.find((e) => e.model === "claude-opus-4-8");
     const driver = o.per_model.find((e) => e.model === "claude-opus-5");
-    assert.ok(worker && driver, JSON.stringify(o.per_model));
+    assert.ok(worker && fastWorker && driver, JSON.stringify(o.per_model));
     assert.equal(worker.cost_usd, workerCost, "the ledger and the collector price the worker's tokens identically");
-    assert.equal(o.dispatched_in_session_cost_usd, workerCost);
-    assert.equal(o.dispatched_in_session_events, 1);
-    assert.equal(o.cost_usd, round6(worker.cost_usd + driver.cost_usd));
+    assert.equal(fastWorker.applied_modifiers.speed, "fast");
+    assert.equal(fastLedger.cost_usd, fastWorker.cost_usd, "a speed recorded only on the terminal line prices the same in the ledger and the collector");
+    assert.equal(o.dispatched_in_session_cost_usd, round6(workerCost + fastLedger.cost_usd));
+    assert.equal(o.dispatched_in_session_events, 2);
+    assert.equal(o.cost_usd, round6(worker.cost_usd + fastWorker.cost_usd + driver.cost_usd));
     // true total = dispatched − in-session + overhead = the Gemini call + every transcript message at the list.
     assert.equal(m.true_total_cost_usd, round6(flashCost + o.cost_usd));
   } finally { fix.rm(); }

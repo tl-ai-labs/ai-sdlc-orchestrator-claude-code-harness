@@ -266,3 +266,70 @@ test("T8 a session id that is not a plain id is never used as a path", async () 
   const [out] = await captureStderr(() => adapterFor(hostile).execute(PACKET));
   assert.equal(out.attempts[0].ttl_split, "approximate");
 });
+
+// ── Review findings M1 / R1: modifiers come from EVERY line of a message ────
+//
+// Claude Code writes one API message as several transcript lines, and `speed`
+// usually appears only on a later streamed or terminal line. The ledger read
+// speed / service_tier / inference_geo from a message's FIRST line only, so a
+// fast-mode worker was priced at standard rates (half the fast price), while
+// the collector, which merges every line, priced the same tokens at fast
+// rates. These pin the merged reading: a value on any line counts, and two
+// lines of one message recording different values leave the model unpriced.
+import { rmSync } from "node:fs";
+import { priceClaudeCliResult, readWorkerTranscript } from "../dist/adapters/claudeCliLedger.js";
+
+const FAST_DAY = "2026-09-14T11:19:00.000Z";
+const OPUS_4_8_FAST = { input: 10, input_cached: 1, output: 50, input_cache_write: 12.5, input_cache_write_1h: 20 };
+const wLine = (id, usage, { stop = "end_turn", sid = "wrk-fast", model = "claude-opus-4-8" } = {}) =>
+  JSON.stringify({ type: "assistant", timestamp: FAST_DAY, sessionId: sid, message: { id, model, stop_reason: stop, usage } });
+const wUsage = (input, cached, out, extra = {}) => ({ input_tokens: input, cache_read_input_tokens: cached, cache_creation_input_tokens: 0, output_tokens: out, service_tier: "standard", inference_geo: "not_available", ...extra });
+const FAST_CONFIG = { id: "opus48-cli", adapter: "claude-cli", model_name: "claude-opus-4-8" };
+
+/** Writes the lines as the worker session's transcript and prices a result with that modelUsage row. */
+function ledgerFor(lines, modelUsageRow) {
+  const dir = mkdtempSync(join(tmpdir(), "t8-merged-modifiers-"));
+  try {
+    const file = join(dir, "wrk-fast.jsonl");
+    writeFileSync(file, lines.join("\n") + "\n");
+    return priceClaudeCliResult(
+      { session_id: "wrk-fast", total_cost_usd: 0, usage: {}, modelUsage: { "claude-opus-4-8": { ...modelUsageRow, costUSD: 0 } } },
+      { config: FAST_CONFIG, date: new Date(FAST_DAY), transcript: readWorkerTranscript([file], "wrk-fast") },
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test("M1 (a) a message whose speed \"fast\" is only on its terminal line is priced at the fast rates 10/1/12.5/20/50", () => {
+  const ledger = ledgerFor(
+    [wLine("f1", wUsage(10, 100_000, 3), { stop: null }), wLine("f1", wUsage(10, 100_000, 1000, { speed: "fast" }))],
+    { inputTokens: 10, cacheReadInputTokens: 100_000, cacheCreationInputTokens: 0, outputTokens: 1000 },
+  );
+  assert.deepEqual(ledger.unpriced_models, []);
+  // 10 x $10 + 100,000 x $1 + 1,000 x $50, per 1M. First-line reading gave $0.07505 (standard).
+  assert.equal(ledger.cost_usd, 0.1501);
+  assert.equal(ledger.cost_usd, computeCostUsd({ input: 10, input_cached: 100_000, input_cache_write: 0, input_cache_write_1h: 0, output: 1000 }, OPUS_4_8_FAST));
+});
+
+test("M1 (b) that message beside a single-line fast message is one price (fast), not two", () => {
+  const ledger = ledgerFor(
+    [
+      wLine("f1", wUsage(10, 100_000, 3), { stop: null }),
+      wLine("f1", wUsage(10, 100_000, 1000, { speed: "fast" })),
+      wLine("f2", wUsage(5, 50_000, 500, { speed: "fast" })),
+    ],
+    { inputTokens: 15, cacheReadInputTokens: 150_000, cacheCreationInputTokens: 0, outputTokens: 1500 },
+  );
+  assert.deepEqual(ledger.unpriced_models, [], "first-line reading saw [no speed] and [fast] and called them two prices");
+  assert.equal(ledger.cost_usd, 0.22515); // 15 x $10 + 150,000 x $1 + 1,500 x $50, per 1M
+});
+
+test("M1 (c) lines of ONE message recording \"standard\" and \"fast\" leave the model unpriced, with the reason", () => {
+  const ledger = ledgerFor(
+    [wLine("c1", wUsage(10, 100_000, 3, { speed: "standard" }), { stop: null }), wLine("c1", wUsage(10, 100_000, 1000, { speed: "fast" }))],
+    { inputTokens: 10, cacheReadInputTokens: 100_000, cacheCreationInputTokens: 0, outputTokens: 1000 },
+  );
+  assert.equal(ledger.unpriced_models.length, 1, "first-line reading priced it at standard");
+  assert.equal(ledger.unpriced_models[0].model, "claude-opus-4-8");
+  assert.match(ledger.unpriced_models[0].reason, /lines of one claude-opus-4-8 message .*disagree on speed/);
+  assert.equal(ledger.cost_usd, 0);
+});

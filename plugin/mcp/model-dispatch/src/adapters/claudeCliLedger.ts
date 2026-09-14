@@ -23,9 +23,11 @@
  *   model's writes, flagged `approximate`. (That top-level split belongs to
  *   the session model, so the approximation can over-price a helper's
  *   5-minute writes; the transcript path exists to avoid it.)
- * - speed / service_tier / inference_geo: the model's transcript lines when
- *   they agree; the top-level `usage` for the requested model; the API
- *   defaults for a receipt-only side call.
+ * - speed / service_tier / inference_geo: the model's transcript messages,
+ *   each message's value merged from ALL of its lines (Claude Code writes
+ *   `speed` only on a later streamed or terminal line), when every message
+ *   prices the same and no message's lines disagree; the top-level `usage`
+ *   for the requested model; the API defaults for a receipt-only side call.
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -103,22 +105,63 @@ export interface TranscriptModelWrites {
   write_1h: number;
   /** False when some line wrote cache without a `cache_creation` TTL split. */
   split_known: boolean;
-  /** Distinct `[speed, service_tier, inference_geo]` triples, JSON-encoded. */
+  /** Distinct `[speed, service_tier, inference_geo]` triples, one per message, JSON-encoded. */
   modifiers: Set<string>;
+  /**
+   * Modifier names (`speed`, `service_tier`, `inference_geo`) that two lines of
+   * one message of this model record with different values. Non-empty means
+   * no single price is provable for that message, so the model is unpriced.
+   */
+  modifier_conflicts: string[];
 }
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 const modelKey = (name: string): string => resolveModel(name)?.id ?? name;
 
+const MODIFIER_KEYS = ["speed", "service_tier", "inference_geo"] as const;
+type ModifierKey = (typeof MODIFIER_KEYS)[number];
+
+/** One transcript message's model and the request modifiers merged from all of its lines. */
+interface MessageModifiers {
+  key: string;
+  values: Record<ModifierKey, unknown>;
+  conflicts: Set<ModifierKey>;
+}
+
+/**
+ * Merges one line's modifiers into its message, by the same rule as the
+ * collector's noteModifiers (collect-orchestrator-usage.mjs): an absent value
+ * leaves the message's value alone, a value fills an empty slot, and a
+ * different value is a conflict.
+ */
+function noteModifiers(rec: MessageModifiers, usage: Record<string, unknown>): void {
+  for (const k of MODIFIER_KEYS) {
+    const v = usage[k];
+    if (v == null) continue;
+    if (rec.values[k] == null) rec.values[k] = v;
+    else if (rec.values[k] !== v) rec.conflicts.add(k);
+  }
+}
+
 /**
  * Per model (list id, or the raw name when unlisted): cache writes by TTL and
  * the modifiers used. Assistant lines only, `<synthetic>` skipped, lines of
- * another session skipped, each message id counted once (its first line
- * carries the complete cache fields). Null when no file could be read.
+ * another session skipped. Cache writes are counted once per message id (its
+ * first line carries the complete cache fields); request modifiers are read
+ * from EVERY line of the message and merged (noteModifiers), and each message
+ * adds its merged triple once all files are read. Null when no file could be read.
+ *
+ * Why every line (review findings M1 / R1): Claude Code writes `speed` only on
+ * a later streamed or terminal line of most messages. Reading the first line
+ * alone priced a fast-mode worker at standard rates, half the fast price, while
+ * the collector, which merges every line, priced the same tokens at fast rates,
+ * so the in-session subtraction removed a different figure from the one its
+ * scan added.
  */
 export function readWorkerTranscript(files: string[], sessionId: string): Map<string, TranscriptModelWrites> | null {
   const byModel = new Map<string, TranscriptModelWrites>();
-  const seen = new Set<string>();
+  const byId = new Map<string, MessageModifiers>();
+  const messages: MessageModifiers[] = [];
   let readAny = false;
   for (const file of files) {
     let text: string;
@@ -141,21 +184,35 @@ export function readWorkerTranscript(files: string[], sessionId: string): Map<st
       const usage = msg?.usage;
       if (!usage || msg.model === "<synthetic>") continue;
       if (typeof obj.sessionId === "string" && obj.sessionId !== sessionId) continue;
-      if (typeof msg.id === "string") {
-        if (seen.has(msg.id)) continue;
-        seen.add(msg.id);
+      const id = typeof msg.id === "string" ? msg.id : null;
+      const counted = id !== null ? byId.get(id) : undefined;
+      if (counted) {
+        // A repeat line of a message already counted: its cache fields repeat
+        // the first line's, but it may be the only line that records `speed`.
+        noteModifiers(counted, usage);
+        continue;
       }
       const key = modelKey(String(msg.model ?? "(unlabeled)"));
-      const entry = byModel.get(key) ?? { write_5m: 0, write_1h: 0, split_known: true, modifiers: new Set<string>() };
+      const entry = byModel.get(key) ?? { write_5m: 0, write_1h: 0, split_known: true, modifiers: new Set<string>(), modifier_conflicts: [] };
       const written = num(usage.cache_creation_input_tokens);
       const split = usage.cache_creation;
       if (written > 0 && (!split || typeof split !== "object")) entry.split_known = false;
       const oneHour = Math.min(written, num(split?.ephemeral_1h_input_tokens));
       entry.write_1h += oneHour;
       entry.write_5m += written - oneHour;
-      entry.modifiers.add(JSON.stringify([usage.speed ?? null, usage.service_tier ?? null, usage.inference_geo ?? null]));
       byModel.set(key, entry);
+      // A line with no string id is a message of its own.
+      const rec: MessageModifiers = { key, values: { speed: null, service_tier: null, inference_geo: null }, conflicts: new Set() };
+      noteModifiers(rec, usage);
+      messages.push(rec);
+      if (id !== null) byId.set(id, rec);
     }
+  }
+  // Every line has been read, so each message's modifiers are final.
+  for (const rec of messages) {
+    const entry = byModel.get(rec.key) as TranscriptModelWrites;
+    entry.modifiers.add(JSON.stringify([rec.values.speed ?? null, rec.values.service_tier ?? null, rec.values.inference_geo ?? null]));
+    for (const k of rec.conflicts) if (!entry.modifier_conflicts.includes(k)) entry.modifier_conflicts.push(k);
   }
   return readAny ? byModel : null;
 }
@@ -306,6 +363,14 @@ export function priceClaudeCliResult(
     let problem: string | null = null;
     if (custom) {
       // A custom price is one flat card: request modifiers do not apply.
+    } else if (fromTranscript && fromTranscript.modifier_conflicts.length > 0) {
+      // Two lines of one message record different values (fast on one, standard
+      // on another): no single price is provable for it, and the result's
+      // per-model totals cannot be split, so the model is unpriced. The collector
+      // leaves the same message unpriced by the same rule.
+      problem =
+        `the lines of one ${row.key} message in the worker transcript disagree on ` +
+        `${fromTranscript.modifier_conflicts.join(", ")}, so no single price applies`;
     } else if (fromTranscript && fromTranscript.modifiers.size > 0) {
       // Every distinct [speed, service_tier, inference_geo] the transcript saw
       // for this model, compared by the PRICE each one looks up to, not by
