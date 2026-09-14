@@ -17,7 +17,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -323,6 +323,22 @@ test("transcript discovery ignores non-transcript files", () => {
     const found = candidateTranscripts(dir, 0);
     assert.ok(found.every((p) => p.endsWith(".jsonl")));
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/*
+ * Claude Code names a project's transcript directory by replacing every
+ * character that is not a letter or digit with "-". Replacing only "/" and
+ * whitespace pointed the collector at a directory that does not exist for
+ * any project path holding a dot or an underscore (a checkout named v0.6.0),
+ * and the run then found no messages to price.
+ */
+import { transcriptsDirFor } from "../../../scripts/collect-orchestrator-usage.mjs";
+
+test("transcriptsDirFor names the directory the way Claude Code does: every character that is not a letter or digit becomes '-'", () => {
+  const name = (p) => transcriptsDirFor(p).split("/").pop();
+  assert.equal(name("/Users/dev/Desktop/repro-main-v0.6.0-headless/project"), "-Users-dev-Desktop-repro-main-v0-6-0-headless-project");
+  assert.equal(name("/private/tmp/claude-501/-Users-dev/scratch pad/cc_folder.test"), "-private-tmp-claude-501--Users-dev-scratch-pad-cc-folder-test");
+  assert.equal(transcriptsDirFor("/a/b"), join(homedir(), ".claude", "projects", "-a-b"));
 });
 
 /*

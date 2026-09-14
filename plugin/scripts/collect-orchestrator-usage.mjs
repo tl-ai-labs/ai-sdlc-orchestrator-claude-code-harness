@@ -21,8 +21,9 @@
  * versions in September 2026):
  *
  *   1. WHERE: transcripts live in ~/.claude/projects/<hash>/*.jsonl where
- *      <hash> is the absolute project path with `/` and whitespace replaced
- *      by `-`; each session may also have <hash>/<sessionId>/subagents/*.jsonl.
+ *      <hash> is the absolute project path with every character that is not
+ *      a letter or digit replaced by `-` (`/a/v0.6.0` → `-a-v0-6-0`); each
+ *      session may also have <hash>/<sessionId>/subagents/*.jsonl.
  *      Driver subagents run in-session, so their transcripts count too — all
  *      in-session work is driver-tier work by construction (the plugin ships
  *      only the five driver agents).
@@ -504,9 +505,15 @@ async function loadDist() {
   }
 }
 
-/** The CLI's transcript directory name for a project: path with / and whitespace → "-". */
+/**
+ * The CLI's transcript directory for a project: the absolute path with every
+ * character that is not a letter or digit replaced by "-" (the same rule the
+ * claude-cli worker ledger uses). Replacing only "/" and whitespace missed any
+ * path holding a dot or an underscore, so the scan looked in a directory that
+ * does not exist.
+ */
 export function transcriptsDirFor(projectRoot) {
-  const hash = resolve(projectRoot).replace(/[\/\s]/g, "-");
+  const hash = resolve(projectRoot).replace(/[^A-Za-z0-9]/g, "-");
   return join(homedir(), ".claude", "projects", hash);
 }
 

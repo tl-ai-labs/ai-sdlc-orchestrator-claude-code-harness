@@ -145,7 +145,7 @@ Everything telemetry records is **dispatched work** — calls that passed throug
 node plugin/scripts/collect-orchestrator-usage.mjs <pass-dir>
 ```
 
-**Method.** Claude Code writes session transcripts under `~/.claude/projects/<hash>/` (`<hash>` = the absolute project path with `/` and whitespace replaced by `-`), plus per-session `subagents/*.jsonl`. Every `"type": "assistant"` line carries the vendor's own `usage` block. The collector sums those, windowed to the run, and appends one `tier: "orchestrator"` event to `telemetry.jsonl`; the manifest gains an `orchestrator_overhead` block and a `true_total_cost_usd`, while `total_cost_usd` stays dispatched-only forever — the two spends are never blended silently, and `buildManifest` structurally partitions `tier: "orchestrator"` events out of every dispatched sum.
+**Method.** Claude Code writes session transcripts under `~/.claude/projects/<hash>/` (`<hash>` = the absolute project path with every character that is not a letter or digit replaced by `-`, so `/Users/you/repro-v0.6.0` becomes `-Users-you-repro-v0-6-0`), plus per-session `subagents/*.jsonl`. Every `"type": "assistant"` line carries the vendor's own `usage` block. The collector sums those, windowed to the run, and appends one `tier: "orchestrator"` event to `telemetry.jsonl`; the manifest gains an `orchestrator_overhead` block and a `true_total_cost_usd`, while `total_cost_usd` stays dispatched-only forever — the two spends are never blended silently, and `buildManifest` structurally partitions `tier: "orchestrator"` events out of every dispatched sum.
 
 **Referee, tiers, and the in-session share.** Three things the transcript sum is checked against and corrected for:
 
