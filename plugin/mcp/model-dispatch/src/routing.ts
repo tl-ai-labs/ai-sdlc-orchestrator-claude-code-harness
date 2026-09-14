@@ -268,7 +268,10 @@ export function simulatePolicyCost(
     const price = effectivePrice(model, typeof ev.ts === "string" ? ev.ts : (opts.now ?? (() => new Date()))());
     for (const w of price.warnings) priceWarnings.add(w);
     if (price.unpriced) {
-      const key = `${model.id} ${price.reason}`;
+      // `\u0000` is typed as an escape, not a raw NUL byte: the key string is
+      // identical, and the file stays text that ripgrep and grep will search
+      // (a raw NUL made them skip this file as binary; no-nul-bytes.test.mjs).
+      const key = `${model.id}\u0000${price.reason}`;
       const entry = unpriced.get(key) ?? { model_id: model.id, model_name: model.model_name, reason: price.reason, events: 0 };
       entry.events++;
       unpriced.set(key, entry);

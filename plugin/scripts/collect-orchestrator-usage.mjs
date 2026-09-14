@@ -1148,13 +1148,18 @@ export const RECEIPT_CLI_DRIFT = 0.005;
 export function priceMessages(messages, pricer) {
   const entries = new Map();
   const missing = new Map();
+  // The grouping keys below join their parts with the escape \u0000, written
+  // as six printable characters. It is the same NUL character at run time, so
+  // no part can collide with another. A raw NUL byte used to sit here, and it
+  // made ripgrep and binary-skipping greps treat this whole file as binary and
+  // skip it without a warning (tools/test/no-nul-bytes.test.mjs).
   for (const msg of messages) {
     let r = pricer(msg.model, msg.timestamp, msg.modifiers);
     if (!r.unpriced && msg.conflicts?.length > 0) {
       r = { unpriced: true, model: r.model, reason: `the lines of one ${r.model} message disagree on ${msg.conflicts.join(", ")}, so no single price applies` };
     }
     if (r.unpriced) {
-      const key = [msg.role, r.model, r.reason].join(" ");
+      const key = [msg.role, r.model, r.reason].join("\u0000");
       const u = missing.get(key) ?? { model: r.model, role: msg.role, reason: r.reason, messages: 0, tokens: zeroTokens() };
       u.messages++;
       for (const k of TOKEN_KEYS) u.tokens[k] += msg.tokens[k] ?? 0;
@@ -1162,7 +1167,7 @@ export function priceMessages(messages, pricer) {
       continue;
     }
     const am = r.applied_modifiers;
-    const key = [msg.role, r.model, r.basis, r.period?.from ?? "", JSON.stringify(r.pricing), am ? `${am.speed}/${am.service_tier}/${am.inference_geo}/${am.multiplier}` : ""].join(" ");
+    const key = [msg.role, r.model, r.basis, r.period?.from ?? "", JSON.stringify(r.pricing), am ? `${am.speed}/${am.service_tier}/${am.inference_geo}/${am.multiplier}` : ""].join("\u0000");
     let e = entries.get(key);
     if (!e) {
       e = {
