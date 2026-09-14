@@ -43,6 +43,10 @@ const TODAY = () => new Date("2026-09-14T12:00:00Z");
 // 2027 card instead.
 const BEFORE_V37_GA = () => new Date("2026-08-12T12:00:00Z");
 const IN_2027 = () => new Date("2027-01-02T12:00:00Z");
+// The day before Gemini 3.8 Flash's GA (2026-09-02). Gemini 3.7 Flash is
+// priced that day, so a shipped 3.8 leaf is refused only if it really names
+// gemini-3.8-flash; a copy of the 3.7 policy still naming 3.7 would be billed.
+const BEFORE_V38_GA = () => new Date("2026-09-01T12:00:00Z");
 
 const USAGE = { promptTokenCount: 123457, cachedContentTokenCount: 45678, candidatesTokenCount: 2345, thoughtsTokenCount: 6789 };
 const TOKENS = { input: 123457 - 45678, input_cached: 45678, output: 2345 + 6789 };
@@ -120,7 +124,9 @@ const developFigure = (tokens, block, door, modelName) =>
 
 function shippedLeaves(adapter) {
   const out = [];
-  for (const name of ["opus-plus-flash", "opus-plus-flash-v37", "flash-agsdk-only"]) {
+  // Changed: opus-plus-flash-v38 (Gemini 3.8 Flash, added in v0.7.3) joins the
+  // shipped policies whose Gemini leaves are pinned here.
+  for (const name of ["opus-plus-flash", "opus-plus-flash-v37", "opus-plus-flash-v38", "flash-agsdk-only"]) {
     for (const m of loadPolicy({ policyName: name }).models) if (m.adapter === adapter) out.push({ policy: name, leaf: m });
   }
   return out;
@@ -130,7 +136,7 @@ function shippedLeaves(adapter) {
 
 test("T10 GeminiFlashAdapter: list price x surcharge equals today's figure for every shipped completion leaf and door", async () => {
   const leaves = shippedLeaves("mcp:model-dispatch");
-  assert.ok(leaves.length >= 2, "expected the 3.5 and 3.7 completion leaves");
+  assert.ok(leaves.length >= 3, "expected the 3.5, 3.7 and 3.8 completion leaves");
   for (const { policy, leaf } of leaves) {
     for (const door of DOORS) {
       const { out } = await flashRun(leaf, door);
@@ -180,18 +186,63 @@ test("T10 GeminiFlashAdapter: an unpriced dispatch day is refused before any Gem
   assert.equal(out.cost_usd, 0);
 });
 
-test("T10 GeminiFlashAdapter: from 2027-01-01 the shipped 3.7 leaf bills the list's 2027 card at every door and warns its block is stale", async () => {
+test("T10 GeminiFlashAdapter: the shipped 3.8 leaf is refused the day before Gemini 3.8 Flash's GA, a day 3.7 Flash is priced", async () => {
+  // Pins that opus-plus-flash-v38 names gemini-3.8-flash, not the 3.7 model it
+  // was copied from: on 2026-09-01 a 3.7 leaf is billed, a 3.8 leaf is refused.
+  const leaf = loadPolicy({ policyName: "opus-plus-flash-v38" }).models.find((m) => m.id === "flash-completion");
+  const { out, calls } = await flashRun(leaf, DOORS[0], { now: BEFORE_V38_GA });
+  assert.equal(calls.length, 0);
+  assert.equal(out.success, false);
+  assert.match(out.error, /no price period for gemini-3\.8-flash on 2026-09-01/);
+  assert.equal(out.cost_usd, 0);
+  const v37 = loadPolicy({ policyName: "opus-plus-flash-v37" }).models.find((m) => m.id === "flash-completion");
+  assert.equal((await flashRun(v37, DOORS[0], { now: BEFORE_V38_GA })).out.success, true, "3.7 Flash is priced on 2026-09-01");
+});
+
+test("T10 GeminiFlashAdapter: from 2027-01-01 the shipped 3.7 and 3.8 leaves bill the list's 2027 card at every door and warn their block is stale", async () => {
   // The 2027 behaviour end to end: the dispatch is not refused, the list's
   // 1.50 / 0.15 / 7.50 card is billed with the regional surcharge where it
   // applies, and the shipped introductory block draws a mismatch warning.
-  const leaf = loadPolicy({ policyName: "opus-plus-flash-v37" }).models.find((m) => m.id === "flash-completion");
-  for (const door of DOORS) {
-    const { out, calls, stderr } = await flashRun(leaf, door, { now: IN_2027 });
-    assert.equal(calls.length, 1, door.name);
-    assert.equal(out.success, true, door.name);
-    assert.equal(out.cost_usd, developFigure(TOKENS, { input: 1.5, input_cached: 0.15, output: 7.5 }, door, leaf.model_name), door.name);
-    assert.equal(out.attempts[0].price_basis, "list", door.name);
-    assert.match(stderr, /WARN\s+pricing\.policy_mismatch/, door.name);
+  // Changed: the 3.8 policy (added in v0.7.3) ships the same introductory
+  // card, so it is held to the same 2027 behaviour.
+  for (const policyName of ["opus-plus-flash-v37", "opus-plus-flash-v38"]) {
+    const leaf = loadPolicy({ policyName }).models.find((m) => m.id === "flash-completion");
+    for (const door of DOORS) {
+      const where = `${policyName} via ${door.name}`;
+      const { out, calls, stderr } = await flashRun(leaf, door, { now: IN_2027 });
+      assert.equal(calls.length, 1, where);
+      assert.equal(out.success, true, where);
+      assert.equal(out.cost_usd, developFigure(TOKENS, { input: 1.5, input_cached: 0.15, output: 7.5 }, door, leaf.model_name), where);
+      assert.equal(out.attempts[0].price_basis, "list", where);
+      assert.match(stderr, /WARN\s+pricing\.policy_mismatch/, where);
+    }
+  }
+});
+
+test("opus-plus-flash-v38 is opus-plus-flash-v37 with the mechanical tier on Gemini 3.8 Flash", () => {
+  // The 3.8 policy is a copy of the 3.7 one. This keeps the two from drifting:
+  // same Opus leaf, same routing rules, same doors and default door, same cap,
+  // and every Gemini leaf names gemini-3.8-flash.
+  const v37 = loadPolicy({ policyName: "opus-plus-flash-v37" });
+  const v38 = loadPolicy({ policyName: "opus-plus-flash-v38" });
+  assert.equal(v38.name, "opus-plus-flash-v38");
+  assert.deepEqual(v38.rules, v37.rules);
+  assert.equal(v38.hard_cost_cap_usd, v37.hard_cost_cap_usd);
+  assert.deepEqual(v38.models.map((m) => [m.id, m.adapter]), v37.models.map((m) => [m.id, m.adapter]));
+  const strip = ({ reason, ...slot }) => slot;
+  assert.deepEqual(strip(v38.select["gemini-flash"]), strip(v37.select["gemini-flash"]));
+  assert.match(v38.select["gemini-flash"].reason, /Gemini 3\.8/);
+  for (const m of v38.models) {
+    const m37 = v37.models.find((x) => x.id === m.id);
+    if (m.adapter === "builtin-anthropic") {
+      assert.deepEqual(m, m37, m.id);
+      continue;
+    }
+    assert.equal(m.model_name, "gemini-3.8-flash", m.id);
+    assert.deepEqual(m.pricing, m37.pricing, `${m.id}: 3.7 and 3.8 Flash share the introductory card`);
+    assert.equal(m.worker_timeout_sec, m37.worker_timeout_sec, m.id);
+    assert.equal(m.max_output_tokens_absolute, m37.max_output_tokens_absolute, m.id);
+    assert.deepEqual(m.auth, m37.auth, m.id);
   }
 });
 
@@ -321,7 +372,7 @@ async function workerRun(leaf, { now = TODAY, location } = {}) {
 
 test("T10 AntigravityWorkerAdapter: list price x surcharge equals today's figure for every shipped worker leaf, global and regional", async () => {
   const leaves = shippedLeaves("antigravity-worker");
-  assert.ok(leaves.length >= 3, "expected the worker leaves of opus-plus-flash, -v37 and flash-agsdk-only");
+  assert.ok(leaves.length >= 4, "expected the worker leaves of opus-plus-flash, -v37, -v38 and flash-agsdk-only");
   const tokens = { input: TOKENS.input, input_cached: TOKENS.input_cached, output: TOKENS.output };
   for (const { policy, leaf } of leaves) {
     for (const location of [undefined, "asia-south1"]) {
@@ -349,4 +400,12 @@ test("T10 AntigravityWorkerAdapter: a wrong block is ignored with a warning; an 
   assert.equal(refused.ran, false, "no unpriced work is ever dispatched");
   assert.equal(refused.out.success, false);
   assert.match(refused.out.error, /unpriced/);
+
+  // Changed: the 3.8 policy's agent door (added in v0.7.3) is refused the day
+  // before Gemini 3.8 Flash's GA without spawning the worker.
+  const v38 = loadPolicy({ policyName: "opus-plus-flash-v38" }).models.find((m) => m.id === "flash-agsdk-worker");
+  const refused38 = await workerRun(v38, { now: BEFORE_V38_GA });
+  assert.equal(refused38.ran, false, "no unpriced 3.8 work is ever dispatched");
+  assert.equal(refused38.out.success, false);
+  assert.match(refused38.out.error, /no price period for gemini-3\.8-flash on 2026-09-01/);
 });

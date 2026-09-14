@@ -239,7 +239,10 @@ test("T9 BuiltinAnthropicAdapter: the old Sonnet 5 card is ignored with a warnin
 });
 
 test("T9 BuiltinAnthropicAdapter: today's Opus figure is unchanged (the shipped block equals the list)", async () => {
-  for (const name of ["opus-plus-flash", "opus-plus-flash-v37"]) {
+  // Changed: opus-plus-flash-v38 (Gemini 3.8 Flash, added in v0.7.3) carries
+  // the same Opus 5 leaf as -v37, so its Opus figure is pinned the same way.
+  // The v38 file is new, so "unchanged" means equal to the -v37 figure.
+  for (const name of ["opus-plus-flash", "opus-plus-flash-v37", "opus-plus-flash-v38"]) {
     const leaf = loadPolicy({ policyName: name }).models.find((m) => m.adapter === "builtin-anthropic");
     const { out } = await anthropicRun(leaf);
     assert.equal(out.cost_usd, computeCostUsd(RESPONSE_TOKENS, leaf.pricing), name);

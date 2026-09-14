@@ -85,12 +85,15 @@ const ANTHROPIC_EFFORT_TIERS = ["off", "low", "medium", "high", "xhigh", "max"];
 // with plugin/config/policies/ when a preset ships — nothing functional gates
 // on it, but a shipped preset missing here shows as "custom" in the console
 // (which is exactly how five of these went mislabeled when the list said two).
+// tools/test/policy-console-presets.test.mjs fails when this list and the
+// directory disagree.
 const SHIPPED_PRESETS = [
   "flash-agsdk-only",
   "opus-only",
   "opus-only-v5",
   "opus-plus-flash",
   "opus-plus-flash-v37",
+  "opus-plus-flash-v38",
   "opus-plus-sonnet",
   "opus-plus-sonnet-max",
 ];

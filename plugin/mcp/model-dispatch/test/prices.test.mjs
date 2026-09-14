@@ -356,7 +356,8 @@ const TODAY = new Date().toISOString().slice(0, 10);
 
 test("every shipped policy's pricing card equals the price list for today's date", () => {
   const files = readdirSync(POLICY_DIR).filter((f) => f.endsWith(".yaml"));
-  assert.ok(files.length >= 7, `expected the shipped policies under ${POLICY_DIR}`);
+  // Changed: 8 since opus-plus-flash-v38 shipped in v0.7.3.
+  assert.ok(files.length >= 8, `expected the shipped policies under ${POLICY_DIR}`);
   const problems = [];
   let checked = 0;
   for (const file of files) {
