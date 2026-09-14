@@ -21,14 +21,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { GeminiFlashAdapter } from "../dist/adapters/GeminiFlashAdapter.js";
 import { AntigravityWorkerAdapter } from "../dist/adapters/AntigravityWorkerAdapter.js";
 import { applyVertexSurcharge } from "../dist/adapters/geminiTransports.js";
 import { computeCostUsd } from "../dist/pricing.js";
-import { loadPolicy } from "../dist/policy.js";
+import { loadPolicy, loadPolicyFromPath } from "../dist/policy.js";
+import { lookupPrice } from "../dist/prices.js";
 import { WORKER_PYTHON_ENV } from "../dist/delegation/workerProcess.js";
+
+// The governance demo's routing policy, an unedited copy of what the store
+// synced into the demo project (see test/governanceDemoPolicy.test.mjs).
+const DEMO_POLICY = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "governance-demo", "routing-policy.yaml");
 
 const TODAY = () => new Date("2026-09-14T12:00:00Z");
 // Changed: the unpriced-day cases used 2027-01-02, a gap only until the list
@@ -186,6 +192,91 @@ test("T10 GeminiFlashAdapter: from 2027-01-01 the shipped 3.7 leaf bills the lis
     assert.equal(out.cost_usd, developFigure(TOKENS, { input: 1.5, input_cached: 0.15, output: 7.5 }, door, leaf.model_name), door.name);
     assert.equal(out.attempts[0].price_basis, "list", door.name);
     assert.match(stderr, /WARN\s+pricing\.policy_mismatch/, door.name);
+  }
+});
+
+// ─── Every Gemini list period at Vertex's published regional price ─────
+//
+// What: each Gemini period on the dated list, run through
+// applyVertexSurcharge, equals the row Google prints for it on the Vertex AI
+// pricing page: the Global row at the global endpoint and through the AI
+// Studio key, the Non-global row at a regional endpoint.
+//
+// Why: the list stores only the Global / AI Studio rate and relies on
+// applyVertexSurcharge for the +10% regional price. Gemini 3.5 Flash-Lite,
+// 3.8 Flash's two periods and the 2027 period of 3.7 Flash were added to the
+// list on 2026-09-14; if the surcharge rule (which keys on the model name)
+// skipped one of them, regional Vertex work on it would bill 10% low with no
+// failing test. The coverage check also fails when a Gemini period is added
+// to the list without its Non-global row here.
+//
+// Source: https://cloud.google.com/vertex-ai/generative-ai/pricing, read on
+// 2026-09-14 (two fetches, identical text). Global and Non-global rows as
+// printed, USD per 1M tokens: 3.5 Flash $1.50 / $0.15 / $9.00 and $1.65 /
+// $0.165 / $9.90; 3.5 Flash-Lite $0.30 / $0.03 / $2.50 and $0.33 / $0.033 /
+// $2.75; 3.7 and 3.8 Flash "through December 31, 2026" $0.75 / $0.075 /
+// $3.75 and $0.825 / $0.0825 / $4.125, "starting January 1, 2027" $1.50 /
+// $0.15 / $7.50 and $1.65 / $0.165 / $8.25.
+const r3 = (input, input_cached, output) => ({ input, input_cached, output });
+const VERTEX_ROWS = {
+  "gemini-3.5-flash|2026-05-19": { global: r3(1.5, 0.15, 9), nonGlobal: r3(1.65, 0.165, 9.9) },
+  "gemini-3.5-flash-lite|2026-07-21": { global: r3(0.3, 0.03, 2.5), nonGlobal: r3(0.33, 0.033, 2.75) },
+  "gemini-3.7-flash|2026-08-13": { global: r3(0.75, 0.075, 3.75), nonGlobal: r3(0.825, 0.0825, 4.125) },
+  "gemini-3.7-flash|2027-01-01": { global: r3(1.5, 0.15, 7.5), nonGlobal: r3(1.65, 0.165, 8.25) },
+  "gemini-3.8-flash|2026-09-02": { global: r3(0.75, 0.075, 3.75), nonGlobal: r3(0.825, 0.0825, 4.125) },
+  "gemini-3.8-flash|2027-01-01": { global: r3(1.5, 0.15, 7.5), nonGlobal: r3(1.65, 0.165, 8.25) },
+};
+// Two regional endpoints, so the check is about "not global", not one region.
+const SURCHARGE_DOORS = [...DOORS, { name: "Vertex us-central1", backend: "vertex-adc", location: "us-central1" }];
+const round4 = (rates) => Object.fromEntries(Object.entries(rates).map(([k, v]) => [k, Math.round(v * 1e4) / 1e4]));
+
+test("T10 every Gemini list period bills Vertex's Global row at global and AI Studio, and its Non-global row at a regional endpoint", () => {
+  const expectedKeys = Object.keys(VERTEX_ROWS);
+  for (const key of expectedKeys) {
+    const [id, from] = key.split("|");
+    const r = lookupPrice(id, from, {});
+    assert.equal(r.unpriced, false, `${id} on ${from}: ${r.reason}`);
+    assert.equal(r.period.from, from, `${id}: ${from} must be a period's first day`);
+    const list = r3(r.pricing.input, r.pricing.input_cached, r.pricing.output);
+    assert.deepEqual(list, VERTEX_ROWS[key].global, `${id} from ${from}: list rate vs Vertex Global row`);
+    for (const door of SURCHARGE_DOORS) {
+      const billed = applyVertexSurcharge(list, { backend: door.backend, location: door.location, modelName: id });
+      const regional = door.backend === "vertex-adc" && door.location !== "global";
+      assert.deepEqual(
+        round4(r3(billed.input, billed.input_cached, billed.output)),
+        regional ? VERTEX_ROWS[key].nonGlobal : VERTEX_ROWS[key].global,
+        `${id} from ${from} via ${door.name}`,
+      );
+    }
+  }
+});
+
+test("T10 every Gemini period on the list has its Vertex rows pinned above", async () => {
+  const { PRICE_LIST } = await import("../dist/prices.js");
+  const listed = Object.entries(PRICE_LIST)
+    .filter(([id]) => id.startsWith("gemini-"))
+    .flatMap(([id, periods]) => periods.map((p) => `${id}|${p.from}`))
+    .sort();
+  assert.deepEqual(listed, Object.keys(VERTEX_ROWS).sort());
+});
+
+test("T10 GeminiFlashAdapter: the governance demo's flash-lite leaf dispatches at every door, billed at the Flash-Lite list card, its 0.50 / 0.05 / 3.00 block reported", async () => {
+  // Why: the demo policy routes its codegen rule to this leaf. Before
+  // Flash-Lite's period was on the list, pre-flight halted the policy
+  // (test/governanceDemoPolicy.test.mjs) and this adapter refused every such
+  // dispatch as unpriced. This pins the dispatch itself: one Gemini call per
+  // door, the list card billed with the regional surcharge where it applies,
+  // and the demo's stale block logged as a mismatch, never billed.
+  const leaf = loadPolicyFromPath(DEMO_POLICY).models.find((m) => m.id === "flash-lite");
+  assert.equal(leaf.model_name, "gemini-3.5-flash-lite");
+  for (const door of DOORS) {
+    const { out, calls, stderr } = await flashRun(leaf, door);
+    assert.equal(calls.length, 1, `${door.name}: ${out.error}`);
+    assert.equal(out.success, true, door.name);
+    assert.equal(out.attempts[0].price_basis, "list", door.name);
+    assert.equal(out.cost_usd, developFigure(TOKENS, { input: 0.3, input_cached: 0.03, output: 2.5 }, door, leaf.model_name), door.name);
+    assert.match(stderr, /WARN\s+pricing\.policy_mismatch/, door.name);
+    assert.match(stderr, /model_id=flash-lite/, door.name);
   }
 });
 

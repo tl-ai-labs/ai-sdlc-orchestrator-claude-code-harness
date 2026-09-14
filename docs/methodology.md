@@ -200,7 +200,7 @@ The Gemini periods on the list were verified on 2026-09-14 against both of Googl
 | `gemini-3.5-flash` | from 19 May 2026 | 1.50 | 0.15 | 9.00 |
 | `gemini-3.5-flash-lite` | from 21 Jul 2026 | 0.30 | 0.03 | 2.50 |
 
-Vertex's non-global rows for these models are the rates above ×1.10, the surcharge applied at dispatch (below). A Gemini model Google prices but the list does not carry (Gemini 3.6 Flash or 3.1 Flash-Lite, for example) is unpriced, and so is any day before a listed model's first period.
+Vertex's non-global rows for these models are the rates above ×1.10, the surcharge applied at dispatch (below): 3.5 Flash 1.65 / 0.165 / 9.90, 3.5 Flash-Lite 0.33 / 0.033 / 2.75, and 3.7 and 3.8 Flash 0.825 / 0.0825 / 4.125 through 31 Dec 2026 and 1.65 / 0.165 / 8.25 from 1 Jan 2027. `test/geminiAdapterPricing.test.mjs` checks every Gemini period on the list against both Vertex rows and fails when a period is added without them. A Gemini model Google prices but the list does not carry (Gemini 3.6 Flash or 3.1 Flash-Lite, for example) is unpriced, and so is any day before a listed model's first period.
 
 `npm test` fails when a shipped card differs from the list for today's date, when today falls outside every period for a card's model, or when a card's `pricing_source` or `pricing_last_verified` does not match that period. The shipped Gemini 3.7 Flash cards carry the introductory rates, so from 1 Jan 2027, when the list moves to 1.50 / 0.15 / 7.50, the suite stays red until those cards are changed to match. A run on those days does not halt: it bills the list's 2027 card, and a card still carrying the introductory rates draws a `pricing.policy_mismatch` warning.
 
@@ -248,7 +248,9 @@ Figures that move on the same tokens:
 | Gemini 3.5 Flash-Lite leaf whose block says 0.50 / 0.05 / 3.00 (the governance demo policy's `flash-lite`) | Billed at the block | List 0.30 / 0.03 / 2.50 (GA 21 Jul 2026, verified 2026-09-14); the block draws a `pricing.policy_mismatch` warning |
 | A run using Gemini 3.7 Flash or 3.8 Flash on or after 1 Jan 2027 | Billed at the policy block (the introductory card, in the shipped 3.7 Flash policies) | Billed at the list's 2027 card, 1.50 / 0.15 / 7.50, published on both Google pages; a block still carrying the introductory card draws a `pricing.policy_mismatch` warning and does not halt |
 
-Shipped Opus and Gemini leaves bill the same dollars as before: their cards already equalled the list, and the Vertex regional surcharge is still applied at dispatch.
+Apart from the 2027 row above, shipped Opus and Gemini leaves bill the same dollars as before: their cards already equalled the list, and the Vertex regional surcharge is still applied at dispatch.
+
+Gemini models on the list, with their periods in [Pricing table provenance](#pricing-table-provenance): 3.5 Flash, 3.5 Flash-Lite, 3.7 Flash and 3.8 Flash, each from its GA day. Gemini 3.5 Flash-Lite (from 21 Jul 2026) and Gemini 3.8 Flash (introductory 0.75 / 0.075 / 3.75 from 2 Sep 2026 through 31 Dec 2026) were added on 2026-09-14, together with the 1.50 / 0.15 / 7.50 period from 1 Jan 2027 for both 3.7 and 3.8 Flash. At a non-`global` Vertex endpoint each of these periods bills Google's published Non-global row, the list rate ×1.10. A Gemini model Google prices but the list does not carry (Gemini 3.6 Flash, for example) halts pre-flight with `Cannot price N of M models`, naming the policy model, the file to add its verified period to, and the `pricing_override: true` alternative.
 
 ### v0.7.2
 
