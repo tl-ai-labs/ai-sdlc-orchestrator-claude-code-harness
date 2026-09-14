@@ -163,7 +163,7 @@ The pass's `total_cost_usd` is dispatched work only. Once the `claude` session h
 node plugin/scripts/collect-orchestrator-usage.mjs examples/workforce-ops/passes/pass1 --project-root "$PWD"
 ```
 
-`--project-root` is the directory `claude` was started in; the run's `.sdlc/runs/<run-id>/orchestrator.log` lives under it. The collector finds the run's own invocation in the session transcript and prices each message at its own model's list price. When the run kept Claude Code's own result beside the manifest (`claude-session.json`, or the `live-run.log` of a `--output-format stream-json` run), it checks that figure token for token against the receipt: a match books the receipt's dollars as verified, a mismatch exits 3 and writes nothing. Run it again after every `--resume`; it replaces its earlier figure rather than adding to it.
+`--project-root` is the directory `claude` was started in; the run's `.sdlc/runs/<run-id>/orchestrator.log` lives under it. The collector finds the run's own invocation in the session transcript and prices each message at its own model's list price. When the run kept Claude Code's own result beside the manifest (`claude-session.json`, or the `live-run.log` of a `--output-format stream-json` run), it checks the transcript against that receipt model by model and token bucket by token bucket. When no bucket is above the receipt and the window is provably that invocation, it books the receipt's token counts at the price list and prints the share Claude Code billed but never logged. Extra work in the window, a receipt for another session, or a window it cannot prove exits 3 and writes nothing. Run it again after every `--resume`; it replaces its earlier figure rather than adding to it.
 
 Then print a summary of the results:
 

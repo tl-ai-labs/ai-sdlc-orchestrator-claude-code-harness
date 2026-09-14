@@ -84,6 +84,61 @@ export interface OrchestratorUnpriced {
   tokens: OrchestratorTokens;
 }
 
+/**
+ * A receipt's per-model token buckets. Cache writes are one bucket: a receipt
+ * carries no 5-minute / 1-hour split per model.
+ */
+export interface ReceiptTokens {
+  input: number;
+  input_cached: number;
+  input_cache_write: number;
+  output: number;
+}
+
+/**
+ * One model's receipt tokens that no transcript message recorded (receipt minus
+ * log, per bucket), as collect-orchestrator-usage.mjs priced them when it booked
+ * a receipt: calls Claude Code bills but never logs, or a helper whose
+ * transcript file is missing (`attribution_complete` tells the two apart).
+ */
+export interface OrchestratorUnloggedModel {
+  /** Price-list id. */
+  model: string;
+  /** The names the receipt used for this model. */
+  reported_as: string[];
+  /** True when no transcript message in the window ran on this model. */
+  receipt_only: boolean;
+  tokens: ReceiptTokens;
+  /**
+   * USD per 1M tokens the gap was priced at: per bucket, the model's logged
+   * messages' token-weighted rates; else the list at API-default modifiers.
+   * Null where no rate exists for a bucket with no tokens.
+   */
+  rates: { input: number | null; input_cached: number | null; input_cache_write: number | null; output: number | null };
+  /** Where the cache-write rate came from: "logged mix", "receipt usage", "5-minute (assumed)" or "none". */
+  ttl_split: string;
+  /** Every assumption the price needed, in words; empty when the logged mix priced every non-zero bucket. */
+  assumed: string[];
+  cost_usd: number;
+}
+
+/** Receipt tokens the list could not price (unknown period, two prices across the window). They are in no cost. */
+export interface OrchestratorUnloggedUnpriced {
+  model: string;
+  reported_as: string[];
+  reason: string;
+  tokens: ReceiptTokens;
+}
+
+/** What a booked receipt billed beyond the transcript, in total and per model. */
+export interface OrchestratorUnloggedBilled {
+  per_model: OrchestratorUnloggedModel[];
+  unpriced: OrchestratorUnloggedUnpriced[];
+  cost_usd: number;
+  /** cost_usd as a percentage of the booked overhead, to 2 decimals. */
+  pct_of_booked: number;
+}
+
 export interface Manifest {
   pass: string;
   policy_name: string;
@@ -131,14 +186,21 @@ export interface Manifest {
     pricing_basis?: string;
     /**
      * How cost_usd was arrived at, in words; the report matches on the prefix.
-     * "receipt (transcript agrees, ±x%)" — every token bucket in the window
-     * equals the CLI's own receipt, so the receipt's dollars are booked;
-     * "receipt-only"; "transcript (receipt covers only the last invocation,
-     * verified ±x%; N earlier invocation(s) unverified)"; "transcript (receipt
-     * pending; provisional)"; "transcript (no receipt; unverified)". A
-     * "; approximate window" suffix marks a window anchored without the run's
-     * own command turn; "; INCOMPLETE — unpriced tokens excluded" marks a
-     * transcript-priced figure that leaves `unpriced` tokens out.
+     * "receipt (Anthropic token counts priced at the price list); N% billed but
+     * not logged" — no transcript bucket is above the receipt, and either every
+     * bucket equals it or the window is provably its invocation, so the
+     * receipt's token counts are booked at the list and N% of the figure is
+     * receipt tokens no transcript message recorded (`unlogged_billed`);
+     * "receipt-only (Anthropic token counts priced at the price list)";
+     * "transcript (receipt covers only the last invocation, verified ±x%; N
+     * earlier invocation(s) unverified)"; "transcript (receipt pending;
+     * provisional)"; "transcript (no receipt; unverified)". Collected before
+     * v0.7.3: "receipt (transcript agrees, ±x%)" booked Claude Code's own
+     * dollars, and "receipt-only" alone did the same. A "; custom policy price
+     * for …" part names pricing_override models. A "; approximate window"
+     * suffix marks a transcript figure anchored without the run's own command
+     * turn; "; INCOMPLETE — unpriced tokens excluded" marks a figure that
+     * leaves `unpriced` (or `unlogged_billed.unpriced`) tokens out.
      */
     cost_source?: string;
     /** The transcript-priced figure, kept beside cost_usd when a receipt supplied or verified it. */
@@ -146,20 +208,40 @@ export interface Manifest {
     /** Claude Code's own end-of-session total for the driver session, when a receipt was found. */
     receipt_cost_usd?: number | null;
     receipt_path?: string | null;
+    /** The same Claude Code total, named for what it is since v0.7.3: a check against the booked figure, never booked. */
+    receipt_cli_usd?: number | null;
+    /**
+     * When a receipt is booked: the receipt's tokens no transcript message
+     * recorded, per model, priced from the list. cost_usd = transcript_cost_usd
+     * + unlogged_billed.cost_usd. Null when no receipt is booked.
+     */
+    unlogged_billed?: OrchestratorUnloggedBilled | null;
+    /**
+     * Whether every helper named by an Agent/Task result in the pinned session
+     * has its `subagents/agent-<id>.jsonl`, and every such file is named. Null
+     * when the scan is not pinned to a session file.
+     */
+    attribution_complete?: boolean | null;
+    /** Helper ids named by an Agent/Task result with no transcript file. */
+    missing_helper_ids?: string[];
+    /** Helper transcript files (relative to the transcript directory) no Agent/Task result names. */
+    unreferenced_helper_files?: string[];
     /** Transcript cost per model, role and price; transcript_cost_usd is the sum of their cost_usd. */
     per_model?: OrchestratorModelCost[];
     /** Transcript tokens with no price on the list; they are in no cost. */
     unpriced?: OrchestratorUnpriced[];
-    /** False when `unpriced` is non-empty. */
+    /** False when `unpriced` (or, for a booked receipt, `unlogged_billed.unpriced`) is non-empty. */
     pricing_complete?: boolean;
     /** The verification date of the price list the figure was priced with. */
     price_list_verified?: string;
     /**
      * The window the collector measured: ISO bounds (end null = the end of the
      * session file), the anchor each bound came from, whether both were exact,
-     * and the session file the scan was pinned to (null = every file scanned).
+     * whether it opens at the first dispatch (a lower bound), the session file
+     * the scan was pinned to (null = every file scanned) and which file the
+     * anchors were read from ("manifest" or "telemetry-rebuild").
      */
-    window?: { start: string; end: string | null; start_anchor: string; end_anchor: string; exact: boolean; session_id: string | null };
+    window?: { start: string; end: string | null; start_anchor: string; end_anchor: string; exact: boolean; lower_bound?: boolean; session_id: string | null; source?: string };
     /** Dispatched dollars that ran inside the session and were subtracted once from true_total_cost_usd. */
     dispatched_in_session_cost_usd?: number;
     dispatched_in_session_events?: number;

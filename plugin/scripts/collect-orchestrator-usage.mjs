@@ -122,41 +122,63 @@
  *      end-of-session result (`claude -p --output-format json`, a runner's
  *      `claude-session.json`, or the last "result" line of a stream-json
  *      `live-run.log`; `--receipt <file>` overrides discovery and must
- *      exist). Its `modelUsage[model]` is what Anthropic's price table
- *      multiplied. The decision is PER TOKEN BUCKET, PER MODEL, and EXACT —
- *      there is no dollar tolerance: for every model the transcript
- *      recorded, its input, cache_read and cache_write totals must EQUAL the
- *      receipt's, and its output must be AT MOST the receipt's (a message
- *      with no terminal line under-reports output; nothing over-reports).
- *      When a model has NO input or cache tokens on either side, the three
- *      buckets prove nothing and output must equal the receipt exactly —
- *      only synthetic transcripts ever hit that case.
- *      Measured on four real sessions: all three buckets equal exactly
- *      whenever the window is the receipt's invocation, and only then.
- *      AGREE → the receipt's own dollars are booked, labelled
- *      "receipt (transcript agrees, ±x%)" with the transcript figure kept
- *      beside it; the receipt's tokens priced at the labelled driver model's
- *      price (the list, or its pricing_override card) are compared to its
- *      dollars and a rate-drift NOTE says when the two differ.
- *      SHORT (any of the three below the receipt) → exit 3, nothing written:
- *      the receipt cannot over-report, so the tree is missing billed
- *      messages (a subagent file not copied, a window that opened late).
- *      ABOVE (any bucket over the receipt) → the window holds messages the
- *      receipt never billed. Claude Code bills per invocation and a runner's
- *      `--resume` continuations each restart the bill, so when the pinned
- *      session file carries two or more human turns inside the window the
- *      LAST invocation alone is checked with the same exact rule: agreement
- *      writes the whole-window transcript figure as "transcript (receipt
- *      covers only the last invocation, verified; N earlier invocation(s)
- *      unverified)"; anything else is exit 3. A receipt model the transcript
- *      never recorded at all (the CLI's own side calls) is a NOTE — its
- *      dollars are inside the booked total. A receipt naming a session other
- *      than the command turn's is exit 3. With a receipt but no transcript
- *      lines in the window, the receipt's dollars are used verbatim
- *      ("receipt-only"). At run-end a headless live-run.log has no result
- *      line yet (the CLI writes it on exit): the figure is written
- *      transcript-priced and labelled "receipt pending; provisional", and a
- *      re-run after the session exits verifies it. Re-running is idempotent.
+ *      exist). Its `modelUsage[model]` is Anthropic's token count for ONE
+ *      invocation, and it includes calls Claude Code bills but never writes
+ *      to a transcript. There is no percentage anywhere in the rule: the
+ *      share billed but not logged was 2.3% and 22% on two real runs, so no
+ *      fixed margin could be right. Per model and per token bucket:
+ *      a. A receipt naming a session other than the command turn's: exit 3.
+ *      b. NAMES are re-keyed on both sides by the price list's resolveModel
+ *         id (resolveBucketNames), so the receipt's `claude-opus-5[1m]` is
+ *         the transcript's `claude-opus-5`; verbatim names refused a real
+ *         headless run (Sep 10 2026). A name the list cannot read is exit 3,
+ *         printing both name lists: it is never paired by similarity.
+ *      c. ABOVE — any transcript input, cache_read, cache_write or output
+ *         bucket over the receipt, or a transcript model the receipt does not
+ *         bill: the window holds messages the receipt never billed. Claude
+ *         Code bills per invocation and a runner's `--resume` continuations
+ *         each restart the bill, so when the pinned session file carries two
+ *         or more human turns inside the window the LAST invocation alone is
+ *         checked, every bucket equal (output at most): agreement writes the
+ *         whole-window transcript figure as "transcript (receipt covers only
+ *         the last invocation, verified; N earlier invocation(s)
+ *         unverified)"; anything else is exit 3.
+ *      d. AT OR BELOW on every bucket — the receipt is BOOKED as its token
+ *         counts priced from the list (bookReceiptTokens), never as Claude
+ *         Code's own dollars (its price table priced Opus 5 at Sonnet rates
+ *         on Aug 24 2026). The logged part is priced per message (fact 6).
+ *         The gap — receipt minus log per bucket, output included — is priced
+ *         at that model's logged cache-write TTL and modifier mix; a model
+ *         with no logged message (a CLI side call, a helper whose file is
+ *         missing) at API-default modifiers with 5-minute writes unless the
+ *         receipt's own top-level usage proves its split, every assumption
+ *         written down. The gap is `unlogged_billed` {per_model, unpriced,
+ *         cost_usd, pct_of_booked}, and the label is "receipt (Anthropic token
+ *         counts priced at the price list); N% billed but not logged". A
+ *         transcript EQUAL to the receipt on every bucket is the receipt's
+ *         invocation by itself: every billed message writes a non-zero input
+ *         or cache bucket, identical on each of its lines, so equal totals
+ *         mean the same messages. A transcript BELOW it on some bucket is
+ *         booked only when the window is PROVABLY the receipt's invocation
+ *         (provableInvocation): pinned to the receipt's session, opened at
+ *         the run's command turn, no later human turn, exact and not a lower
+ *         bound. The gap is then calls Claude Code never logs, or a helper
+ *         transcript that was not copied; `attribution_complete`
+ *         (helperAttribution: every helper named by an Agent/Task result has
+ *         its `subagents/agent-<id>.jsonl`, and no such file is unnamed)
+ *         tells those apart, and the total is right either way.
+ *      e. BELOW without that proof: exit 3, nothing written — the gap may be
+ *         billed messages outside the window (a subagent file not copied, a
+ *         window that opened late).
+ *      Claude Code's own dollars stay a check (`receipt_cli_usd`): more than
+ *      RECEIPT_CLI_DRIFT (0.5%) from the booked figure is a NOTE. With a
+ *      receipt but no transcript lines in the window, the receipt's token
+ *      counts are priced the same way, every model receipt-only
+ *      ("receipt-only (Anthropic token counts priced at the price list)").
+ *      At run-end a headless live-run.log has no result line yet (the CLI
+ *      writes it on exit): the figure is written transcript-priced and
+ *      labelled "receipt pending; provisional", and a re-run after the
+ *      session exits verifies it. Re-running is idempotent.
  *   9. IN-SESSION DISPATCH: packets the session executed itself (provenance
  *      `estimated` or `apportioned_from_measured_total`), and a `claude-cli`
  *      worker whose own `claude -p` session was swept into a transcript-priced
@@ -202,21 +224,25 @@
  *                       Defaults to <pass-dir>/claude-session.json, then
  *                       <pass-dir>/live-run.log, whichever exists.
  *   --strict-pricing    refuse (exit 1, nothing written) when any token in the
- *                       window has no price on the list: an unknown model, no
- *                       price period for its day, or a speed / service_tier /
+ *                       window, or any receipt token a booked receipt adds,
+ *                       has no price on the list: an unknown model, no price
+ *                       period for its day, or a speed / service_tier /
  *                       inference_geo value the list does not price. Without
- *                       it those tokens are listed in unpriced[] and the
- *                       figure is labelled INCOMPLETE.
+ *                       it those tokens are listed in unpriced[] (or
+ *                       unlogged_billed.unpriced) and the figure is labelled
+ *                       INCOMPLETE.
  *   --dry-run           print everything, write nothing.
  *
  * Exit codes: 0 = event written (or --dry-run). 1 = bad arguments, missing
  * manifest, no billable assistant messages found in the run window (the
  * run WAS driven by a session, so an empty window means the wrong
  * project-root/transcripts-dir — nothing is written), or --strict-pricing
- * with a token the price list cannot price. 3 = the transcript and
- * the receipt disagree — the transcript is short of the receipt, or over it
- * with no continuation turn to account for the excess, or the receipt names
- * a session other than the command turn's — nothing is written.
+ * with a token the price list cannot price. 3 = the transcript and the
+ * receipt cannot be reconciled — the transcript is over the receipt with no
+ * continuation turn to account for the excess, or short of it in a window
+ * that cannot be proven to be the receipt's invocation, or a model name on
+ * either side is not on the price list, or the receipt names a session other
+ * than the command turn's — nothing is written.
  */
 
 import { readdirSync, readFileSync, renameSync, statSync, writeFileSync, existsSync } from "node:fs";
@@ -352,11 +378,14 @@ export function humanTurns(file) {
 }
 
 /**
- * The exact receipt rule (header, fact 8), per model. `perModel` is the
+ * The per-bucket receipt comparison (header, fact 8), per model. `perModel` is the
  * transcript's per-model token buckets; `receiptModels` the receipt's
- * `modelUsage`. For every model the transcript recorded: input, cache_read
- * and cache_write must EQUAL the receipt's, output must be AT MOST the
- * receipt's. Why this is exact: every billed message carries at least one
+ * `modelUsage`, both keyed by price-list id (resolveBucketNames). `ok` means:
+ * for every model the transcript recorded, input, cache_read and cache_write
+ * EQUAL the receipt's and output is AT MOST the receipt's. The caller decides
+ * from the lists, not from `ok`: anything in `above` takes the ABOVE path,
+ * and a non-empty `short` is booked only in a provable window. Why equality
+ * is exact: every billed message carries at least one
  * non-zero count among input / cache_read / cache_write (a message with all
  * three at zero was never sent), and those three are identical on every
  * duplicate line of a message, so equal totals across all three mean the
@@ -412,6 +441,337 @@ export function compareBuckets(perModel, receiptModels) {
     lines.push(`${name}: ${cells.join(" · ")} → ${verdict}`);
   }
   return { ok: above.length === 0 && short.length === 0, above, short, unrecorded, lines };
+}
+
+/**
+ * Fix D, names (header, fact 8). The receipt and the transcript spell one model
+ * differently: Claude Code writes `claude-opus-5[1m]` on the receipt for a
+ * 1M-context session and `claude-haiku-4-5-20251001` for a dated snapshot,
+ * while the transcript records the API id `claude-opus-5`. Comparing the names
+ * verbatim reported a real session's own tokens as "not on the receipt" and
+ * refused the run (Sep 10 2026). Both sides are therefore re-keyed by the price
+ * list's resolveModel id, and every bucket of names that resolve to one id is
+ * summed, so compareBuckets compares one model with itself. A name the list
+ * cannot read is never paired by similarity: it is returned in `unresolved`
+ * and the caller refuses. `(unlabeled)` (a message with no model name) keeps
+ * its own key, which compareBuckets reports as over the receipt. `names` lists
+ * the spellings each id was built from, for the console.
+ */
+export function resolveBucketNames(perModel, receiptModels, resolve) {
+  const transcript = {};
+  const receipt = {};
+  const unresolved = { transcript: [], receipt: [] };
+  for (const [name, b] of Object.entries(perModel)) {
+    if (name === "(unlabeled)") { transcript[name] = { ...b, names: [name] }; continue; }
+    const id = resolve(name)?.id;
+    if (!id) { unresolved.transcript.push(name); continue; }
+    const t = (transcript[id] ??= { input: 0, input_cached: 0, input_cache_write: 0, input_cache_write_1h: 0, output: 0, names: [] });
+    for (const k of ["input", "input_cached", "input_cache_write", "input_cache_write_1h", "output"]) t[k] += b[k] ?? 0;
+    t.names.push(name);
+  }
+  for (const [name, b] of Object.entries(receiptModels)) {
+    const id = resolve(name)?.id;
+    if (!id) { unresolved.receipt.push(name); continue; }
+    const r = (receipt[id] ??= { input: 0, input_cached: 0, input_cache_write: 0, output: 0, cost_usd: null, names: [] });
+    for (const k of RECEIPT_BUCKETS) r[k] += b[k] ?? 0;
+    if (b.cost_usd != null) r.cost_usd = (r.cost_usd ?? 0) + b.cost_usd;
+    r.names.push(name);
+  }
+  for (const v of [...Object.values(transcript), ...Object.values(receipt)]) v.names.sort();
+  unresolved.transcript.sort();
+  unresolved.receipt.sort();
+  return { transcript, receipt, unresolved };
+}
+
+/** The receipt's four per-model token buckets (it carries no TTL split per model). */
+const RECEIPT_BUCKETS = ["input", "input_cached", "input_cache_write", "output"];
+/** A delegated helper's transcript file, as Claude Code names it: `agent-<agentId>.jsonl`. */
+const HELPER_FILE = /^agent-([A-Za-z0-9]+)\.jsonl$/;
+/** The line Claude Code appends to an Agent/Task result's text: `agentId: <id> (use SendMessage ...)`. */
+const AGENT_ID_TEXT = /agentId: ([A-Za-z0-9]+)/g;
+
+/**
+ * Every helper transcript of one session: `agent-<id>.jsonl` files at any depth
+ * under `<dir>/<sessionId>/subagents/` (a workflow nests a directory per run).
+ * No mtime prune, unlike candidateTranscripts: the attribution check compares
+ * the session's whole record of helpers with its whole set of files, whatever
+ * window the cost was measured over.
+ */
+export function sessionHelperFiles(dir, sessionId) {
+  const out = [];
+  const walk = (d, depth) => {
+    if (depth > 8) return;
+    let entries;
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = join(d, e.name);
+      if (e.isFile() && HELPER_FILE.test(e.name)) out.push(p);
+      else if (e.isDirectory()) walk(p, depth + 1);
+    }
+  };
+  walk(join(dir, sessionId, "subagents"), 1);
+  return out.sort();
+}
+
+/**
+ * Fix D, attribution (header, fact 8). Whether the transcript tree holds a file
+ * for every helper the session ran. Once a receipt is booked its total is right
+ * whatever the tree holds; what a missing helper file loses is the breakdown,
+ * because that helper's tokens land in `unlogged_billed` instead of `per_model`.
+ * This tells the two causes of a gap apart: calls Claude Code bills but never
+ * logs (every helper has its file) and a helper transcript that was not copied
+ * (a helper is missing).
+ *
+ * A helper is named by the result of an `Agent` or `Task` tool use, in the
+ * session file or in any helper file (a helper that spawns helpers records the
+ * result in its own file). Claude Code writes the id two ways, both seen on a
+ * real run: `toolUseResult.agentId` on the result line, and an `agentId: <id>`
+ * line in the result text (no toolUseResult on nested results). Results of any
+ * other tool are ignored, so a Bash output that prints "agentId:" names nothing.
+ * `complete` is true iff the named ids equal the ids of `helperFiles`.
+ */
+export function helperAttribution(sessionFile, helperFiles, { root } = {}) {
+  const objects = [];
+  const agentUses = new Set();
+  for (const f of [sessionFile, ...helperFiles]) {
+    let lines;
+    try { lines = readFileSync(f, "utf-8").split("\n"); } catch { continue; }
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let o;
+      try { o = JSON.parse(line); } catch { continue; }
+      objects.push(o);
+      if (o?.type === "assistant" && Array.isArray(o.message?.content)) {
+        for (const b of o.message.content) {
+          if (b?.type === "tool_use" && (b.name === "Agent" || b.name === "Task") && typeof b.id === "string") agentUses.add(b.id);
+        }
+      }
+    }
+  }
+  const referenced = new Set();
+  for (const o of objects) {
+    if (o?.type !== "user" || !Array.isArray(o.message?.content)) continue;
+    const results = o.message.content.filter((b) => b?.type === "tool_result" && agentUses.has(b.tool_use_id));
+    if (results.length === 0) continue;
+    const tur = o.toolUseResult;
+    if (tur && typeof tur === "object" && typeof tur.agentId === "string" && tur.agentId !== "") referenced.add(tur.agentId);
+    for (const b of results) {
+      const text = typeof b.content === "string"
+        ? b.content
+        : Array.isArray(b.content) ? b.content.map((x) => (x?.type === "text" && typeof x.text === "string" ? x.text : "")).join("\n") : "";
+      for (const m of text.matchAll(AGENT_ID_TEXT)) referenced.add(m[1]);
+    }
+  }
+  const fileById = new Map();
+  for (const f of helperFiles) {
+    const id = HELPER_FILE.exec(basename(f))?.[1];
+    if (id) fileById.set(id, f);
+  }
+  const missing = [...referenced].filter((id) => !fileById.has(id)).sort();
+  const unreferenced = [...fileById.entries()].filter(([id]) => !referenced.has(id)).map(([, f]) => (root ? relative(root, f) : f)).sort();
+  return {
+    complete: missing.length === 0 && unreferenced.length === 0,
+    referenced: [...referenced].sort(),
+    missing_helper_ids: missing,
+    unreferenced_helper_files: unreferenced,
+  };
+}
+
+/**
+ * Fix D, provability (header, fact 8). A receipt ABOVE the transcript is booked
+ * only when the window is provably the one invocation the receipt bills; these
+ * are the facts the collector already records for the window. Every failed
+ * fact is a reason, in words. (A transcript EQUAL to the receipt on every
+ * bucket needs none of this: the equality itself proves the message set.)
+ */
+export function provableInvocation({ receiptSessionId, pinnedId, startAnchor, humanTurnsInWindow, windowExact, lowerBound }) {
+  const reasons = [];
+  if (!receiptSessionId) reasons.push("the receipt names no session");
+  else if (pinnedId !== receiptSessionId) reasons.push(`the scan is not pinned to the receipt's session ${receiptSessionId}${pinnedId ? ` (it is pinned to ${pinnedId})` : ""}`);
+  if (lowerBound) reasons.push("the window opens at the first dispatch (a lower bound)");
+  else if (startAnchor !== "command turn") reasons.push(`the window opens at ${startAnchor}, not at the run's command turn`);
+  if (humanTurnsInWindow > 1) reasons.push(`${humanTurnsInWindow} human turns fall inside the window, so the receipt may bill only the last invocation`);
+  if (!windowExact) reasons.push("the window is approximate");
+  return { provable: reasons.length === 0, reasons };
+}
+
+/** Removes float noise from a blended rate (13.125000000000002 → 13.125); display only, costs use the unrounded rate. */
+const roundRate = (n) => Math.round(n * 1e9) / 1e9;
+
+/**
+ * One model's price on every reference instant, looked up at API-default
+ * modifiers. The instants are the window's first and last known moments; a
+ * model's periods are day ranges, so one price at both ends is its price
+ * across the window. Two different prices, or no price, is unpriced: a model
+ * with no logged message has nothing that says which applies.
+ */
+function referencePrice(name, referenceTimes, pricer) {
+  let first = null;
+  for (const t of referenceTimes) {
+    const r = pricer(name, t, {});
+    if (r.unpriced) return r;
+    if (first && (first.basis !== r.basis || JSON.stringify(first.pricing) !== JSON.stringify(r.pricing))) {
+      return { unpriced: true, model: r.model, reason: `the window spans two prices for ${r.model}, and no logged message says which one its unlogged tokens were billed at` };
+    }
+    first ??= r;
+  }
+  return first ?? { unpriced: true, model: name, reason: "no reference day to price on" };
+}
+
+/**
+ * Fix D, booking (header, fact 8): the receipt's token counts priced from the
+ * price list. Claude Code's own dollars are never booked (its price table was
+ * stale on Aug 24 2026); they stay a check. Per receipt model (`receipt` is
+ * resolveBucketNames' re-keyed map):
+ *   - the LOGGED part is `priced` (priceMessages over the window): each message
+ *     at its own model, day, modifiers and cache-write split;
+ *   - the GAP is receipt minus log, per bucket (output included), and it is
+ *     priced at that model's LOGGED MIX: per bucket, the token-weighted average
+ *     of the rates its logged messages paid, cache writes averaged over their
+ *     5-minute and 1-hour rates. So an unlogged call is priced as the model's
+ *     logged calls were, fast mode and 1-hour writes included, in proportion;
+ *   - a bucket with no logged tokens, and a model with no logged message (a
+ *     CLI side call, or a helper whose file is missing), fall back to the list
+ *     at API-default modifiers on the window's days, and every such fallback
+ *     that prices a non-zero gap is written into `assumed`. Cache writes then
+ *     take the 5-minute rate, unless the receipt's top-level `usage` equals
+ *     that model's four counts exactly and no other model's, in which case the
+ *     usage's own 5-minute / 1-hour split is that model's (a proven match, not
+ *     a pairing guess: Claude Code writes the main loop's usage there);
+ *   - a gap the list cannot price goes to `unlogged_billed.unpriced` with the
+ *     reason, and `complete` is false.
+ * `tokens` are the receipt's counts; their 1-hour share is the logged 1-hour
+ * writes plus each model's gap writes apportioned at its logged split (the
+ * receipt's split for a proven owner, none otherwise).
+ */
+export function bookReceiptTokens({ receipt, priced, pricer, referenceTimes, receiptUsage = null }) {
+  const round6 = pricer.round6;
+  const premium5m = pricer.CACHE_WRITE_PREMIUM ?? 1.25;
+  const premium1h = pricer.CACHE_WRITE_PREMIUM_1H ?? 2;
+  // computeCostUsd's own fallbacks, so a pricing_override card without write rates blends at the rates it bills.
+  const writeRates = (rates) => ({ w5m: rates.input_cache_write ?? rates.input * premium5m, w1h: rates.input_cache_write_1h ?? rates.input * premium1h });
+  const usageOwner = (() => {
+    const u = receiptUsage;
+    if (!u || u.cache_write_5m == null || u.cache_write_1h == null || u.cache_write_5m + u.cache_write_1h !== u.input_cache_write) return null;
+    const owners = Object.keys(receipt).filter((id) => RECEIPT_BUCKETS.every((b) => receipt[id][b] === u[b]));
+    return owners.length === 1 ? owners[0] : null;
+  })();
+
+  const perModel = [];
+  const unpriced = [];
+  const byModel = [];
+  const customModels = new Set(priced.custom_models ?? []);
+  const tokens = { input: 0, input_cached: 0, input_cache_write: 0, input_cache_write_5m: 0, input_cache_write_1h: 0, output: 0 };
+  for (const id of Object.keys(receipt).sort()) {
+    const R = receipt[id];
+    const entries = priced.per_model.filter((e) => e.model === id);
+    const logged = zeroTokens();
+    for (const e of [...entries, ...priced.unpriced.filter((u) => u.model === id)]) for (const k of TOKEN_KEYS) logged[k] += e.tokens[k] ?? 0;
+    const loggedWrites = logged.input_cache_write_5m + logged.input_cache_write_1h;
+    const receiptOnly = logged.input + logged.input_cached + loggedWrites + logged.output === 0 && entries.length === 0;
+    const gap = {
+      input: Math.max(0, R.input - logged.input),
+      input_cached: Math.max(0, R.input_cached - logged.input_cached),
+      input_cache_write: Math.max(0, R.input_cache_write - loggedWrites),
+      output: Math.max(0, R.output - logged.output),
+    };
+    for (const b of RECEIPT_BUCKETS) tokens[b] += R[b];
+
+    // The logged mix: token-weighted rates per bucket.
+    const mix = { input: [0, 0], input_cached: [0, 0], input_cache_write: [0, 0], output: [0, 0] };
+    for (const e of entries) {
+      for (const b of ["input", "input_cached", "output"]) { mix[b][0] += e.tokens[b]; mix[b][1] += e.tokens[b] * e.rates[b]; }
+      const w = writeRates(e.rates);
+      mix.input_cache_write[0] += e.tokens.input_cache_write_5m + e.tokens.input_cache_write_1h;
+      mix.input_cache_write[1] += e.tokens.input_cache_write_5m * w.w5m + e.tokens.input_cache_write_1h * w.w1h;
+    }
+    let fallback = null;
+    const reference = () => (fallback ??= referencePrice(R.names[0], referenceTimes, pricer));
+    const rate = {};
+    const assumed = [];
+    let reason = null;
+    for (const b of ["input", "input_cached", "output"]) {
+      if (mix[b][0] > 0) { rate[b] = mix[b][1] / mix[b][0]; continue; }
+      const f = reference();
+      rate[b] = f.unpriced ? null : f.pricing[b];
+      if (gap[b] > 0 && f.unpriced) reason = f.reason;
+      else if (gap[b] > 0 && !receiptOnly) assumed.push(`no logged ${b} tokens: the ${f.basis === "custom" ? "policy's pricing_override card" : "list's rate at API-default modifiers"}`);
+    }
+    let ttlSplit;
+    let gap1h = 0;
+    if (mix.input_cache_write[0] > 0) {
+      rate.input_cache_write = mix.input_cache_write[1] / mix.input_cache_write[0];
+      ttlSplit = "logged mix";
+      gap1h = Math.round(gap.input_cache_write * (logged.input_cache_write_1h / loggedWrites));
+    } else {
+      const f = reference();
+      const w = f.unpriced ? null : writeRates(f.pricing);
+      if (gap.input_cache_write === 0) {
+        rate.input_cache_write = w ? w.w5m : null;
+        ttlSplit = "none";
+      } else if (f.unpriced) {
+        rate.input_cache_write = null;
+        reason = f.reason;
+        ttlSplit = "none";
+      } else if (receiptOnly && usageOwner === id) {
+        rate.input_cache_write = (receiptUsage.cache_write_5m * w.w5m + receiptUsage.cache_write_1h * w.w1h) / R.input_cache_write;
+        ttlSplit = "receipt usage";
+        gap1h = receiptUsage.cache_write_1h;
+      } else {
+        rate.input_cache_write = w.w5m;
+        ttlSplit = "5-minute (assumed)";
+        assumed.push("no cache-write split for these writes: the 5-minute rate");
+      }
+    }
+    if (receiptOnly) {
+      const f = reference();
+      if (!f.unpriced) {
+        assumed.unshift(f.basis === "custom"
+          ? "no logged message: the policy's pricing_override card"
+          : `no logged message: API-default ${(f.applied_modifiers?.defaulted ?? []).join(", ").replace(/, ([^,]*)$/, " and $1")}`);
+        if (f.basis === "custom") customModels.add(id);
+      }
+    }
+    tokens.input_cache_write_1h += logged.input_cache_write_1h + gap1h;
+
+    const loggedCost = round6(entries.reduce((s, e) => s + e.cost_usd, 0));
+    const hasGap = RECEIPT_BUCKETS.some((b) => gap[b] > 0);
+    let gapCost = 0;
+    if (hasGap && reason) {
+      unpriced.push({ model: id, reported_as: R.names, reason, tokens: gap });
+    } else if (hasGap) {
+      gapCost = round6(RECEIPT_BUCKETS.reduce((s, b) => s + (gap[b] > 0 ? (gap[b] / 1_000_000) * rate[b] : 0), 0));
+      perModel.push({
+        model: id,
+        reported_as: R.names,
+        receipt_only: receiptOnly,
+        tokens: gap,
+        rates: Object.fromEntries(RECEIPT_BUCKETS.map((b) => [b, rate[b] == null ? null : roundRate(rate[b])])),
+        ttl_split: ttlSplit,
+        assumed,
+        cost_usd: gapCost,
+      });
+    }
+    byModel.push({ model: id, reported_as: R.names, cost_usd: round6(loggedCost + gapCost), cli_cost_usd: R.cost_usd });
+  }
+  tokens.input_cache_write_1h = Math.min(tokens.input_cache_write, tokens.input_cache_write_1h);
+  tokens.input_cache_write_5m = tokens.input_cache_write - tokens.input_cache_write_1h;
+  const unloggedCost = round6(perModel.reduce((s, g) => s + g.cost_usd, 0));
+  const cost = round6(priced.cost_usd + unloggedCost);
+  return {
+    cost_usd: cost,
+    logged_cost_usd: priced.cost_usd,
+    tokens,
+    unlogged_billed: {
+      per_model: perModel,
+      unpriced,
+      cost_usd: unloggedCost,
+      pct_of_booked: cost > 0 ? Math.round((unloggedCost / cost) * 10_000) / 100 : 0,
+    },
+    complete: priced.complete && unpriced.length === 0,
+    custom_models: [...customModels].sort(),
+    by_model: byModel,
+  };
 }
 
 // Runs write `policy`/`run_id`; `buildManifest`'s shape says `policy_name`/`pass`.
@@ -760,8 +1120,20 @@ export function makeMessagePricer(policy, { pricesMod, effectiveMod, pricingMod 
   pricer.warnings = warnings;
   pricer.computeCostUsd = pricingMod.computeCostUsd;
   pricer.round6 = pricingMod.round6;
+  // computeCostUsd's cache-write fallbacks, so a booked receipt's gap blends a
+  // pricing_override card that declares no write rates at the rates it bills.
+  pricer.CACHE_WRITE_PREMIUM = pricingMod.CACHE_WRITE_PREMIUM;
+  pricer.CACHE_WRITE_PREMIUM_1H = pricingMod.CACHE_WRITE_PREMIUM_1H;
   return pricer;
 }
+
+/**
+ * How far Claude Code's own `total_cost_usd` may sit from a booked receipt's
+ * list-priced figure before a NOTE says so (header, fact 8): the same 0.5% the
+ * claude-cli worker ledger and the policy-card check use. It never decides
+ * what is booked.
+ */
+export const RECEIPT_CLI_DRIFT = 0.005;
 
 /**
  * Prices sumTranscriptUsage's `messages` one by one and aggregates them per
@@ -900,6 +1272,22 @@ export function readReceipt(path, { required = false } = {}) {
   if (total == null) throw new Error(`receipt ${path} carries neither total_cost_usd nor modelUsage[*].costUSD`);
   if (!(total > 0)) throw new Error(`receipt ${path} reports $${total} — a zero or negative receipt cannot referee anything`);
   const cc = r.usage?.cache_creation ?? {};
+  // The top-level usage, when it carries all four counts. bookReceiptTokens
+  // takes its 5-minute / 1-hour split only for a model whose four counts it
+  // equals exactly: Claude Code writes the main loop's usage there (two real
+  // receipts, CLI 2.1.245 and 2.1.270), but an older capture holds a per-turn
+  // snapshot that matches no model and must not be attributed to one.
+  const u = r.usage;
+  const usage = u && [u.input_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens, u.output_tokens].every((n) => typeof n === "number")
+    ? {
+        input: u.input_tokens,
+        input_cached: u.cache_read_input_tokens,
+        input_cache_write: u.cache_creation_input_tokens,
+        output: u.output_tokens,
+        cache_write_5m: cc.ephemeral_5m_input_tokens ?? null,
+        cache_write_1h: cc.ephemeral_1h_input_tokens ?? null,
+      }
+    : null;
   return {
     path,
     session_id: r.session_id ?? null,
@@ -907,6 +1295,7 @@ export function readReceipt(path, { required = false } = {}) {
     models,
     cache_write_1h: cc.ephemeral_1h_input_tokens ?? null,
     cache_write_5m: cc.ephemeral_5m_input_tokens ?? null,
+    usage,
   };
 }
 
@@ -1488,36 +1877,147 @@ export async function main(argv = process.argv.slice(2)) {
   // ── The receipt rule ────────────────────────────────────────────────────
   let cost;
   let costSource;
-  /** Book the receipt's own dollars and tokens (the 1-hour cache-write share
-   *  comes from the transcript, capped at the receipt's total write count). */
-  const bookReceipt = () => {
-    const rm = sumReceiptModels(receipt.models);
-    tokens.input = rm.input;
-    tokens.input_cached = rm.input_cached;
-    tokens.input_cache_write = rm.input_cache_write;
-    tokens.input_cache_write_1h = Math.min(rm.input_cache_write, receipt.cache_write_1h ?? tokens.input_cache_write_1h);
-    tokens.input_cache_write_5m = Math.max(0, tokens.input_cache_write - tokens.input_cache_write_1h);
-    tokens.output = rm.output;
-    cost = pricingMod.round6(receipt.total_cost_usd);
+  // Set when a receipt is booked (header, fact 8): its token counts priced
+  // from the list, never Claude Code's own dollars.
+  let booking = null;
+
+  // Every helper the session ran should have its transcript file. Only a scan
+  // pinned to a session file can check it; the result is recorded whatever
+  // the cost source (header, fact 8).
+  const helperFiles = pinned && mainFile && pinnedId ? sessionHelperFiles(tDir, pinnedId) : [];
+  const attribution = pinned && mainFile && pinnedId ? helperAttribution(mainFile, helperFiles, { root: tDir }) : null;
+  if (attribution) {
+    console.log(
+      `helpers: ${attribution.referenced.length} named by Agent/Task results, ${helperFiles.length} transcript file(s) → ` +
+        `attribution ${attribution.complete ? "complete" : "INCOMPLETE"}`
+    );
+    if (!attribution.complete) {
+      console.error(
+        `NOTE: attribution incomplete — ` +
+          [
+            ...attribution.missing_helper_ids.map((id) => `helper ${id} named by an Agent/Task result has no transcript file`),
+            ...attribution.unreferenced_helper_files.map((f) => `${f} is named by no Agent/Task result`),
+          ].join("; ") +
+          `. A booked receipt's total is unaffected, but a missing helper's tokens are counted in unlogged_billed ` +
+          `instead of per_model. Copy the session's whole subagents/ directory to keep the breakdown.`
+      );
+    }
+  }
+
+  // The receipt's model names and the transcript's, re-keyed by price-list id
+  // (header, fact 8): `claude-opus-5[1m]` on a receipt is the transcript's
+  // `claude-opus-5`. A name the list cannot read could only be paired by
+  // guesswork, so it refuses, printing both sides' names.
+  const names = receipt ? resolveBucketNames(perModel, receipt.models, pricesMod.resolveModel) : null;
+  if (names && (names.unresolved.transcript.length > 0 || names.unresolved.receipt.length > 0)) {
+    const u = names.unresolved;
+    console.error(
+      `collect-orchestrator-usage FAILED: cannot resolve model name(s) the price list does not carry: ` +
+        `${[...u.transcript.map((n) => `transcript ${n}`), ...u.receipt.map((n) => `receipt ${n}`)].join(", ")}. The receipt check ` +
+        `pairs the receipt's models with the transcript's by price-list id, and a name the list cannot read would have to ` +
+        `be paired by guesswork. transcript names: ${Object.keys(perModel).filter((n) => n !== "(unlabeled)").sort().join(", ") || "(none)"}; ` +
+        `receipt names: ${Object.keys(receipt.models).sort().join(", ") || "(none)"}. Add the model's verified price period to ` +
+        `plugin/mcp/model-dispatch/src/prices.ts and re-run. Nothing was written.`
+    );
+    return 3;
+  }
+  if (names) {
+    const renamed = (map) => Object.entries(map).flatMap(([id, v]) => v.names.filter((n) => n !== id).map((n) => `${n} → ${id}`)).sort();
+    if (renamed(names.receipt).length > 0) console.log(`  receipt names resolved: ${renamed(names.receipt).join(", ")}`);
+    if (renamed(names.transcript).length > 0) console.log(`  transcript names resolved: ${renamed(names.transcript).join(", ")}`);
+  }
+
+  // A model with no logged message is priced on the window's opening and its
+  // last known moment: the last counted message, else the window's (clamped)
+  // close, else the last dispatched event.
+  const lastMessageMs = messages.reduce((mx, m) => {
+    const t = Date.parse(m.timestamp);
+    return Number.isFinite(t) && t > mx ? t : mx;
+  }, Number.NEGATIVE_INFINITY);
+  const referenceEndMs = Number.isFinite(lastMessageMs) ? lastMessageMs : finiteEnd ? Math.min(windowEndMs, collectedAtMs) : lastDispatchMs;
+  const referenceTimes = [isoOf(windowStartMs), isoOf(Math.max(windowStartMs, referenceEndMs))];
+
+  /** Books the receipt's token counts at the list (bookReceiptTokens) into cost and the token fields, and prints the gap. */
+  const book = () => {
+    booking = bookReceiptTokens({ receipt: names.receipt, priced, pricer, referenceTimes, receiptUsage: receipt.usage });
+    for (const k of ["input", "input_cached", "input_cache_write", "input_cache_write_5m", "input_cache_write_1h", "output"]) tokens[k] = booking.tokens[k];
+    cost = booking.cost_usd;
+    const share = booking.cost_usd > 0 ? (booking.unlogged_billed.cost_usd / booking.cost_usd) * 100 : 0;
+    console.log(
+      `  booked: logged $${booking.logged_cost_usd} + billed but not logged $${booking.unlogged_billed.cost_usd} ` +
+        `(${share.toFixed(1)}%) = $${booking.cost_usd}`
+    );
+    for (const g of booking.unlogged_billed.per_model) {
+      console.log(
+        `    not logged ${g.model}${g.receipt_only ? " (no logged message)" : ""}: in ${g.tokens.input} · cached ${g.tokens.input_cached} · ` +
+          `cache_write ${g.tokens.input_cache_write} · out ${g.tokens.output} [${g.ttl_split}${g.assumed.length ? `; ${g.assumed.join("; ")}` : ""}] = $${g.cost_usd}`
+      );
+    }
+    return share;
   };
+  /** Receipt tokens the list cannot price: warned; with --strict-pricing, refused (true = refuse). */
+  const strictRefusesBooking = () => {
+    const gapUnpriced = booking.unlogged_billed.unpriced;
+    if (gapUnpriced.length === 0) return false;
+    const count = (t) => RECEIPT_BUCKETS.reduce((s, k) => s + t[k], 0);
+    console.error(
+      `WARNING: the receipt bills ${gapUnpriced.reduce((s, x) => s + count(x.tokens), 0)} token(s) no transcript message recorded ` +
+        `and the list cannot price, so the booked figure is INCOMPLETE: it leaves them out rather than borrow another price.\n` +
+        gapUnpriced.map((x) => `  ${x.model} (${x.reported_as.join(", ")}): ${count(x.tokens)} token(s) — ${x.reason}`).join("\n")
+    );
+    if (!args.strictPricing) return false;
+    console.error(
+      `collect-orchestrator-usage FAILED: --strict-pricing, and receipt tokens for ${gapUnpriced.map((x) => x.model).join(", ")} ` +
+        `have no price on the list. Nothing was written.`
+    );
+    return true;
+  };
+  const customTag = () => (booking.custom_models.length > 0 ? `; custom policy price for ${booking.custom_models.join(", ")}` : "");
+  /** Claude Code's own dollars are a check only: more than RECEIPT_CLI_DRIFT away from the booked figure is a NOTE. */
+  const noteDrift = () => {
+    const cli = receipt.total_cost_usd;
+    if (!(booking.cost_usd > 0)) return;
+    const drift = (cli - booking.cost_usd) / booking.cost_usd;
+    if (Math.abs(drift) <= RECEIPT_CLI_DRIFT) return;
+    console.error(
+      `NOTE: Claude Code's own price table differs from the price list on this run: the receipt's token counts come to ` +
+        `$${booking.cost_usd} at ${booking.custom_models.length > 0 ? "the price list and the policy's pricing_override cards" : "the price list"} ` +
+        `(booked), but the receipt says $${pricingMod.round6(cli)} (${fmtPct(drift)} against the booked figure). Per model: ` +
+        booking.by_model.map((m) => `${m.model} $${m.cost_usd} vs $${m.cli_cost_usd == null ? "?" : pricingMod.round6(m.cli_cost_usd)}`).join("; ") +
+        `. Claude Code's dollars are kept as receipt_cli_usd and never booked. Either its table or ` +
+        `plugin/mcp/model-dispatch/src/prices.ts is out of date, or unlogged tokens were billed at a cache-write TTL other ` +
+        `than the one assumed in unlogged_billed.`
+    );
+  };
+
   if (receiptOnly) {
-    // No transcript reachable, but the CLI's own accounting is. Its dollars
-    // are authoritative; only attribution is lost, and that is said.
-    bookReceipt();
-    costSource = "receipt-only";
+    // No transcript line fell in the window, but the receipt's token counts
+    // did. They are priced from the list like any booked receipt, with every
+    // model receipt-only; only attribution to phases is lost, and that is said.
+    if (Object.keys(names.receipt).length === 0) {
+      console.error(
+        `collect-orchestrator-usage FAILED: no transcript lines fell in the window and the receipt ${receipt.path} carries no ` +
+          `per-model token counts (modelUsage) to price. Claude Code's own dollar figure is never booked. Nothing was written.`
+      );
+      return 3;
+    }
+    book();
+    if (strictRefusesBooking()) return 1;
+    costSource = `receipt-only (Anthropic token counts priced at the price list${customTag()})${booking.complete ? "" : "; INCOMPLETE — unpriced tokens excluded"}`;
     // Label the figure with what the receipt says ran, not what the policy
     // would have priced: the two differ exactly when the policy was not the
     // driver (an Opus 4.8 session under a Gemini-worker policy, say).
     const dominant = Object.entries(receipt.models).sort((a, b) => (b[1].cost_usd ?? 0) - (a[1].cost_usd ?? 0))[0];
     if (dominant) {
       derived = { modelName: dominant[0], modelId: null };
-      pricingBasis = `the receipt (${Object.keys(receipt.models).join(" + ")})`;
+      pricingBasis = `the receipt's token counts at the price list (${Object.keys(receipt.models).join(" + ")})`;
     }
     console.error(
-      `NOTE: no transcript lines fell in the window (${tDir}), but the receipt ${receipt.path} ` +
-        `carries the session's own accounting — its $${cost} is used verbatim. Attribution to ` +
-        `phases is not possible without the transcript.`
+      `NOTE: no transcript lines fell in the window (${tDir}), but the receipt ${receipt.path} carries the session's ` +
+        `own token counts: priced from the list they come to $${cost} (Claude Code's own figure: ` +
+        `$${pricingMod.round6(receipt.total_cost_usd)}). Attribution to phases is not possible without the transcript.`
     );
+    noteDrift();
   } else if (receipt) {
     const rm = sumReceiptModels(receipt.models);
     const delta = transcriptCost == null ? null : (transcriptCost - receipt.total_cost_usd) / receipt.total_cost_usd;
@@ -1542,28 +2042,22 @@ export async function main(argv = process.argv.slice(2)) {
       `  tokens transcript in ${tokens.input} · cached ${tokens.input_cached} · cache_write ${tokens.input_cache_write} · out ${tokens.output}` +
         ` | receipt in ${rm.input} · cached ${rm.input_cached} · cache_write ${rm.input_cache_write} · out ${rm.output}`
     );
-    const cmp = compareBuckets(perModel, receipt.models);
+    // Per price-list model, not per spelling (header, fact 8).
+    const cmp = compareBuckets(names.transcript, names.receipt);
     for (const l of cmp.lines) console.log(`  ${l}`);
     if (cmp.unrecorded.length > 0) {
-      const detail = cmp.unrecorded.map((m) => `${m} (${receipt.models[m].input + receipt.models[m].input_cached + receipt.models[m].input_cache_write + receipt.models[m].output} tokens, $${receipt.models[m].cost_usd ?? "?"})`).join(", ");
+      const detail = cmp.unrecorded.map((m) => {
+        const r = names.receipt[m];
+        return `${m} (${r.input + r.input_cached + r.input_cache_write + r.output} tokens, $${r.cost_usd ?? "?"})`;
+      }).join(", ");
       console.error(
         `NOTE: the receipt also bills ${detail} for calls the transcript does not record — the CLI's own side calls ` +
-          `(session titles, summaries). Their dollars are inside the receipt total and are booked with it.`
+          `(session titles, summaries), or a helper whose transcript file is missing. When the receipt is booked, their ` +
+          `tokens are priced from the list inside unlogged_billed.`
       );
     }
-    if (cmp.short.length > 0) {
-      // The receipt cannot over-report: a bucket below it means billed
-      // messages are missing from the tree or from the window.
-      console.error(
-        `collect-orchestrator-usage FAILED: the transcript is BELOW the CLI's own receipt (${cmp.short.join("; ")}` +
-          `${pct ? `; priced $${transcriptCost} vs receipt $${receipt.total_cost_usd}, ${pct}` : ""}). The receipt cannot ` +
-          `over-report, so the transcript tree is missing billed messages — usually a subagent transcript not copied ` +
-          `alongside the session file, a run log with no run.start line (the window then opens near the first dispatch, ` +
-          `after the driver's setup work), or a window that closed before the invocation did. Nothing was written. ` +
-          `Fix the input; the check is exact and has no tolerance to widen.`
-      );
-      return 3;
-    }
+    // A bucket BELOW the receipt no longer refuses by itself: the decision is
+    // in the branch after ABOVE, where the window's provability is checked.
     if (cmp.above.length > 0) {
       // The window holds messages the receipt never billed. The one honest
       // explanation is another invocation on the same session inside the
@@ -1574,7 +2068,9 @@ export async function main(argv = process.argv.slice(2)) {
       if (turnsInWindow.length >= 2) {
         const last = turnsInWindow[turnsInWindow.length - 1];
         const lastInv = sumTranscriptUsage(files, last.ms, effectiveEndMs, { roleOf });
-        const cmpLast = compareBuckets(lastInv.perModel, receipt.models);
+        // The last leg is compared per price-list model too (header, fact 8).
+        const lastNames = resolveBucketNames(lastInv.perModel, receipt.models, pricesMod.resolveModel);
+        const cmpLast = compareBuckets(lastNames.transcript, lastNames.receipt);
         console.log(`  last invocation (from the human turn at ${last.iso}, ${turnsInWindow.length - 1} earlier turn(s) in the window):`);
         for (const l of cmpLast.lines) console.log(`    ${l}`);
         if (!cmpLast.ok) {
@@ -1610,35 +2106,48 @@ export async function main(argv = process.argv.slice(2)) {
         return 3;
       }
     } else {
-      // AGREE: the transcript is the receipt's invocation, message for
-      // message. The receipt's own dollars are booked; the transcript figure
-      // (lower only where output placeholders under-report) is kept beside it.
-      bookReceipt();
-      costSource = `receipt (transcript agrees, ${pct})`;
-      // Rate drift: the receipt's own tokens for the labelled driver model, at
-      // its effective price, should reproduce the receipt's dollars for that
-      // model. A gap means the CLI's price table and that price differ.
-      const dm = receipt.models[derived.modelName];
-      const tm = perModel[derived.modelName];
-      if (card && dm && tm && dm.cost_usd != null && dm.cost_usd > 0) {
-        const atCard = pricingMod.round6(pricingMod.computeCostUsd({
-          input: dm.input,
-          input_cached: dm.input_cached,
-          output: dm.output,
-          input_cache_write: Math.max(0, dm.input_cache_write - tm.input_cache_write_1h),
-          input_cache_write_1h: Math.min(dm.input_cache_write, tm.input_cache_write_1h),
-        }, card));
-        const drift = (atCard - dm.cost_usd) / dm.cost_usd;
-        if (Math.abs(drift) > 0.005) {
+      // No bucket above the receipt (header, fact 8). A transcript EQUAL to the
+      // receipt on every bucket is the receipt's invocation by itself, as it
+      // always was. A bucket BELOW it is booked only when the window is
+      // provably that invocation: the gap is then calls Claude Code bills but
+      // never logs (or a helper file not copied, which attribution names),
+      // never messages outside the window. There is no percentage: the gap was
+      // 2.3% and 22% on two real runs.
+      if (cmp.short.length > 0) {
+        const turnsInWindow = mainTurns.filter((t) => t.ms >= windowStartMs && t.ms < windowEndMs);
+        const proof = provableInvocation({
+          receiptSessionId: receipt.session_id,
+          pinnedId,
+          startAnchor,
+          humanTurnsInWindow: turnsInWindow.length,
+          windowExact,
+          lowerBound: overheadIsFloor,
+        });
+        if (!proof.provable) {
           console.error(
-            `NOTE: rate drift — the receipt's own '${derived.modelName}' tokens priced at ${cardName} come to $${atCard}, ` +
-              `but the receipt bills $${dm.cost_usd} for them (${fmtPct(drift)}). The receipt's dollars are booked. ` +
-              (card && driverPrice.basis === "custom"
-                ? `The policy's pricing_override card for '${driverPrice.model_name}' (or its cache-write TTL rates) no longer matches what the CLI charged.`
-                : `Claude Code's own price table for '${derived.modelName}' differs from the price list (plugin/mcp/model-dispatch/src/prices.ts); one of the two is out of date.`)
+            `collect-orchestrator-usage FAILED: the transcript is BELOW the CLI's own receipt (${cmp.short.join("; ")}` +
+              `${pct ? `; priced $${transcriptCost} vs receipt $${receipt.total_cost_usd}, ${pct}` : ""}), and the window cannot be ` +
+              `proven to be the receipt's invocation: ${proof.reasons.join("; ")}. A receipt above the transcript is booked only ` +
+              `when the window provably is that one invocation (pinned to the receipt's session, opened at the run's command ` +
+              `turn, no later human turn, exact), because the gap is then calls Claude Code bills but never logs. Without that ` +
+              `proof the gap may be billed messages outside the window — usually a subagent transcript not copied alongside the ` +
+              `session file, a run log with no run.start line (the window then opens near the first dispatch, after the driver's ` +
+              `setup work), or a window that closed before the invocation did. Nothing was written; the rule has no tolerance to widen.`
           );
+          return 3;
         }
+        console.log(
+          `  below the receipt, and the window is provably its invocation (session ${pinnedId}, opened at the command turn, ` +
+            `one human turn, exact): the difference is billed but not logged`
+        );
       }
+      const share = book();
+      if (strictRefusesBooking()) return 1;
+      costSource =
+        `receipt (Anthropic token counts priced at the price list${customTag()}); ${share.toFixed(1)}% billed but not logged` +
+        (booking.complete ? "" : "; INCOMPLETE — unpriced tokens excluded");
+      pricingBasis += "; a booked receipt's tokens that no transcript message recorded at each model's logged cache-write and modifier mix (unlogged_billed)";
+      noteDrift();
     }
   } else {
     cost = transcriptCost;
@@ -1706,7 +2215,7 @@ export async function main(argv = process.argv.slice(2)) {
   console.log(
     `overhead: in ${tokens.input} + cached ${tokens.input_cached} + cache_write ${tokens.input_cache_write} ` +
       `(5m ${tokens.input_cache_write_5m} / 1h ${tokens.input_cache_write_1h}) + out ${tokens.output} tokens ` +
-      `@ ${receiptOnly ? "the receipt" : "each message's own price"} = $${cost} [${costSource}]`
+      `@ ${booking ? "the receipt's token counts at the list" : "each message's own price"} = $${cost} [${costSource}]`
   );
   if (inside.count > 0) {
     console.log(
@@ -1754,6 +2263,11 @@ export async function main(argv = process.argv.slice(2)) {
     cost_usd: cost,
     transcript_cost_usd: transcriptCost,
     receipt_cost_usd: receipt?.total_cost_usd ?? null,
+    // Header, fact 8: Claude Code's own figure, kept as a check; what a booked
+    // receipt billed beyond the transcript; whether every helper file was there.
+    receipt_cli_usd: receipt?.total_cost_usd ?? null,
+    unlogged_billed: booking?.unlogged_billed ?? null,
+    attribution_complete: attribution ? attribution.complete : null,
     // The transcript's cost per model and role, and what could not be priced.
     per_model: priced.per_model,
     unpriced: priced.unpriced,
@@ -1800,8 +2314,19 @@ export async function main(argv = process.argv.slice(2)) {
     // unpriced[] tokens are in no cost, and pricing_complete says whether any exist.
     per_model: priced.per_model,
     unpriced: priced.unpriced,
-    pricing_complete: priced.complete,
+    // A booked receipt is complete only when its unlogged gap was priced too.
+    pricing_complete: booking ? booking.complete : priced.complete,
     price_list_verified: pricesMod.PRICE_LIST_VERIFIED,
+    // Header, fact 8. receipt_cli_usd is Claude Code's own total, never booked
+    // (receipt_cost_usd keeps the same value under its old name). unlogged_billed
+    // is null unless a receipt was booked, and then cost_usd = transcript_cost_usd
+    // + unlogged_billed.cost_usd. The attribution fields are null / empty unless
+    // the scan was pinned to a session file.
+    receipt_cli_usd: receipt?.total_cost_usd ?? null,
+    unlogged_billed: booking?.unlogged_billed ?? null,
+    attribution_complete: attribution ? attribution.complete : null,
+    missing_helper_ids: attribution?.missing_helper_ids ?? [],
+    unreferenced_helper_files: attribution?.unreferenced_helper_files ?? [],
     dispatched_in_session_cost_usd: insideCost,
     dispatched_in_session_events: inside.count,
     // The window the figure was measured over, so a reader can tell an exact

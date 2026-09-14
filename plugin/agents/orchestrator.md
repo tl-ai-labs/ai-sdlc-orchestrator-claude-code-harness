@@ -312,8 +312,9 @@ the logger drops missing fields rather than printing them empty.
    ```
    node "${CLAUDE_PLUGIN_ROOT}/scripts/collect-orchestrator-usage.mjs" <pass-dir> --project-root "$(pwd)"
    (If a runner kept <pass-dir>/claude-session.json, the collector checks the run's window
-   token bucket by token bucket against Claude Code's own receipt; exit 3 means the window is
-   not the invocation the receipt billed and nothing was written — report that, do not guess a
+   model by model against Claude Code's own receipt and, when the window is that invocation,
+   books the receipt's token counts at the price list; exit 3 means the window is not provably
+   the invocation the receipt billed and nothing was written — report that, do not guess a
    number. A headless <pass-dir>/live-run.log has no receipt line until the session exits, so
    at this step the figure is transcript-priced and marked provisional; the operator re-runs
    the collector after exit to verify it.)

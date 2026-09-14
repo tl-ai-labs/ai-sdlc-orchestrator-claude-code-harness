@@ -166,7 +166,11 @@ test("regression: receivables pass3 (Gemini-only policy) now carries a transcrip
     // Before per-message pricing a policy with no Claude rate left the transcript unpriced (null).
     assert.equal(o.transcript_cost_usd, 16.235409);
     assert.equal(o.receipt_cost_usd, 16.235409);
-    assert.equal(o.cost_source, "receipt (transcript agrees, +0.0%)");
+    // Fix D (collectReceiptBooking.test.mjs): an equal transcript books the receipt's token counts at the
+    // list, which here equal Claude Code's own $16.235409; nothing was billed beyond the log.
+    assert.equal(o.cost_source, "receipt (Anthropic token counts priced at the price list); 0.0% billed but not logged");
+    assert.equal(o.unlogged_billed.cost_usd, 0);
+    assert.equal(o.receipt_cli_usd, 16.235409);
     assert.equal(o.cost_usd, 16.235409);
     assert.equal(m.true_total_cost_usd, 22.311708);
   } finally { rmSync(root, { recursive: true, force: true }); }

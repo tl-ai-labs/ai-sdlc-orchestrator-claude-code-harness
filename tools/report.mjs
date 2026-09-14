@@ -172,8 +172,11 @@ const trueTotalLabel = inSessionSubtracted != null ? "True total (dispatched −
 const receiptCost = manifest.orchestrator_overhead?.receipt_cost_usd ?? null;
 const costSource = manifest.orchestrator_overhead?.cost_source ?? null;
 // The collector's cost_source vocabulary, matched by prefix:
-//   "receipt (transcript agrees…)"   every token bucket in the window equals the receipt's: verified, the receipt's dollars booked
-//   "receipt-only"                   no transcript message fell in the window; the receipt's dollars stand alone
+//   "receipt (Anthropic token counts…)"  no transcript bucket above the receipt, and the window provably its invocation (or
+//                                    every bucket equal): verified, the receipt's token counts booked at the price list
+//   "receipt (transcript agrees…)"   collected before v0.7.3: every bucket equal, Claude Code's own dollars booked
+//   "receipt-only"                   no transcript message fell in the window; the receipt's token counts at the list stand
+//                                    alone (before v0.7.3, its dollars)
 //   "transcript (receipt covers only the last invocation…)"   a --resume continuation: only the last leg was verified
 //   "transcript (receipt pending…)"  the headless capture has no result line yet
 //   "transcript (no receipt…)"       nothing to verify against
