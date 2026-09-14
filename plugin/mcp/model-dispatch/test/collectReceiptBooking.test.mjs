@@ -12,8 +12,10 @@
  *
  * The rule now:
  *   1. a receipt for another session: exit 3 (unchanged);
- *   2. names on both sides are read with the price list's resolveModel and
- *      compared per list model; a name that does not resolve is exit 3; a log
+ *   2. names on both sides are read with the price list's resolveModel (and,
+ *      from Q2, a model_name the run's policy declares under
+ *      pricing_override: true, exactly or with one [option]) and compared per
+ *      model; a name that does not resolve is exit 3; a log
  *      bucket above the receipt, or a log model the receipt does not bill, takes
  *      the unchanged ABOVE path (the last invocation alone, else exit 3);
  *   3. log at or below the receipt on every bucket: the receipt is booked, as
@@ -677,4 +679,131 @@ test("provableInvocation: pinned to the receipt's session, opened at the command
   );
   assert.match(provableInvocation({ ...ok, windowExact: false }).reasons.join("; "), /approximate/);
   assert.match(provableInvocation({ ...ok, startAnchor: "manifest started_at - 5m", windowExact: false, lowerBound: true }).reasons.join("; "), /opens at the first dispatch \(a lower bound\)/);
+});
+
+// ── Q2: a model name the run's policy declares under pricing_override ───────
+//
+// A policy may bill a model the price list does not carry by declaring it on a
+// model entry with pricing_override: true (a gateway alias, say). Pre-flight and
+// dispatch already accept that. The collector did not: the receipt check read
+// names with the list's resolveModel only, so a receipt naming the declared
+// model refused the run with exit 3 ("cannot resolve model name(s)"), and
+// per-message pricing kept `acme-gateway-opus` and `acme-gateway-opus[1m]` as
+// two models. The declared name, exactly or with one bracketed option, is now a
+// known model priced by that override, for that run's policy only.
+
+const GATEWAY = "acme-gateway-opus";
+const GATEWAY_CARD = { input: 4, input_cached: 0.4, input_cache_write: 5, input_cache_write_1h: 8, output: 20 };
+
+/**
+ * Session sess-g on the gateway model: one message per name in `messageNames`,
+ * each in 10 / cached 100,000 / 1-hour writes 10,000 / out 1,000, which is
+ * $0.14004 at GATEWAY_CARD. The receipt (session sess-g) bills in 20 / 200,000 /
+ * 20,000 / 2,000 under `receiptName`: $0.28008. Exact window: command turn,
+ * run.start and run.end, no later human turn.
+ */
+function gatewayRun({ override = true, receiptName = `${GATEWAY}[1m]`, messageNames = [GATEWAY], withReceipt = true } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "mmo-receipt-gateway-"));
+  const passDir = join(root, "pass"); mkdirSync(passDir);
+  const tDir = join(root, "transcripts"); mkdirSync(tDir);
+  writeFileSync(join(root, "policy.yaml"), [
+    "version: 1", "name: g-policy", "models:", "  - id: driver", "    adapter: builtin-anthropic", `    model_name: ${GATEWAY}`,
+    `    pricing: ${JSON.stringify(GATEWAY_CARD)}`, ...(override ? ["    pricing_override: true"] : []), "rules:", "  - default: driver", "",
+  ].join("\n"));
+  writeFileSync(join(passDir, "manifest.json"), JSON.stringify({ pass: "r-g", policy_name: "g-policy", started_at: AT("10:00:20"), ended_at: AT("10:01:20"), totals: { dispatched_cost_usd: 0, models_used: [] } }));
+  writeFileSync(join(passDir, "telemetry.jsonl"), "");
+  mkdirSync(join(root, ".sdlc", "runs", "r-g"), { recursive: true });
+  writeFileSync(join(root, ".sdlc", "runs", "r-g", "orchestrator.log"), `MMO: ${AT("10:00:05")} INFO   run.start run_id=r-g mode=greenfield\nMMO: ${AT("10:01:30")} INFO   run.end run_id=r-g outcome=completed\n`);
+  writeFileSync(join(tDir, "sess-g.jsonl"), [
+    human("sess-g", AT("10:00:00"), COMMAND.replace("--run-id=r-h", "--run-id=r-g")),
+    ...messageNames.map((name, i) => asst("sess-g", `g${i + 1}`, name, usage(10, 100_000, 0, 10_000, 1_000), AT(`10:00:${String(10 + i * 10)}`))),
+  ].join("\n") + "\n");
+  if (withReceipt) {
+    writeFileSync(join(passDir, "claude-session.json"), JSON.stringify({
+      type: "result",
+      session_id: "sess-g",
+      total_cost_usd: 0.28008,
+      modelUsage: { [receiptName]: { inputTokens: 20, cacheReadInputTokens: 200_000, cacheCreationInputTokens: 20_000, outputTokens: 2_000, costUSD: 0.28008 } },
+    }));
+  }
+  const run = () => exec([passDir, "--project-root", root, "--policy-path", join(root, "policy.yaml"), "--transcripts-dir", tDir]);
+  return { run, manifest: () => readJson(join(passDir, "manifest.json")), rm: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+test("Q2: a receipt naming the policy's pricing_override model with a [1m] option is compared, and booked at that override's card", () => {
+  const fix = gatewayRun();
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /receipt names resolved: acme-gateway-opus\[1m\] → acme-gateway-opus/);
+    assert.match(r.stdout, /acme-gateway-opus: in 10<20 · cached 100000<200000 · cache_write 10000<20000 · out 1000≤2000 → short of the receipt/);
+    // Logged $0.14004 at the card, plus the same token gap at the logged (all 1-hour) write mix: $0.28008.
+    assert.match(r.stdout, /= \$0\.28008 \[receipt \(Anthropic token counts priced at the price list; custom policy price for acme-gateway-opus\); 50\.0% billed but not logged\]/);
+    const o = fix.manifest().orchestrator_overhead;
+    assert.equal(o.cost_usd, 0.28008);
+    assert.equal(o.transcript_cost_usd, 0.14004);
+    assert.deepEqual(o.per_model.map((e) => [e.model, e.price_basis, e.rates]), [[GATEWAY, "custom", GATEWAY_CARD]]);
+    assert.deepEqual(
+      o.unlogged_billed.per_model.map((g) => [g.model, g.reported_as, g.tokens, g.cost_usd]),
+      [[GATEWAY, [`${GATEWAY}[1m]`], { input: 10, input_cached: 100_000, input_cache_write: 10_000, output: 1_000 }, 0.14004]],
+    );
+    assert.equal(o.pricing_complete, true);
+  } finally { fix.rm(); }
+});
+
+test("Q2: without pricing_override the same unlisted names still stop the receipt check with exit 3, and the message names both fixes", () => {
+  const fix = gatewayRun({ override: false });
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    // The refusal line itself must name both fixes. stderr as a whole already
+    // carries "pricing_override: true" from the per-message WARNING printed
+    // before the receipt check, so matching all of stderr would pass on that
+    // unrelated line and prove nothing about the refusal.
+    const failed = r.stderr.split("\n").find((l) => l.startsWith("collect-orchestrator-usage FAILED: cannot resolve")) ?? "";
+    assert.match(failed, /cannot resolve model name\(s\) the price list does not carry: transcript acme-gateway-opus, receipt acme-gateway-opus\[1m\]/);
+    assert.match(failed, /plugin\/mcp\/model-dispatch\/src\/prices\.ts/);
+    assert.match(failed, /give the policy model a pricing block with pricing_override: true/);
+    assert.equal(fix.manifest().orchestrator_overhead, undefined, "nothing written");
+  } finally { fix.rm(); }
+});
+
+test("Q2: per-message pricing books the override-declared name and its [1m] spelling as one custom-priced model", () => {
+  const fix = gatewayRun({ withReceipt: false, messageNames: [GATEWAY, `${GATEWAY}[1m]`] });
+  try {
+    const r = fix.run();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const o = fix.manifest().orchestrator_overhead;
+    assert.deepEqual(o.per_model.map((e) => [e.model, e.reported_as, e.price_basis, e.messages, e.cost_usd]), [[GATEWAY, [GATEWAY, `${GATEWAY}[1m]`], "custom", 2, 0.28008]]);
+    assert.deepEqual(o.unpriced, []);
+    assert.equal(o.cost_usd, 0.28008);
+  } finally { fix.rm(); }
+});
+
+test("Q2 runModelResolver: the price list first; then a pricing_override model's own name, exactly or with one [option]; nothing else, and only for that policy", async () => {
+  const { runModelResolver } = await helpers();
+  const gw = { id: "gw", adapter: "builtin-anthropic", model_name: GATEWAY, pricing: GATEWAY_CARD, pricing_override: true };
+  const plain = { id: "plain", adapter: "builtin-anthropic", model_name: "acme-plain", pricing: GATEWAY_CARD };
+  const listed = { id: "listed", adapter: "builtin-anthropic", model_name: "claude-opus-4-8", pricing: GATEWAY_CARD, pricing_override: true };
+  const resolve = runModelResolver({ models: [gw, plain, listed] }, pricesMod.resolveModel);
+  for (const n of ["claude-opus-5[1m]", "claude-haiku-4-5-20251001", "claude-opus-4-8"]) assert.deepEqual(resolve(n), pricesMod.resolveModel(n), n);
+  assert.deepEqual(resolve(GATEWAY), { id: GATEWAY, tag: null, snapshotDate: null, declared_by: ["gw"] });
+  assert.deepEqual(resolve(`${GATEWAY}[1m]`), { id: GATEWAY, tag: "[1m]", snapshotDate: null, declared_by: ["gw"] });
+  for (const n of [`${GATEWAY}-20260101`, `${GATEWAY}[1m][2]`, `${GATEWAY}x`, "acme-gateway", "acme-plain", "acme-plain[1m]", "", null, undefined]) {
+    assert.equal(resolve(n), null, `${String(n)} is not declared under pricing_override`);
+  }
+  assert.equal(runModelResolver({ models: [plain] }, pricesMod.resolveModel)(GATEWAY), null, "a policy that declares nothing resolves nothing extra");
+  // The flag without a block bills nothing (the loader refuses it), so it declares nothing either.
+  assert.equal(runModelResolver({ models: [{ ...gw, pricing: undefined }] }, pricesMod.resolveModel)(GATEWAY), null);
+  // A declared name that itself carries an option is the same model as its bare
+  // spelling, exactly as effectivePrice's sameModel reads it when it bills the
+  // override: the id is the name without the option.
+  const bracketed = runModelResolver({ models: [{ ...gw, model_name: `${GATEWAY}[1m]` }] }, pricesMod.resolveModel);
+  assert.deepEqual(bracketed(GATEWAY), { id: GATEWAY, tag: null, snapshotDate: null, declared_by: ["gw"] });
+  assert.deepEqual(bracketed(`${GATEWAY}[200k]`), { id: GATEWAY, tag: "[200k]", snapshotDate: null, declared_by: ["gw"] });
+  for (const n of [GATEWAY, `${GATEWAY}[1m]`, `${GATEWAY}[200k]`]) {
+    assert.equal(effectiveMod.sameModel(`${GATEWAY}[1m]`, n), true, `${n} is billed at the override, so it must resolve too`);
+  }
+  // Two override entries declaring one name are both named; which card bills is the pricer's decision (it refuses two different cards).
+  assert.deepEqual(runModelResolver({ models: [gw, { ...gw, id: "gw2" }] }, pricesMod.resolveModel)(GATEWAY).declared_by, ["gw", "gw2"]);
 });

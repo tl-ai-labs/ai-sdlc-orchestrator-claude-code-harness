@@ -98,7 +98,10 @@
  *      artifacts listing, which bounds mtime on both ends for a different
  *      purpose.
  *   6. PRICE: every counted message is priced on its own — its model
- *      (`message.model`, read with the price list's resolveModel), the UTC day
+ *      (`message.model`, read with the price list's resolveModel, or, for a
+ *      name the list does not carry, as a `model_name` the run's policy
+ *      declares under `pricing_override: true`, exactly or with one
+ *      bracketed option: runModelResolver), the UTC day
  *      of its timestamp, its own `usage.speed` / `service_tier` /
  *      `inference_geo`, and its own cache-write split
  *      (`cache_creation.ephemeral_5m_input_tokens` at the 5-minute write rate,
@@ -140,8 +143,12 @@
  *      b. NAMES are re-keyed on both sides by the price list's resolveModel
  *         id (resolveBucketNames), so the receipt's `claude-opus-5[1m]` is
  *         the transcript's `claude-opus-5`; verbatim names refused a real
- *         headless run (Sep 10 2026). A name the list cannot read is exit 3,
- *         printing both name lists: it is never paired by similarity.
+ *         headless run (Sep 10 2026). A `model_name` the run's policy
+ *         declares on an entry with `pricing_override: true` is read the same
+ *         way, exactly or with one bracketed option, and priced at that card
+ *         (runModelResolver). Any other name the list cannot read is exit 3,
+ *         printing both name lists and both fixes: it is never paired by
+ *         similarity.
  *      c. ABOVE — any transcript input, cache_read, cache_write or output
  *         bucket over the receipt, or a transcript model the receipt does not
  *         bill: the window holds messages the receipt never billed. Claude
@@ -260,7 +267,8 @@
  * receipt cannot be reconciled — the transcript is over the receipt with no
  * continuation turn to account for the excess, or short of it in a window
  * that cannot be proven to be the receipt's invocation, or a model name on
- * either side is not on the price list, or the receipt names a session other
+ * either side is neither on the price list nor a `model_name` the run's policy
+ * declares under `pricing_override: true`, or the receipt names a session other
  * than the command turn's — nothing is written.
  */
 
@@ -515,6 +523,56 @@ export function resolveBucketNames(perModel, receiptModels, resolve) {
   unresolved.transcript.sort();
   unresolved.receipt.sort();
   return { transcript, receipt, unresolved };
+}
+
+/** One bracketed option at the end of a model name (`[1m]`): the part effectivePrice's sameModel strips. */
+const OPTION_SUFFIX = /\[[^[\]]+\]$/;
+
+/**
+ * Q2 (v0.7.3): the name reader for one run. The price list's resolveModel
+ * first; then, for a name the list cannot read, a `model_name` the run's policy
+ * declares on an entry with `pricing_override: true` and a pricing block, read
+ * exactly or with one bracketed option (`acme-gateway-opus`,
+ * `acme-gateway-opus[1m]`). That entry bills its own card for that name: the
+ * dispatch server and pre-flight already accepted it through effectivePrice,
+ * and the per-message pricer below already billed it custom. The collector
+ * read names with resolveModel alone, so a receipt naming the declared model
+ * refused a correctly priced run with exit 3 ("cannot resolve model name(s)"),
+ * and per-message pricing kept `acme-gateway-opus` and `acme-gateway-opus[1m]`
+ * as two models.
+ *
+ * What it accepts is exactly what effectivePrice's sameModel treats as the
+ * declared model when neither name is on the list: equal once one trailing
+ * option is removed from each. So a declared `acme-gw[1m]` reads `acme-gw` and
+ * `acme-gw[200k]` too, with the id `acme-gw`; a second option, a `-YYYYMMDD`
+ * suffix or any other spelling is not the declared name and still returns
+ * null, which the caller refuses. A policy entry without the flag, or with the
+ * flag and no block (the loader refuses that), declares nothing. The resolver
+ * is built from the one policy this run is priced under, so a name one policy
+ * declares is never known to another run. `declared_by` lists the policy
+ * model ids that declare the name; when they carry different cards the pricer
+ * refuses to pick one.
+ */
+export function runModelResolver(policy, resolveModel) {
+  const declared = new Map();
+  for (const m of Array.isArray(policy?.models) ? policy.models : []) {
+    if (m?.pricing_override !== true || !m.pricing || typeof m.model_name !== "string") continue;
+    // A listed name is read by the list first, so declaring it adds nothing.
+    if (resolveModel(m.model_name)) continue;
+    const base = m.model_name.replace(OPTION_SUFFIX, "");
+    if (base === "") continue;
+    const ids = declared.get(base) ?? [];
+    if (!ids.includes(m.id)) ids.push(m.id);
+    declared.set(base, ids);
+  }
+  return (name) => {
+    const listed = resolveModel(name);
+    if (listed) return listed;
+    if (typeof name !== "string" || name === "") return null;
+    const option = OPTION_SUFFIX.exec(name)?.[0] ?? null;
+    const ids = declared.get(option ? name.slice(0, -option.length) : name);
+    return ids ? { id: option ? name.slice(0, -option.length) : name, tag: option, snapshotDate: null, declared_by: [...ids] } : null;
+  };
 }
 
 /** The receipt's four per-model token buckets (it carries no TTL split per model). */
@@ -1183,11 +1241,15 @@ export function roleOfTranscript(root, file) {
 export function makeMessagePricer(policy, { pricesMod, effectiveMod, pricingMod }) {
   const models = Array.isArray(policy?.models) ? policy.models : [];
   const warnings = [];
+  // Q2: the list's names, then the names this policy declares under
+  // pricing_override, so `acme-gateway-opus[1m]` and `acme-gateway-opus` key
+  // one per_model entry, exactly as `claude-opus-5[1m]` and `claude-opus-5` do.
+  const resolveName = runModelResolver(policy, pricesMod.resolveModel);
   const pricer = (name, timestamp, modifiers) => {
     if (typeof name !== "string" || name === "") {
       return { unpriced: true, model: "(unlabeled)", reason: "the message carries no model name" };
     }
-    const model = pricesMod.resolveModel(name)?.id ?? name;
+    const model = resolveName(name)?.id ?? name;
     const matches = models.filter((m) => typeof m?.model_name === "string" && effectiveMod.sameModel(m.model_name, name));
     const overrides = matches.filter((m) => m.pricing_override === true && m.pricing);
     if (new Set(overrides.map((m) => JSON.stringify(m.pricing))).size > 1) {
@@ -2058,18 +2120,23 @@ export async function main(argv = process.argv.slice(2)) {
 
   // The receipt's model names and the transcript's, re-keyed by price-list id
   // (header, fact 8): `claude-opus-5[1m]` on a receipt is the transcript's
-  // `claude-opus-5`. A name the list cannot read could only be paired by
-  // guesswork, so it refuses, printing both sides' names.
-  const names = receipt ? resolveBucketNames(perModel, receipt.models, pricesMod.resolveModel) : null;
+  // `claude-opus-5`. Q2: a name this run's policy declares under
+  // pricing_override is read the same way (runModelResolver). Any other name
+  // could only be paired by guesswork, so it refuses, printing both sides'
+  // names and both ways to make the name known.
+  const resolveName = runModelResolver(policy, pricesMod.resolveModel);
+  const names = receipt ? resolveBucketNames(perModel, receipt.models, resolveName) : null;
   if (names && (names.unresolved.transcript.length > 0 || names.unresolved.receipt.length > 0)) {
     const u = names.unresolved;
     console.error(
       `collect-orchestrator-usage FAILED: cannot resolve model name(s) the price list does not carry: ` +
         `${[...u.transcript.map((n) => `transcript ${n}`), ...u.receipt.map((n) => `receipt ${n}`)].join(", ")}. The receipt check ` +
-        `pairs the receipt's models with the transcript's by price-list id, and a name the list cannot read would have to ` +
-        `be paired by guesswork. transcript names: ${Object.keys(perModel).filter((n) => n !== "(unlabeled)").sort().join(", ") || "(none)"}; ` +
+        `pairs the receipt's models with the transcript's by price-list id, and a name that neither the list nor this run's ` +
+        `policy (a model_name under pricing_override: true) declares would have to be paired by guesswork. transcript names: ` +
+        `${Object.keys(perModel).filter((n) => n !== "(unlabeled)").sort().join(", ") || "(none)"}; ` +
         `receipt names: ${Object.keys(receipt.models).sort().join(", ") || "(none)"}. Add the model's verified price period to ` +
-        `plugin/mcp/model-dispatch/src/prices.ts and re-run. Nothing was written.`
+        `plugin/mcp/model-dispatch/src/prices.ts, or, for a name the policy uses on purpose (a gateway alias, say), give the ` +
+        `policy model a pricing block with pricing_override: true and that model_name; then re-run. Nothing was written.`
     );
     return 3;
   }
@@ -2221,7 +2288,7 @@ export async function main(argv = process.argv.slice(2)) {
         const last = turnsInWindow[turnsInWindow.length - 1];
         const lastInv = sumTranscriptUsage(files, last.ms, effectiveEndMs, { roleOf });
         // The last leg is compared per price-list model too (header, fact 8).
-        const lastNames = resolveBucketNames(lastInv.perModel, receipt.models, pricesMod.resolveModel);
+        const lastNames = resolveBucketNames(lastInv.perModel, receipt.models, resolveName);
         const cmpLast = compareBuckets(lastNames.transcript, lastNames.receipt);
         console.log(`  last invocation (from the human turn at ${last.iso}, ${turnsInWindow.length - 1} earlier turn(s) in the window):`);
         for (const l of cmpLast.lines) console.log(`    ${l}`);
