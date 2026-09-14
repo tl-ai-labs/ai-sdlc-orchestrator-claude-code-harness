@@ -16,8 +16,8 @@ models:
     # of input. Confirmed 2026-09-03 against Claude Code's own session receipts (two real runs,
     # reproduced to the cent; see tools/test/fixtures/receivables-ops).
     pricing: { input: 5.00, input_cached: 0.50, output: 25.00 }
-    pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
-    pricing_last_verified: 2026-08-19
+    pricing_source: https://platform.claude.com/docs/en/about-claude/pricing
+    pricing_last_verified: 2026-09-14
     auth: { env: ANTHROPIC_API_KEY }
     max_output_tokens_absolute: 32000
 
@@ -29,7 +29,7 @@ models:
     # 3.00 / 15.00 announced for 1 Sep 2026 did not happen. This card must equal claude-sonnet-5
     # in plugin/mcp/model-dispatch/src/prices.ts; test/prices.test.mjs fails when it does not.
     pricing: { input: 2.00, input_cached: 0.20, output: 10.00 }
-    pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
+    pricing_source: https://platform.claude.com/docs/en/about-claude/pricing
     pricing_last_verified: 2026-09-14
     auth: { env: ANTHROPIC_API_KEY }
     max_output_tokens_absolute: 16000

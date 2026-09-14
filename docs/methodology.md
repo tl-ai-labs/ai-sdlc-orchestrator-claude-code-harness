@@ -179,8 +179,8 @@ The report (`node tools/report.mjs`) renders three numbers once the collector ha
 
 The rates that turn dispatched tokens into dollars live in one dated price list, [`plugin/mcp/model-dispatch/src/prices.ts`](../plugin/mcp/model-dispatch/src/prices.ts). Each policy YAML under `plugin/config/policies/` still carries a `pricing:` block per model: the orchestrator's estimated telemetry reads it (last paragraph below), and it is a readable copy of the list. Beside it:
 
-- `pricing_source:` — the vendor URL these rates were taken from
-- `pricing_last_verified:` — the ISO date the maintainer last checked the source page
+- `pricing_source:` — the vendor URL these rates were taken from. It starts with the page the list's period cites: `https://platform.claude.com/docs/en/about-claude/pricing` for Claude, `https://ai.google.dev/gemini-api/docs/pricing` for Gemini
+- `pricing_last_verified:` — the ISO date the maintainer last checked the source page, which equals the list period's `verified` date
 
 The list gives each model one or more periods (`from`, `to`, the five token rates, `source_url`, `verified`) and prices a model name on a day:
 
@@ -202,7 +202,7 @@ The Gemini periods on the list were verified on 2026-09-14 against both of Googl
 
 Vertex's non-global rows for these models are the rates above ×1.10, the surcharge applied at dispatch (below). A Gemini model Google prices but the list does not carry (Gemini 3.6 Flash or 3.1 Flash-Lite, for example) is unpriced, and so is any day before a listed model's first period.
 
-`npm test` fails when a shipped card differs from the list for today's date, or when today falls outside every period for a card's model. The shipped Gemini 3.7 Flash cards carry the introductory rates, so from 1 Jan 2027, when the list moves to 1.50 / 0.15 / 7.50, the suite stays red until those cards are changed to match. A run on those days does not halt: it bills the list's 2027 card, and a card still carrying the introductory rates draws a `pricing.policy_mismatch` warning.
+`npm test` fails when a shipped card differs from the list for today's date, when today falls outside every period for a card's model, or when a card's `pricing_source` or `pricing_last_verified` does not match that period. The shipped Gemini 3.7 Flash cards carry the introductory rates, so from 1 Jan 2027, when the list moves to 1.50 / 0.15 / 7.50, the suite stays red until those cards are changed to match. A run on those days does not halt: it bills the list's 2027 card, and a card still carrying the introductory rates draws a `pricing.policy_mismatch` warning.
 
 **Which price a dispatch bills** ([`effectivePrice.ts`](../plugin/mcp/model-dispatch/src/effectivePrice.ts)). Every adapter prices a dispatch on the day it starts:
 

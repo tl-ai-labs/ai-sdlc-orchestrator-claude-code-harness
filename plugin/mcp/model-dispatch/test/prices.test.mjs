@@ -388,6 +388,37 @@ test("every shipped policy's pricing card equals the price list for today's date
   assert.ok(checked >= 10, `expected every shipped model card to be checked, checked ${checked}`);
 });
 
+// A card also says where its rates were checked and when. A card equal to the
+// list carries the list period's `verified` date, and its source starts with
+// the page that period cites. Found on 2026-09-14: cards stamped 2026-08-04 and
+// 2026-08-19 while the list was re-verified that day, and every Claude card
+// citing .../docs/en/docs/about-claude/pricing, a doubled path Anthropic only
+// answers with a 307 redirect to .../docs/en/about-claude/pricing.
+test("every shipped card cites its list period's source page and carries that period's verified date", () => {
+  const files = readdirSync(POLICY_DIR).filter((f) => f.endsWith(".yaml"));
+  const problems = [];
+  let checked = 0;
+  for (const file of files) {
+    const raw = readFileSync(join(POLICY_DIR, file), "utf-8");
+    if (raw.includes("docs/en/docs")) problems.push(`${file}: contains the doubled docs/en/docs pricing path`);
+    for (const m of parseYaml(raw).models ?? []) {
+      const where = `${file} models[${m.id}] (${m.model_name})`;
+      const r = lookupPrice(m.model_name, TODAY, {});
+      if (r.unpriced) continue; // the card test above reports it
+      checked++;
+      const source = String(m.pricing_source ?? "");
+      if (source !== r.period.source_url && !source.startsWith(`${r.period.source_url} `)) {
+        problems.push(`${where}: pricing_source ${JSON.stringify(source)} does not start with the list's source ${r.period.source_url}`);
+      }
+      if (String(m.pricing_last_verified) !== r.period.verified) {
+        problems.push(`${where}: pricing_last_verified is ${m.pricing_last_verified}, the list period was verified ${r.period.verified}`);
+      }
+    }
+  }
+  assert.deepEqual(problems, []);
+  assert.ok(checked >= 10, `expected every shipped model card to be checked, checked ${checked}`);
+});
+
 test("the Gemini adapters bill no cache-write bucket, so the list's Gemini write rates cannot move today's Gemini dollars", () => {
   for (const rel of ["adapters/GeminiFlashAdapter.js", "adapters/AntigravityWorkerAdapter.js", "delegation/workerProcess.js"]) {
     assert.doesNotMatch(readFileSync(join(DIST, rel), "utf-8"), /input_cache_write/, rel);
