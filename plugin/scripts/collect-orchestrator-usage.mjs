@@ -91,19 +91,28 @@
  *      silently drop the run's own messages. This diverges from report.mjs's
  *      artifacts listing, which bounds mtime on both ends for a different
  *      purpose.
- *   6. PRICE: at one model's rate — the policy's DERIVED DRIVER MODEL (same
- *      derivation the run-start driver-model check uses), else the model the
- *      session demonstrably ran if the policy prices it anywhere, else the
- *      receipt's own dollars (item 8), else the policy's in-session seat.
- *      Cache writes dominate real driver-loop cost and bill above the fresh
- *      rate by TTL tier: `usage.cache_creation.ephemeral_5m_input_tokens` at
- *      input × 1.25 (or the policy's explicit `pricing.input_cache_write`),
- *      `ephemeral_1h_input_tokens` at input × 2 (or `input_cache_write_1h`).
- *      Long sessions use the 1-hour tier exclusively; pricing every write at
- *      1.25× measured 6% low against the CLI's own receipt. A transcript
- *      without the split books its writes as 5-minute, as before. Observed
- *      per-model message counts are printed and a WARNING is raised when any
- *      observed model differs from the model the run is priced at.
+ *   6. PRICE: every counted message is priced on its own — its model
+ *      (`message.model`, read with the price list's resolveModel), the UTC day
+ *      of its timestamp, its own `usage.speed` / `service_tier` /
+ *      `inference_geo`, and its own cache-write split
+ *      (`cache_creation.ephemeral_5m_input_tokens` at the 5-minute write rate,
+ *      `ephemeral_1h_input_tokens` at the 1-hour rate; a line without the
+ *      split books its writes as 5-minute). Rates come from the dated price
+ *      list, plugin/mcp/model-dispatch/src/prices.ts, which bills every
+ *      dispatch too; a policy `pricing` block prices a model only under
+ *      `pricing_override: true`, labelled custom. One rate for every token
+ *      charged a Claude Fable 5.1 session with Opus 5 helpers at the Opus
+ *      price. Streaming lines before a message's terminal line often omit
+ *      `speed`, so each modifier is the value any line of the message
+ *      recorded; two different values leave the message unpriced. A model,
+ *      day or modifier value the list cannot price is never borrowed from a
+ *      similar model: its tokens go to `unpriced[]` with the reason and stay
+ *      out of the figure, the figure is labelled INCOMPLETE, and
+ *      `--strict-pricing` refuses with exit 1. Messages are aggregated per
+ *      model and role (`session` for a top-level session file, `helper` for a
+ *      file under `subagents/`) into `per_model[]`, one entry per price, and
+ *      the transcript figure is the sum of those entries. The policy's
+ *      derived driver model now only labels the event.
  *   7. IDEMPOTENT: re-running replaces the prior orchestrator event for
  *      this pass (telemetry.jsonl is rewritten atomically without any
  *      `tier: "orchestrator"` lines, then the fresh event is appended) and
@@ -125,8 +134,9 @@
  *      whenever the window is the receipt's invocation, and only then.
  *      AGREE → the receipt's own dollars are booked, labelled
  *      "receipt (transcript agrees, ±x%)" with the transcript figure kept
- *      beside it; the receipt's tokens priced at the policy card are compared
- *      to its dollars and a rate-drift NOTE says when the card is stale.
+ *      beside it; the receipt's tokens priced at the labelled driver model's
+ *      price (the list, or its pricing_override card) are compared to its
+ *      dollars and a rate-drift NOTE says when the two differ.
  *      SHORT (any of the three below the receipt) → exit 3, nothing written:
  *      the receipt cannot over-report, so the tree is missing billed
  *      messages (a subagent file not copied, a window that opened late).
@@ -157,13 +167,17 @@
  *      event's `model_id` when present, and never applied to a claude-cli
  *      worker whose session was not scanned (receipt-booked figures, or a
  *      scan pinned to the driver's session). Measured +21% over the receipt
- *      without it.
+ *      without it. A claude-cli worker's event is billed from the same price
+ *      list as this scan (its modelUsage tokens, TTL split from its own
+ *      transcript), so the subtraction removes exactly what its swept-in
+ *      session added and the net stays transcript-priced.
  *
  *
  * Usage:
  *   node collect-orchestrator-usage.mjs <pass-dir> [--project-root <dir>]
  *        [--policy <name>] [--policy-path <file>]
- *        [--transcripts-dir <dir>] [--receipt <file>] [--dry-run]
+ *        [--transcripts-dir <dir>] [--receipt <file>] [--strict-pricing]
+ *        [--dry-run]
  *
  *   <pass-dir>          the run's output dir (holds manifest.json +
  *                       telemetry.jsonl), e.g. examples/<study>/passes/<run>
@@ -186,12 +200,19 @@
  *                       the headless recipe) whose last "result" line is read.
  *                       Defaults to <pass-dir>/claude-session.json, then
  *                       <pass-dir>/live-run.log, whichever exists.
+ *   --strict-pricing    refuse (exit 1, nothing written) when any token in the
+ *                       window has no price on the list: an unknown model, no
+ *                       price period for its day, or a speed / service_tier /
+ *                       inference_geo value the list does not price. Without
+ *                       it those tokens are listed in unpriced[] and the
+ *                       figure is labelled INCOMPLETE.
  *   --dry-run           print everything, write nothing.
  *
  * Exit codes: 0 = event written (or --dry-run). 1 = bad arguments, missing
- * manifest, or no billable assistant messages found in the run window (the
+ * manifest, no billable assistant messages found in the run window (the
  * run WAS driven by a session, so an empty window means the wrong
- * project-root/transcripts-dir — nothing is written). 3 = the transcript and
+ * project-root/transcripts-dir — nothing is written), or --strict-pricing
+ * with a token the price list cannot price. 3 = the transcript and
  * the receipt disagree — the transcript is short of the receipt, or over it
  * with no continuation turn to account for the excess, or the receipt names
  * a session other than the command turn's — nothing is written.
@@ -199,7 +220,7 @@
 
 import { readdirSync, readFileSync, renameSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { deriveDriverModel, IN_SESSION_ADAPTERS } from "./driver-model-check.mjs";
 
@@ -438,11 +459,13 @@ function parseArgs(argv) {
     transcriptsDir: undefined,
     receipt: undefined,
     dryRun: false,
+    strictPricing: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const eat = (flag) => (a.startsWith(`${flag}=`) ? a.slice(flag.length + 1) : argv[++i]);
     if (a === "--dry-run") args.dryRun = true;
+    else if (a === "--strict-pricing") args.strictPricing = true;
     else if (a === "--project-root" || a.startsWith("--project-root=")) args.projectRoot = eat("--project-root");
     else if (a === "--policy" || a.startsWith("--policy=")) args.policy = eat("--policy");
     else if (a === "--policy-path" || a.startsWith("--policy-path=")) args.policyPath = eat("--policy-path");
@@ -457,7 +480,7 @@ function parseArgs(argv) {
     else if (args.passDir === undefined) args.passDir = a;
     else throw new Error(`unexpected extra positional '${a}' (pass dir already given: ${args.passDir})`);
   }
-  if (!args.passDir) throw new Error("usage: collect-orchestrator-usage.mjs <pass-dir> [--project-root <dir>] [--policy <name>] [--policy-path <file>] [--transcripts-dir <dir>] [--receipt <file>] [--dry-run]");
+  if (!args.passDir) throw new Error("usage: collect-orchestrator-usage.mjs <pass-dir> [--project-root <dir>] [--policy <name>] [--policy-path <file>] [--transcripts-dir <dir>] [--receipt <file>] [--strict-pricing] [--dry-run]");
   return args;
 }
 
@@ -467,7 +490,11 @@ async function loadDist() {
     const routingMod = await import(pathToFileURL(join(DIST, "routing.js")).href);
     const pricingMod = await import(pathToFileURL(join(DIST, "pricing.js")).href);
     const telemetryMod = await import(pathToFileURL(join(DIST, "telemetry.js")).href);
-    return { policyMod, routingMod, pricingMod, telemetryMod };
+    // The dated price list and the override rule dispatch bills by, so the
+    // orchestrator's messages are priced exactly as dispatched work is.
+    const pricesMod = await import(pathToFileURL(join(DIST, "prices.js")).href);
+    const effectiveMod = await import(pathToFileURL(join(DIST, "effectivePrice.js")).href);
+    return { policyMod, routingMod, pricingMod, telemetryMod, pricesMod, effectiveMod };
   } catch (err) {
     throw new Error(
       `could not load the dispatch server's compiled modules from ${DIST} — the MCP ` +
@@ -536,9 +563,18 @@ export function candidateTranscripts(dir, windowStartMs) {
  * windowStartMs <= timestamp < windowEndMs, no slack — the anchors already
  * carry whatever slack they deserve (header, fact 5). Returns token buckets
  * + scan stats + the observed model → unique-message-count map + the same
- * buckets per model (what the receipt rule compares).
+ * buckets per model (what the receipt rule compares) + `messages`, one record
+ * per counted message for priceMessages: `{model, role, timestamp, modifiers,
+ * conflicts, tokens}`. `role` is `roleOf(file)` for the file holding the
+ * message's first line; `timestamp` is that line's; `tokens` carries the
+ * disjoint 5-minute / 1-hour write split and the booked output. Each of
+ * `modifiers.{speed, service_tier, inference_geo}` is the non-null value any
+ * line of the message recorded, and a modifier two lines record differently
+ * is named in `conflicts`.
  */
-export function sumTranscriptUsage(files, windowStartMs, windowEndMs) {
+export function sumTranscriptUsage(files, windowStartMs, windowEndMs, { roleOf = () => "session" } = {}) {
+  const messages = [];
+  const recordById = new Map();
   const seen = new Set();
   /** Per message id: the output figure booked, whether it came from the
    *  terminal (stop_reason) line, and the model it was booked under. See the
@@ -587,11 +623,16 @@ export function sumTranscriptUsage(files, windowStartMs, windowEndMs) {
         const prev = outputById.get(msg.id);
         if (seen.has(msg.id)) {
           stats.duplicates++;
+          const rec = recordById.get(msg.id);
+          // Streaming lines before the terminal one often omit `speed`, so a
+          // fast-mode message would be priced standard from its first line.
+          noteModifiers(rec, usage);
           // A terminal line always wins; otherwise only a larger value does,
           // and never over a value already taken from a terminal line.
           if (!prev?.terminal && (terminal || out > prev.out)) {
             tokens.output += out - prev.out;
             bucketFor(prev.model).output += out - prev.out;
+            rec.tokens.output = out;
             outputById.set(msg.id, { out, terminal, model: prev.model });
           }
           continue;
@@ -621,9 +662,184 @@ export function sumTranscriptUsage(files, windowStartMs, windowEndMs) {
       pm.input_cache_write += cw;
       pm.input_cache_write_1h += cw1h;
       pm.output += out;
+      const rec = {
+        model: msg.model ?? null,
+        role: roleOf(file),
+        timestamp: obj.timestamp,
+        modifiers: { speed: null, service_tier: null, inference_geo: null },
+        conflicts: [],
+        tokens: {
+          input: usage.input_tokens ?? 0,
+          input_cached: usage.cache_read_input_tokens ?? 0,
+          input_cache_write_5m: cw - cw1h,
+          input_cache_write_1h: cw1h,
+          output: out,
+        },
+      };
+      noteModifiers(rec, usage);
+      messages.push(rec);
+      if (msg.id) recordById.set(msg.id, rec);
     }
   }
-  return { tokens, stats, observedModels, perModel };
+  return { tokens, stats, observedModels, perModel, messages };
+}
+
+const MODIFIER_KEYS = ["speed", "service_tier", "inference_geo"];
+const TOKEN_KEYS = ["input", "input_cached", "input_cache_write_5m", "input_cache_write_1h", "output"];
+const zeroTokens = () => ({ input: 0, input_cached: 0, input_cache_write_5m: 0, input_cache_write_1h: 0, output: 0 });
+const ROLE_ORDER = { session: 0, helper: 1 };
+
+/** Records one line's request modifiers on its message record (see sumTranscriptUsage). */
+function noteModifiers(rec, usage) {
+  for (const k of MODIFIER_KEYS) {
+    const v = usage[k];
+    if (v == null) continue;
+    if (rec.modifiers[k] == null) rec.modifiers[k] = v;
+    else if (rec.modifiers[k] !== v && !rec.conflicts.includes(k)) rec.conflicts.push(k);
+  }
+}
+
+/**
+ * `helper` when a directory between the transcript root and the file is named
+ * `subagents` (a delegated agent's own transcript, at any depth); `session`
+ * otherwise. Only the path below `root` is read, so a `subagents` directory
+ * above the root says nothing about the file.
+ */
+export function roleOfTranscript(root, file) {
+  return relative(root, file).split(sep).slice(0, -1).includes("subagents") ? "helper" : "session";
+}
+
+/**
+ * The price of one message: `pricer(modelName, timestamp, modifiers)` returns
+ * `{unpriced: false, model, basis, pricing, period, applied_modifiers}` or
+ * `{unpriced: true, model, reason}`, where `model` is the price-list id (the
+ * name as written when it is not on the list). The rule is dispatch's own
+ * (effectivePrice.ts): the dated list prices the model on the message's UTC
+ * day; a policy entry naming the model bills its block only under
+ * `pricing_override: true`. Two such entries with different blocks price
+ * nothing, because picking one would be a guess. Policy-block warnings collect,
+ * deduplicated, on `pricer.warnings`. The deps are the dispatch server's
+ * compiled prices.js, effectivePrice.js and pricing.js.
+ */
+export function makeMessagePricer(policy, { pricesMod, effectiveMod, pricingMod }) {
+  const models = Array.isArray(policy?.models) ? policy.models : [];
+  const warnings = [];
+  const pricer = (name, timestamp, modifiers) => {
+    if (typeof name !== "string" || name === "") {
+      return { unpriced: true, model: "(unlabeled)", reason: "the message carries no model name" };
+    }
+    const model = pricesMod.resolveModel(name)?.id ?? name;
+    const matches = models.filter((m) => typeof m?.model_name === "string" && effectiveMod.sameModel(m.model_name, name));
+    const overrides = matches.filter((m) => m.pricing_override === true && m.pricing);
+    if (new Set(overrides.map((m) => JSON.stringify(m.pricing))).size > 1) {
+      return {
+        unpriced: true,
+        model,
+        reason: `policy models ${overrides.map((m) => `'${m.id}'`).join(", ")} give ${model} different custom prices under pricing_override: true, and picking one would be a guess`,
+      };
+    }
+    const entry = overrides[0] ?? matches.find((m) => m.adapter === "builtin-anthropic") ?? matches[0] ?? null;
+    const custom = entry?.pricing_override === true && Boolean(entry.pricing);
+    if (!custom && typeof timestamp !== "string") {
+      return { unpriced: true, model, reason: `the message carries no timestamp, so no price period for ${model} can be chosen` };
+    }
+    const r = entry
+      ? effectiveMod.effectivePrice(entry, timestamp ?? "", modifiers ?? {}, name)
+      : pricesMod.lookupPrice(name, timestamp, modifiers ?? {});
+    for (const w of r.warnings ?? []) if (!warnings.includes(w)) warnings.push(w);
+    if (r.unpriced) return { unpriced: true, model, reason: r.reason };
+    return { unpriced: false, model, basis: r.basis ?? "list", pricing: r.pricing, period: r.period ?? null, applied_modifiers: r.applied_modifiers ?? null };
+  };
+  pricer.warnings = warnings;
+  pricer.computeCostUsd = pricingMod.computeCostUsd;
+  pricer.round6 = pricingMod.round6;
+  return pricer;
+}
+
+/**
+ * Prices sumTranscriptUsage's `messages` one by one and aggregates them per
+ * model and role. Messages at the same price (model, role, basis, period,
+ * rates, applied modifiers) share one `per_model` entry, so an entry's cost is
+ * its tokens at its one card, which is the sum of its messages' costs; a
+ * window that crosses a price change or mixes fast and standard requests gets
+ * one entry per price. A message the pricer cannot price, or whose lines
+ * disagree on a modifier, goes to `unpriced` with the reason, and its tokens
+ * are in no cost. `cost_usd` is the sum of the entries' costs.
+ */
+export function priceMessages(messages, pricer) {
+  const entries = new Map();
+  const missing = new Map();
+  for (const msg of messages) {
+    let r = pricer(msg.model, msg.timestamp, msg.modifiers);
+    if (!r.unpriced && msg.conflicts?.length > 0) {
+      r = { unpriced: true, model: r.model, reason: `the lines of one ${r.model} message disagree on ${msg.conflicts.join(", ")}, so no single price applies` };
+    }
+    if (r.unpriced) {
+      const key = [msg.role, r.model, r.reason].join(" ");
+      const u = missing.get(key) ?? { model: r.model, role: msg.role, reason: r.reason, messages: 0, tokens: zeroTokens() };
+      u.messages++;
+      for (const k of TOKEN_KEYS) u.tokens[k] += msg.tokens[k] ?? 0;
+      missing.set(key, u);
+      continue;
+    }
+    const am = r.applied_modifiers;
+    const key = [msg.role, r.model, r.basis, r.period?.from ?? "", JSON.stringify(r.pricing), am ? `${am.speed}/${am.service_tier}/${am.inference_geo}/${am.multiplier}` : ""].join(" ");
+    let e = entries.get(key);
+    if (!e) {
+      e = {
+        model: r.model,
+        role: msg.role,
+        reported_as: [],
+        price_basis: r.basis,
+        price_period: r.period ? { from: r.period.from, to: r.period.to, source_url: r.period.source_url, verified: r.period.verified } : null,
+        applied_modifiers: am ? { speed: am.speed, service_tier: am.service_tier, inference_geo: am.inference_geo, multiplier: am.multiplier, defaulted: [] } : null,
+        rates: { ...r.pricing },
+        messages: 0,
+        tokens: zeroTokens(),
+        cost_usd: 0,
+      };
+      entries.set(key, e);
+    }
+    if (typeof msg.model === "string" && !e.reported_as.includes(msg.model)) e.reported_as.push(msg.model);
+    // Modifiers absent on some messages took the API default; the entry names every one that did.
+    if (am) for (const d of am.defaulted) if (!e.applied_modifiers.defaulted.includes(d)) e.applied_modifiers.defaulted.push(d);
+    e.messages++;
+    for (const k of TOKEN_KEYS) e.tokens[k] += msg.tokens[k] ?? 0;
+  }
+  const per_model = [...entries.values()];
+  for (const e of per_model) {
+    e.applied_modifiers?.defaulted.sort((a, b) => MODIFIER_KEYS.indexOf(a) - MODIFIER_KEYS.indexOf(b));
+    e.cost_usd = pricer.computeCostUsd(
+      { input: e.tokens.input, input_cached: e.tokens.input_cached, output: e.tokens.output, input_cache_write: e.tokens.input_cache_write_5m, input_cache_write_1h: e.tokens.input_cache_write_1h },
+      e.rates
+    );
+  }
+  const byRoleModel = (a, b) => (ROLE_ORDER[a.role] ?? 2) - (ROLE_ORDER[b.role] ?? 2) || a.model.localeCompare(b.model);
+  per_model.sort((a, b) =>
+    byRoleModel(a, b) ||
+    (a.price_period?.from ?? "").localeCompare(b.price_period?.from ?? "") ||
+    JSON.stringify(a.applied_modifiers).localeCompare(JSON.stringify(b.applied_modifiers))
+  );
+  const unpriced = [...missing.values()].sort((a, b) => byRoleModel(a, b) || a.reason.localeCompare(b.reason));
+  return {
+    per_model,
+    unpriced,
+    cost_usd: pricer.round6(per_model.reduce((s, e) => s + e.cost_usd, 0)),
+    complete: unpriced.length === 0,
+    custom_models: [...new Set(per_model.filter((e) => e.price_basis === "custom").map((e) => e.model))].sort(),
+  };
+}
+
+/** One per_model entry's price, in words, for the console. */
+function describePrice(e) {
+  if (e.price_basis === "custom") return "custom policy price (pricing_override)";
+  const p = e.price_period;
+  const m = e.applied_modifiers;
+  return (
+    `list ${p.from}..${p.to ?? "open"}; ${m.speed}/${m.service_tier}/${m.inference_geo}` +
+    (m.multiplier !== 1 ? ` x${m.multiplier}` : "") +
+    (m.defaulted.length > 0 ? `; default ${m.defaulted.join("+")}` : "")
+  );
 }
 
 /**
@@ -794,7 +1010,7 @@ export async function main(argv = process.argv.slice(2)) {
   const modelWritten = JSON.parse(readFileSync(manifestPath, "utf-8"));
   // The call log: machine-written, one line per dispatched call.
   const logEvents = readTelemetry(telemetryPath);
-  const { policyMod, routingMod, pricingMod, telemetryMod } = await loadDist();
+  const { policyMod, routingMod, pricingMod, telemetryMod, pricesMod, effectiveMod } = await loadDist();
 
   // ── When the model's manifest cannot be read, rebuild it ────────────────
   //
@@ -1109,7 +1325,8 @@ export async function main(argv = process.argv.slice(2)) {
   const unobservableMs = finiteEnd ? Math.max(0, windowEndMs - collectedAtMs) : 0;
   const effectiveEndMs = finiteEnd ? Math.min(windowEndMs, collectedAtMs) : windowEndMs;
 
-  const { tokens, stats, observedModels, perModel } = sumTranscriptUsage(files, windowStartMs, effectiveEndMs);
+  const roleOf = (f) => roleOfTranscript(tDir, f);
+  const { tokens, stats, observedModels, perModel, messages } = sumTranscriptUsage(files, windowStartMs, effectiveEndMs, { roleOf });
 
   console.log(
     `collect-orchestrator-usage: pass '${passId}' window ${isoOf(windowStartMs)} → ${finiteEnd ? isoOf(windowEndMs) : "end of session"}` +
@@ -1164,84 +1381,102 @@ export async function main(argv = process.argv.slice(2)) {
     return 1;
   }
 
-  // ── Which model's rate prices the overhead ──────────────────────────────
-  // 1. the policy's derived driver model (the normal case);
-  // 2. the policy's in-session model when the judgment tier is not in-session;
-  // 3. the one model the session actually ran, if the policy prices it in
-  //    any tier (a Gemini-only policy still drove an Opus session);
-  // 4. the receipt alone, when the policy prices no Claude model at all.
-  // The session runs on Claude Code whatever the policy routes, so refusing
-  // to price it would leave the worst-affected route uncounted — the exact
-  // shape of the $1.87-vs-$236 report this tool exists to end.
+  // ── Price every message on its own (header, fact 6) ─────────────────────
+  // Model, day, modifiers and cache-write split come from the message; the
+  // rate from the dated price list (or a pricing_override card). Nothing here
+  // depends on which model the policy drives with.
+  const pricer = makeMessagePricer(policy, { pricesMod, effectiveMod, pricingMod });
+  const priced = priceMessages(messages, pricer);
+  for (const w of pricer.warnings) console.error(`NOTE: ${w}`);
+  const transcriptCost = priced.cost_usd;
+  let pricingBasis =
+    `each message at its own model's list price on its own day (price list verified ${pricesMod.PRICE_LIST_VERIFIED})` +
+    (priced.custom_models.length > 0 ? `; custom policy price under pricing_override for ${priced.custom_models.join(", ")}` : "");
+  if (stats.counted > 0) {
+    console.log(`per-model pricing (price list verified ${pricesMod.PRICE_LIST_VERIFIED}):`);
+    for (const e of priced.per_model) {
+      console.log(
+        `  ${e.role.padEnd(7)} ${e.model} [${describePrice(e)}]: in ${e.tokens.input} · cached ${e.tokens.input_cached} · ` +
+          `write 5m ${e.tokens.input_cache_write_5m} / 1h ${e.tokens.input_cache_write_1h} · out ${e.tokens.output} ` +
+          `(${e.messages} message(s)) = $${e.cost_usd}`
+      );
+    }
+  }
+  if (!priced.complete) {
+    const tokenCount = (t) => TOKEN_KEYS.reduce((s, k) => s + t[k], 0);
+    const total = priced.unpriced.reduce((s, u) => s + tokenCount(u.tokens), 0);
+    const count = priced.unpriced.reduce((s, u) => s + u.messages, 0);
+    console.error(
+      `WARNING: ${total} token(s) on ${count} message(s) in the window could not be priced, so the transcript figure is ` +
+        `INCOMPLETE: it leaves them out rather than borrow another model's price.\n` +
+        priced.unpriced.map((u) => `  ${u.role} ${u.model}: ${tokenCount(u.tokens)} token(s) on ${u.messages} message(s) — ${u.reason}`).join("\n")
+    );
+    if (args.strictPricing) {
+      console.error(
+        `collect-orchestrator-usage FAILED: --strict-pricing, and ${total} token(s) have no price on the list ` +
+          `(${[...new Set(priced.unpriced.map((u) => u.model))].join(", ")}). Nothing was written.`
+      );
+      return 1;
+    }
+  }
+
+  // ── Which model labels the orchestrator event ───────────────────────────
+  // The event carries one `model`; per_model[] is the breakdown. In order: the
+  // policy's derived driver model; the one model the session ran, when the
+  // policy names it; the receipt's dominant model; the model most messages
+  // ran on; the policy's in-session seat.
   const observedNames = Object.keys(observedModels).filter((m) => m !== "(unlabeled)");
   const receiptNames = receipt ? Object.keys(receipt.models) : [];
   const single = observedNames.length === 1 ? observedNames[0] : receiptNames.length === 1 ? receiptNames[0] : null;
   let derived;
   let driver;
-  let pricingBasis = "the policy's derived driver model";
+  let labelBasis = "the policy's derived driver model";
   try {
     derived = deriveDriverModel(policy, routingMod, overrides);
     driver = policy.models.find((m) => m.id === derived.modelId);
   } catch (err) {
-    // Ordered by evidence: the model the session demonstrably ran, priced by
-    // the policy if it prices that model anywhere (a claude-cli entry is a
-    // worker seat, so it is the last choice for a driver rate); else the
-    // receipt's own dollars; else the policy's in-session driver seat.
-    const byName = single ? policy.models.filter((m) => m.model_name === single && m.pricing) : [];
-    const priced = byName.find((m) => m.adapter !== "claude-cli") ?? byName[0];
-    const inSession = policy.models.find((m) => m.adapter === "builtin-anthropic" && m.pricing);
-    if (priced) {
-      derived = { modelName: priced.model_name, modelId: priced.id };
-      driver = priced;
-      pricingBasis = `the session's observed model '${single}' (priced by the policy's '${priced.id}' entry)`;
+    // A claude-cli entry is a worker seat, so it is the last choice to label a driver.
+    const byName = single ? policy.models.filter((m) => m.model_name === single) : [];
+    const named = byName.find((m) => m.adapter !== "claude-cli") ?? byName[0];
+    const inSession = policy.models.find((m) => m.adapter === "builtin-anthropic");
+    const busiest = Object.entries(observedModels).filter(([n]) => n !== "(unlabeled)").sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (named) {
+      derived = { modelName: named.model_name, modelId: named.id };
+      driver = named;
+      labelBasis = `the session's observed model '${single}' (the policy's '${named.id}' entry)`;
     } else if (receipt) {
       const dominant = Object.entries(receipt.models).sort((a, b) => (b[1].cost_usd ?? 0) - (a[1].cost_usd ?? 0))[0];
       derived = { modelName: dominant ? dominant[0] : "(receipt)", modelId: null };
       driver = null;
-      pricingBasis = `the receipt (policy '${policy.name}' prices no Claude model; receipt bills ${receiptNames.length ? receiptNames.join(" + ") : "an unnamed model"})`;
+      labelBasis = `the receipt (policy '${policy.name}' prices no Claude model; receipt bills ${receiptNames.length ? receiptNames.join(" + ") : "an unnamed model"})`;
+    } else if (busiest) {
+      derived = { modelName: busiest, modelId: null };
+      driver = null;
+      labelBasis = `the model most messages ran on, '${busiest}' (policy '${policy.name}' names none of the session's models)`;
     } else if (inSession) {
       derived = { modelName: inSession.model_name, modelId: inSession.id };
       driver = inSession;
-      pricingBasis = "the policy's in-session model (judgment tier is not in-session)";
+      labelBasis = "the policy's in-session model (judgment tier is not in-session)";
     } else {
-      console.error(
-        `collect-orchestrator-usage FAILED: ${err.message}\n` +
-          `The session ran ${JSON.stringify(observedNames)} but this policy prices none of it, and no receipt exists at ` +
-          `${receiptPath}. Pass --policy-path <a policy that prices the session model> or --receipt <the run's claude -p ` +
-          `result json / live-run.log>. Nothing was written.`
-      );
-      return 1;
+      derived = { modelName: "(unlabeled)", modelId: null };
+      driver = null;
+      labelBasis = "no model name (no message in the window names one)";
     }
-    console.error(`NOTE: ${err.message}\nPricing the orchestrator's own overhead at ${pricingBasis} instead — the session runs on Claude Code regardless of where the policy routes the judgment tier.`);
-  }
-
-  if (receipt && driver && receiptNames.length > 0 && !receiptNames.includes(derived.modelName)) {
     console.error(
-      `WARNING: the receipt bills ${JSON.stringify(receiptNames)} but the overhead is priced at the policy's ` +
-        `'${derived.modelName}' rate. The receipt rule below compares token buckets per model, so this only ` +
-        `affects the transcript-priced figure kept beside the receipt; pass --policy-path for a policy that ` +
-        `prices the model the receipt names to make that figure meaningful.`
-    );
-  }
-  const mismatched = observedNames.filter((m) => m !== derived.modelName);
-  if (driver && mismatched.length > 0) {
-    console.error(
-      `WARNING: transcript messages ran on ${JSON.stringify(mismatched)} but the overhead is priced ` +
-        `at '${derived.modelName}' — the dollars below assume a single rate. ` +
-        `If the mismatch is the driver itself, the run-start driver-model check should have caught it.`
+      `NOTE: ${err.message}\nThe orchestrator event is labelled with ${labelBasis}. Its dollars are priced per message ` +
+        `from the price list either way: the session runs on Claude Code whatever the policy routes the judgment tier to.`
     );
   }
 
-  // ── Price the transcript (5-minute and 1-hour cache writes at their own rates) ──
-  const priceOf = (t) => ({
-    input: t.input,
-    input_cached: t.input_cached,
-    output: t.output,
-    input_cache_write: t.input_cache_write_5m,
-    input_cache_write_1h: t.input_cache_write_1h,
-  });
-  const transcriptCost = driver ? pricingMod.computeCostUsd(priceOf(tokens), driver.pricing) : null;
+  // The receipt diagnostics below (implied cache-write rate, rate drift) read
+  // one card: the labelled driver's effective price on the window's first day.
+  // They inform; the receipt decision is per token bucket.
+  const driverPrice = driver ? effectiveMod.effectivePrice(driver, isoOf(windowStartMs), {}) : null;
+  const card = driverPrice && !driverPrice.unpriced ? driverPrice.pricing : null;
+  const cardName = card && driverPrice.basis === "custom" ? "the policy card" : "the price list";
   const approxTag = overheadIsFloor ? "; LOWER BOUND — window opens at the first dispatch" : windowExact ? "" : "; approximate window";
+  // A transcript-priced figure that left unpriced tokens out says so in its label.
+  const transcriptTags = approxTag + (priced.complete ? "" : "; INCOMPLETE — unpriced tokens excluded");
 
   // ── The receipt rule ────────────────────────────────────────────────────
   let cost;
@@ -1284,14 +1519,16 @@ export async function main(argv = process.argv.slice(2)) {
     // policy card's other three rates — the diagnostic that found the 1-hour
     // tier. Informational; the decision is the bucket rule below.
     let implied = "";
-    if (driver && rm.input_cache_write > 0) {
-      const pr = driver.pricing;
+    if (card && rm.input_cache_write > 0) {
+      const pr = card;
       const nonWrite = (rm.input * pr.input + rm.input_cached * pr.input_cached + rm.output * pr.output) / 1_000_000;
       const rate = ((receipt.total_cost_usd - nonWrite) / rm.input_cache_write) * 1_000_000;
-      implied = `; receipt implies a cache-write rate of $${rate.toFixed(2)}/M (5-minute card $${(pr.input * 1.25).toFixed(2)}, 1-hour $${(pr.input * 2).toFixed(2)})`;
+      implied =
+        `; receipt implies a cache-write rate of $${rate.toFixed(2)}/M (${cardName}: 5-minute $${(pr.input_cache_write ?? pr.input * 1.25).toFixed(2)}, ` +
+        `1-hour $${(pr.input_cache_write_1h ?? pr.input * 2).toFixed(2)})`;
     }
     console.log(
-      `receipt cross-check: transcript ${transcriptCost == null ? "(no policy rate)" : `$${transcriptCost}`} vs receipt $${receipt.total_cost_usd}` +
+      `receipt cross-check: transcript $${transcriptCost} vs receipt $${receipt.total_cost_usd}` +
         `${pct ? ` → ${pct}` : ""} (informational; the decision is per token bucket)${implied}`
     );
     console.log(
@@ -1329,7 +1566,7 @@ export async function main(argv = process.argv.slice(2)) {
       const turnsInWindow = mainTurns.filter((t) => t.ms >= windowStartMs && t.ms < windowEndMs);
       if (turnsInWindow.length >= 2) {
         const last = turnsInWindow[turnsInWindow.length - 1];
-        const lastInv = sumTranscriptUsage(files, last.ms, effectiveEndMs);
+        const lastInv = sumTranscriptUsage(files, last.ms, effectiveEndMs, { roleOf });
         const cmpLast = compareBuckets(lastInv.perModel, receipt.models);
         console.log(`  last invocation (from the human turn at ${last.iso}, ${turnsInWindow.length - 1} earlier turn(s) in the window):`);
         for (const l of cmpLast.lines) console.log(`    ${l}`);
@@ -1341,19 +1578,12 @@ export async function main(argv = process.argv.slice(2)) {
           );
           return 3;
         }
-        if (transcriptCost == null) {
-          console.error(
-            `collect-orchestrator-usage FAILED: the receipt covers only the last of ${turnsInWindow.length} invocations in the ` +
-              `window, and the policy prices no Claude model, so the earlier invocations cannot be priced from the transcript. ` +
-              `Pass --policy-path for a policy that prices '${derived.modelName}'. Nothing was written.`
-          );
-          return 3;
-        }
-        const lastCost = pricingMod.round6(pricingMod.computeCostUsd(priceOf(lastInv.tokens), driver.pricing));
+        // Priced per message like the whole window, so no policy rate is needed.
+        const lastCost = priceMessages(lastInv.messages, pricer).cost_usd;
         const lastPct = fmtPct((lastCost - receipt.total_cost_usd) / receipt.total_cost_usd);
         console.log(`    transcript $${lastCost} vs receipt $${receipt.total_cost_usd} → ${lastPct}; the last invocation agrees with the receipt`);
         cost = transcriptCost;
-        costSource = `transcript (receipt covers only the last invocation, verified ${lastPct}; ${turnsInWindow.length - 1} earlier invocation(s) unverified${approxTag})`;
+        costSource = `transcript (receipt covers only the last invocation, verified ${lastPct}; ${turnsInWindow.length - 1} earlier invocation(s) unverified${transcriptTags})`;
         console.error(
           `NOTE: the receipt bills only the last invocation (from the human turn at ${last.iso}); the ${turnsInWindow.length - 1} ` +
             `earlier invocation(s) in the window are transcript-priced and unverified. The whole-window transcript figure ` +
@@ -1377,29 +1607,28 @@ export async function main(argv = process.argv.slice(2)) {
       // message. The receipt's own dollars are booked; the transcript figure
       // (lower only where output placeholders under-report) is kept beside it.
       bookReceipt();
-      costSource = transcriptCost == null
-        ? "receipt (transcript agrees; no policy rate for a rate check)"
-        : `receipt (transcript agrees, ${pct})`;
-      // Rate drift: the receipt's own tokens for the priced model, at the
-      // policy card, should reproduce the receipt's dollars for that model.
-      // A gap means the card no longer matches what the CLI charged.
+      costSource = `receipt (transcript agrees, ${pct})`;
+      // Rate drift: the receipt's own tokens for the labelled driver model, at
+      // its effective price, should reproduce the receipt's dollars for that
+      // model. A gap means the CLI's price table and that price differ.
       const dm = receipt.models[derived.modelName];
       const tm = perModel[derived.modelName];
-      if (driver && dm && tm && dm.cost_usd != null && dm.cost_usd > 0) {
-        const priced = pricingMod.round6(pricingMod.computeCostUsd({
+      if (card && dm && tm && dm.cost_usd != null && dm.cost_usd > 0) {
+        const atCard = pricingMod.round6(pricingMod.computeCostUsd({
           input: dm.input,
           input_cached: dm.input_cached,
           output: dm.output,
           input_cache_write: Math.max(0, dm.input_cache_write - tm.input_cache_write_1h),
           input_cache_write_1h: Math.min(dm.input_cache_write, tm.input_cache_write_1h),
-        }, driver.pricing));
-        const drift = (priced - dm.cost_usd) / dm.cost_usd;
+        }, card));
+        const drift = (atCard - dm.cost_usd) / dm.cost_usd;
         if (Math.abs(drift) > 0.005) {
           console.error(
-            `NOTE: rate drift — the receipt's own '${derived.modelName}' tokens priced at the policy card come to $${priced}, ` +
-              `but the receipt bills $${dm.cost_usd} for them (${fmtPct(drift)}). The receipt's dollars are booked; the ` +
-              `policy's rates for '${derived.modelName}' (or its cache-write TTL rates) no longer match what the CLI ` +
-              `charged — check the policy's pricing block and its pricing_last_verified date.`
+            `NOTE: rate drift — the receipt's own '${derived.modelName}' tokens priced at ${cardName} come to $${atCard}, ` +
+              `but the receipt bills $${dm.cost_usd} for them (${fmtPct(drift)}). The receipt's dollars are booked. ` +
+              (card && driverPrice.basis === "custom"
+                ? `The policy's pricing_override card for '${driverPrice.model_name}' (or its cache-write TTL rates) no longer matches what the CLI charged.`
+                : `Claude Code's own price table for '${derived.modelName}' differs from the price list (plugin/mcp/model-dispatch/src/prices.ts); one of the two is out of date.`)
           );
         }
       }
@@ -1407,11 +1636,11 @@ export async function main(argv = process.argv.slice(2)) {
   } else {
     cost = transcriptCost;
     costSource = receiptPending
-      ? `transcript (receipt pending; provisional${approxTag})`
-      : `transcript (no receipt; unverified${approxTag})`;
+      ? `transcript (receipt pending; provisional${transcriptTags})`
+      : `transcript (no receipt; unverified${transcriptTags})`;
     if (!receiptPending) {
       console.error(
-        `NOTE: no receipt at ${receiptPath} — dollars are transcript-priced at ${pricingBasis} and UNVERIFIED. ` +
+        `NOTE: no receipt at ${receiptPath} — dollars are transcript-priced (${pricingBasis}) and UNVERIFIED. ` +
           `Keep the run's \`claude -p --output-format json\` result (or the headless live-run.log; or pass --receipt) ` +
           `and this tool will verify itself against it.`
       );
@@ -1461,7 +1690,7 @@ export async function main(argv = process.argv.slice(2)) {
   // transcript's: a booked receipt bills the driver's session alone, so the
   // worker's dollars are not inside it and must stay in the total.
   const inside = inSessionDispatched(readTelemetry(telemetryPath), policy, modelWritten, dispatched, {
-    claudeCliScanned: !pinned && driver != null && costSource.startsWith("transcript"),
+    claudeCliScanned: !pinned && costSource.startsWith("transcript"),
   });
   for (const n of inside.notes) console.error(`NOTE: ${n}`);
   const insideCost = pricingMod.round6(inside.cost);
@@ -1470,7 +1699,7 @@ export async function main(argv = process.argv.slice(2)) {
   console.log(
     `overhead: in ${tokens.input} + cached ${tokens.input_cached} + cache_write ${tokens.input_cache_write} ` +
       `(5m ${tokens.input_cache_write_5m} / 1h ${tokens.input_cache_write_1h}) + out ${tokens.output} tokens ` +
-      `@ '${derived.modelName}' = $${cost} [${costSource}]`
+      `@ ${receiptOnly ? "the receipt" : "each message's own price"} = $${cost} [${costSource}]`
   );
   if (inside.count > 0) {
     console.log(
@@ -1508,7 +1737,7 @@ export async function main(argv = process.argv.slice(2)) {
       policy_name: policy.name,
       policy_version: policy.version,
       rule_index: -1,
-      rule_reason: `orchestrator overhead — ${costSource}; priced at ${pricingBasis}`,
+      rule_reason: `orchestrator overhead — ${costSource}; priced: ${pricingBasis}; labelled with ${labelBasis}`,
     },
     input_tokens: tokens.input,
     input_tokens_cached: tokens.input_cached,
@@ -1518,6 +1747,9 @@ export async function main(argv = process.argv.slice(2)) {
     cost_usd: cost,
     transcript_cost_usd: transcriptCost,
     receipt_cost_usd: receipt?.total_cost_usd ?? null,
+    // The transcript's cost per model and role, and what could not be priced.
+    per_model: priced.per_model,
+    unpriced: priced.unpriced,
     latency_ms: null,
     success: true,
     retry_count: 0,
@@ -1557,6 +1789,12 @@ export async function main(argv = process.argv.slice(2)) {
     transcript_cost_usd: transcriptCost,
     receipt_cost_usd: receipt?.total_cost_usd ?? null,
     receipt_path: receipt?.path ?? null,
+    // Header, fact 6: transcript_cost_usd is the sum of per_model[].cost_usd;
+    // unpriced[] tokens are in no cost, and pricing_complete says whether any exist.
+    per_model: priced.per_model,
+    unpriced: priced.unpriced,
+    pricing_complete: priced.complete,
+    price_list_verified: pricesMod.PRICE_LIST_VERIFIED,
     dispatched_in_session_cost_usd: insideCost,
     dispatched_in_session_events: inside.count,
     // The window the figure was measured over, so a reader can tell an exact

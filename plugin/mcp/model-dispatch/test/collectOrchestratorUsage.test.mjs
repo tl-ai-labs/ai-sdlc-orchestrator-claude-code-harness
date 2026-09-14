@@ -26,6 +26,9 @@ const SCRIPT = join(HERE, "..", "..", "..", "scripts", "collect-orchestrator-usa
 
 // Driver rates chosen for hand-checkable dollars. No explicit cache-write
 // rate, so the 1.25× premium fallback is in the arithmetic under test.
+// pricing_override: true is what makes the collector bill this card (labelled
+// custom) instead of the price list, exactly as dispatch does; every other
+// transcript model is priced from the list.
 const POLICY = `
 version: 1
 name: check-collect
@@ -34,6 +37,7 @@ models:
     adapter: builtin-anthropic
     model_name: claude-opus-4-8
     pricing: { input: 1, input_cached: 0.1, output: 5 }
+    pricing_override: true
   - id: worker
     adapter: mcp:model-dispatch
     model_name: gemini-3.5-flash
@@ -56,10 +60,10 @@ function tLine(id, model, usage, ts) {
  * transcript tree (session + subagent files). The run window is
  * [now−30m, now−10m]; in-window messages sit at now−20m.
  *
- * Expected overhead at the driver rate:
+ * Expected overhead, each message at its own model's price:
  *   msg_A  1,000,000 in + 2,000,000 cached + 400,000 cache-write + 100,000 out
- *          = 1 + 0.2 + (0.4 × 1.25) + 0.5           = $2.20
- *   msg_B    500,000 in + 200,000 out (subagent)     = $1.50
+ *          at the driver's custom card = 1 + 0.2 + (0.4 × 1.25) + 0.5 = $2.20
+ *   msg_B    500,000 in + 200,000 out (subagent, Haiku 4.5 list $1 / $5) = $1.50
  *   total                                            = $3.70
  * plus the manifest's dispatched $0.05 → true total    $3.75
  */
@@ -102,8 +106,8 @@ function makeFixture() {
       JSON.stringify({ type: "user", message: { content: "hi" } }),
     ].join("\n") + "\n"
   );
-  // Subagent transcript — in-session driver work; a model label differing
-  // from the derived driver must WARN but still be counted at the driver rate.
+  // Subagent transcript — in-session work on a model other than the driver's:
+  // priced at that model's own list price, never at the driver's rate.
   writeFileSync(
     join(subDir, "agent-1.jsonl"),
     tLine("msg_B", "claude-haiku-4-5", { input_tokens: 500_000, output_tokens: 200_000 }, inWindow) + "\n"
@@ -137,9 +141,12 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
     assert.match(r.stdout, /1 duplicate content-block line\(s\) skipped, 1 synthetic, 1 outside window/);
     assert.match(r.stdout, /"claude-opus-4-8":1/);
     assert.match(r.stdout, /"claude-haiku-4-5":1/);
-    // The single-rate assumption is surfaced, not silent.
-    assert.match(r.stderr, /WARNING/);
-    assert.match(r.stderr, /claude-haiku-4-5/);
+    // Each message is priced on its own model (the single-rate WARNING this
+    // test used to expect is gone with the single rate): the Opus 4.8 driver at
+    // its pricing_override card, the Haiku 4.5 subagent at the list.
+    assert.doesNotMatch(r.stderr, /assume a single rate/);
+    assert.match(r.stdout, /session claude-opus-4-8 \[custom policy price \(pricing_override\)\]: .*= \$2\.2\b/);
+    assert.match(r.stdout, /helper {2}claude-haiku-4-5 \[list .*\]: .*= \$1\.5\b/);
     // The dispatched event ran inside the session (provenance "estimated"), so
     // it is already inside the transcript overhead: subtracted once, said aloud.
     assert.match(r.stdout, /in-session dispatch: 1 event\(s\) totaling \$0\.05/);
@@ -167,7 +174,11 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
     assert.equal(m.total_cost_usd, 0.05); // dispatched figure NEVER grows
     // No command turn and no run log: both anchors are the manifest's dispatch
     // stamps ± 5 minutes, the window is approximate, and the block says so.
-    const { window, ...overhead } = m.orchestrator_overhead;
+    const { window, per_model, unpriced, pricing_basis, price_list_verified, ...overhead } = m.orchestrator_overhead;
+    assert.deepEqual(per_model.map((e) => [e.role, e.model, e.price_basis, e.cost_usd]), [["session", "claude-opus-4-8", "custom", 2.2], ["helper", "claude-haiku-4-5", "list", 1.5]]);
+    assert.deepEqual(unpriced, []);
+    assert.match(pricing_basis, /^each message at its own model's list price on its own day \(price list verified \d{4}-\d{2}-\d{2}\); custom policy price under pricing_override for claude-opus-4-8$/);
+    assert.match(price_list_verified, /^\d{4}-\d{2}-\d{2}$/);
     assert.deepEqual(window, {
       start: new Date(Date.parse(m.started_at) - 5 * MIN).toISOString(),
       end: new Date(Date.parse(m.ended_at) + 5 * MIN).toISOString(),
@@ -189,7 +200,7 @@ test("collector dedupes, windows, excludes synthetic, includes subagents, and wr
       output_tokens: 300_000,
       events: 1,
       provenance: "transcript",
-      pricing_basis: "the policy's derived driver model",
+      pricing_complete: true,
       cost_source: "transcript (no receipt; unverified; LOWER BOUND — window opens at the first dispatch)",
       transcript_cost_usd: 3.7,
       receipt_cost_usd: null,
@@ -638,10 +649,12 @@ models:
     adapter: builtin-anthropic
     model_name: claude-opus-5
     pricing: { input: 1, input_cached: 0.1, output: 5 }
+    pricing_override: true
   - id: worker
     adapter: claude-cli
     model_name: claude-sonnet-5
     pricing: { input: 1, input_cached: 0.1, output: 5 }
+    pricing_override: true
 rules:
   - when: { phase: codegen }
     use: worker
@@ -721,7 +734,10 @@ test("a Gemini-only policy with a two-model receipt still takes the receipt bran
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /receipt bills claude-opus-5 \+ claude-haiku-4-5/);
     assert.match(r.stderr, /NOTE: the receipt also bills claude-haiku-4-5 \(110 tokens, \$0\.01\) for calls the transcript does not record/);
-    assert.match(r.stdout, /= \$16\.245409 \[receipt \(transcript agrees; no policy rate for a rate check\)\]/);
+    // The transcript is now priced from the list whatever the policy routes, so
+    // the label carries the comparison ("no policy rate for a rate check" is gone):
+    // Opus 5 at the list, $16.235409, against a receipt that adds $0.01 of Haiku.
+    assert.match(r.stdout, /= \$16\.245409 \[receipt \(transcript agrees, -0\.1%\)\]/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -815,6 +831,7 @@ models:
     adapter: builtin-anthropic
     model_name: claude-opus-4-8
     pricing: { input: 1, input_cached: 0.1, output: 10 }
+    pricing_override: true
 rules:
   - default: driver
 `;

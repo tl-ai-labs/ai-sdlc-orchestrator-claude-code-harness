@@ -4,7 +4,8 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { TelemetryEvent } from "./types.js";
+import type { ModelPricing, PriceBasis, TelemetryEvent } from "./types.js";
+import type { AppliedModifiers, PeriodRef } from "./prices.js";
 
 export function appendEvent(jsonlPath: string, ev: TelemetryEvent): void {
   mkdirSync(dirname(jsonlPath), { recursive: true });
@@ -40,6 +41,47 @@ export function readEvents(jsonlPath: string): TelemetryEvent[] {
   if (!existsSync(jsonlPath)) return [];
   const lines = readFileSync(jsonlPath, "utf-8").split("\n").filter(Boolean);
   return lines.map((l) => JSON.parse(l) as TelemetryEvent);
+}
+
+/** Token buckets of one orchestrator per_model / unpriced entry; the two cache-write buckets are disjoint. */
+export interface OrchestratorTokens {
+  input: number;
+  input_cached: number;
+  input_cache_write_5m: number;
+  input_cache_write_1h: number;
+  output: number;
+}
+
+/**
+ * One price collect-orchestrator-usage.mjs billed transcript messages at:
+ * messages of one model and role at the same period, rates and modifiers.
+ */
+export interface OrchestratorModelCost {
+  /** Price-list id; the name as written for a custom-priced model the list does not carry. */
+  model: string;
+  /** `session`: a top-level session file. `helper`: a file under `subagents/`. */
+  role: "session" | "helper";
+  /** The names the transcript used for this model. */
+  reported_as: string[];
+  price_basis: PriceBasis;
+  /** The list period that priced it; null for a custom price. */
+  price_period: PeriodRef | null;
+  /** The modifiers the list applied; `defaulted` names any absent on some message. Null for a custom price. */
+  applied_modifiers: AppliedModifiers | null;
+  /** USD per 1M tokens, as billed. */
+  rates: ModelPricing;
+  messages: number;
+  tokens: OrchestratorTokens;
+  cost_usd: number;
+}
+
+/** Transcript tokens the collector could not price (unknown model, no period for the day, unpriced modifier value). */
+export interface OrchestratorUnpriced {
+  model: string;
+  role: "session" | "helper";
+  reason: string;
+  messages: number;
+  tokens: OrchestratorTokens;
 }
 
 export interface Manifest {
@@ -80,7 +122,12 @@ export interface Manifest {
     output_tokens: number;
     events: number;
     provenance: "transcript";
-    /** Which model's rate priced the overhead, in words. */
+    /**
+     * How the overhead was priced, in words: each message from the dated price
+     * list (naming any pricing_override models), or the receipt when no
+     * transcript message was readable. Before per-message pricing: which one
+     * model's rate priced every token.
+     */
     pricing_basis?: string;
     /**
      * How cost_usd was arrived at, in words; the report matches on the prefix.
@@ -90,7 +137,8 @@ export interface Manifest {
      * verified ±x%; N earlier invocation(s) unverified)"; "transcript (receipt
      * pending; provisional)"; "transcript (no receipt; unverified)". A
      * "; approximate window" suffix marks a window anchored without the run's
-     * own command turn.
+     * own command turn; "; INCOMPLETE — unpriced tokens excluded" marks a
+     * transcript-priced figure that leaves `unpriced` tokens out.
      */
     cost_source?: string;
     /** The transcript-priced figure, kept beside cost_usd when a receipt supplied or verified it. */
@@ -98,6 +146,14 @@ export interface Manifest {
     /** Claude Code's own end-of-session total for the driver session, when a receipt was found. */
     receipt_cost_usd?: number | null;
     receipt_path?: string | null;
+    /** Transcript cost per model, role and price; transcript_cost_usd is the sum of their cost_usd. */
+    per_model?: OrchestratorModelCost[];
+    /** Transcript tokens with no price on the list; they are in no cost. */
+    unpriced?: OrchestratorUnpriced[];
+    /** False when `unpriced` is non-empty. */
+    pricing_complete?: boolean;
+    /** The verification date of the price list the figure was priced with. */
+    price_list_verified?: string;
     /**
      * The window the collector measured: ISO bounds (end null = the end of the
      * session file), the anchor each bound came from, whether both were exact,

@@ -51,6 +51,14 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 | Prints a `warnings` entry but the run starts | The failed adapter belongs to a model this run's auth mode never dispatches to (typically `builtin-anthropic` under `--auth=estimated`). | Expected. Only a model this run actually dispatches to halts. |
 | Lists a model under `not_selected` | The policy offers more than one way to reach a tier (a `select:` slot), and this run picked the other option. Prerequisites for the losing option are not checked. | Expected. Switch `MMO_SELECT` if you meant the other one. |
 
+## Cost collector (`collect-orchestrator-usage.mjs`)
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `WARNING: N token(s) on M message(s) in the window could not be priced`, and `cost_source` ends `INCOMPLETE — unpriced tokens excluded` | A transcript message ran on a model the dated price list does not carry, on a day outside that model's price periods, or with a `speed`, `service_tier` or `inference_geo` value the list does not price. Its tokens are listed under `orchestrator_overhead.unpriced` with the reason and are in no dollar figure. | Add the model's verified period to `plugin/mcp/model-dispatch/src/prices.ts` and re-run the collector, or give the model a `pricing:` block with `pricing_override: true` in the run's policy. |
+| Exits 1 with `--strict-pricing, and N token(s) have no price on the list` | The same unpriced tokens, with `--strict-pricing` set. Nothing was written. | As above, or re-run without `--strict-pricing` to write the figure labelled incomplete. |
+| `NOTE: Policy model '…' (…): its pricing block … differs … from the price list` | A policy `pricing:` block for a model in the transcript differs from the list by more than 0.5% on some rate. The list is billed. | Correct the block to the list, or set `pricing_override: true` if the block is deliberate. |
+
 ## Anthropic
 
 | Symptom | Cause | Fix |
