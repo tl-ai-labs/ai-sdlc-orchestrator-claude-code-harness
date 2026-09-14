@@ -18,11 +18,15 @@
  *   unpriced, never matched to a similar model.
  * - 5-minute vs 1-hour cache writes: the worker session's own transcript
  *   (`<projects>/<project>/<session_id>.jsonl` plus its `subagents/`), when it
- *   explains every token the result says that model wrote. Otherwise the
- *   result's top-level `usage.cache_creation` 1-hour count, capped at that
- *   model's writes, flagged `approximate`. (That top-level split belongs to
- *   the session model, so the approximation can over-price a helper's
- *   5-minute writes; the transcript path exists to avoid it.)
+ *   explains every token the result says that model wrote. Otherwise
+ *   `approximate`: the result's top-level `usage.cache_creation` split goes to
+ *   the ONE model whose four counts equal that `usage` (Claude Code writes the
+ *   session model's main loop there), and any other model takes the 1-hour
+ *   writes its own transcript lines record and prices the rest at the
+ *   5-minute rate, written into that entry's `assumed`. The usage's 1-hour
+ *   count is given out once in total. (Every model used to take min(its
+ *   writes, that 1-hour count), which counted the session's 1-hour writes
+ *   once per model: review finding M2.)
  * - speed / service_tier / inference_geo: the model's transcript messages,
  *   each message's value merged from ALL of its lines (Claude Code writes
  *   `speed` only on a later streamed or terminal line), when every message
@@ -327,7 +331,31 @@ export function priceClaudeCliResult(
     });
   }
 
-  const topOneHour = num(usage.cache_creation?.ephemeral_1h_input_tokens);
+  // The result's top-level `usage` is ONE model's usage: Claude Code writes the
+  // session model's main loop there (both real results kept, CLI 2.1.245 and
+  // 2.1.270, show it), so its cache_creation split belongs to that model only.
+  // It goes to the one row whose four counts equal the usage's, and only when
+  // the split adds up to the usage's writes: the collector's bookReceiptTokens
+  // rule. Review finding M2: every row used to take min(its writes, the usage's
+  // 1-hour count), which counted the session's 1-hour writes once per model (on
+  // the real 2026-09-10 result, 40,658 1-hour writes against the 20,329 billed).
+  const u5m = usage.cache_creation?.ephemeral_5m_input_tokens;
+  const u1h = usage.cache_creation?.ephemeral_1h_input_tokens;
+  const usageOwner = (() => {
+    const counts = [usage.input_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens, usage.output_tokens];
+    if (!counts.every((n) => typeof n === "number") || typeof u5m !== "number" || typeof u1h !== "number") return null;
+    if (u5m + u1h !== usage.cache_creation_input_tokens) return null;
+    const owners = [...rows.values()].filter(
+      (r) =>
+        r.input === usage.input_tokens &&
+        r.input_cached === usage.cache_read_input_tokens &&
+        r.writes === usage.cache_creation_input_tokens &&
+        r.output === usage.output_tokens,
+    );
+    return owners.length === 1 ? owners[0].key : null;
+  })();
+  // The usage's 1-hour writes are given out once in total, whatever the rows.
+  let usageOneHourLeft = typeof u1h === "number" && u1h > 0 ? u1h : 0;
   const perModel: WorkerModelCost[] = [];
   const unpriced: UnpricedModel[] = [];
   const warnings: string[] = [];
@@ -339,16 +367,33 @@ export function priceClaudeCliResult(
     let write5m = 0;
     let write1h = 0;
     let split: TtlSplit;
+    const assumed: string[] = [];
     if (row.writes === 0) {
       split = "no_cache_writes";
     } else if (fromTranscript && fromTranscript.split_known && fromTranscript.write_5m + fromTranscript.write_1h === row.writes) {
       write5m = fromTranscript.write_5m;
       write1h = fromTranscript.write_1h;
       split = "transcript";
-    } else {
-      write1h = Math.min(row.writes, topOneHour);
+    } else if (row.key === usageOwner) {
+      // The usage's four counts are this model's, so its split is too.
+      write1h = Math.min(row.writes, usageOneHourLeft);
+      usageOneHourLeft -= write1h;
       write5m = row.writes - write1h;
       split = "approximate";
+    } else {
+      // Any other model: the 1-hour writes its own transcript lines record
+      // (never more than the result says it wrote), and every other write at
+      // the 5-minute rate, with the assumption written down.
+      write1h = Math.min(row.writes, fromTranscript?.write_1h ?? 0);
+      write5m = row.writes - write1h;
+      split = "approximate";
+      const explained = fromTranscript ? Math.min(row.writes, fromTranscript.write_5m + fromTranscript.write_1h) : 0;
+      if (row.writes > explained) {
+        assumed.push(`${row.writes - explained} cache-write token(s) no worker transcript line explains: the 5-minute rate`);
+      }
+      if (fromTranscript && !fromTranscript.split_known) {
+        assumed.push("a worker transcript line wrote cache without a TTL split: its writes at the 5-minute rate");
+      }
     }
     const rowTokens = { input: row.input, input_cached: row.input_cached, input_cache_write: write5m, input_cache_write_1h: write1h, output: row.output };
     tokens.input += rowTokens.input;
@@ -409,12 +454,12 @@ export function priceClaudeCliResult(
     if (!price || price.unpriced) {
       const reason = problem ?? (price as { reason: string }).reason;
       unpriced.push({ model: row.names.join(", "), reason });
-      perModel.push({ model: row.key, reported_as: row.names, tokens: rowTokens, price_basis: null, cost_usd: null, cli_cost_usd: cliCost, ttl_split: split, unpriced_reason: reason });
+      perModel.push({ model: row.key, reported_as: row.names, tokens: rowTokens, price_basis: null, cost_usd: null, cli_cost_usd: cliCost, ttl_split: split, unpriced_reason: reason, ...(assumed.length > 0 ? { assumed } : {}) });
       continue;
     }
     const rowCost = computeCostUsd(rowTokens, price.pricing);
     cost += rowCost;
-    perModel.push({ model: row.key, reported_as: row.names, tokens: rowTokens, price_basis: price.basis, cost_usd: rowCost, cli_cost_usd: cliCost, ttl_split: split });
+    perModel.push({ model: row.key, reported_as: row.names, tokens: rowTokens, price_basis: price.basis, cost_usd: rowCost, cli_cost_usd: cliCost, ttl_split: split, ...(assumed.length > 0 ? { assumed } : {}) });
   }
 
   const splits = perModel.map((m) => m.ttl_split);

@@ -152,22 +152,76 @@ test("T8 a Claude Code figure at 0.6x the list is a warning, never the cost", as
   assert.match(stderr, /model_id=opus-cli/);
 });
 
-test("T8 no readable worker transcript: the split comes from usage.cache_creation capped per model, flagged approximate", async () => {
+/**
+ * Review finding M2. With no transcript to split a model's cache writes, every
+ * model used to take `write_1h = min(its writes, usage.cache_creation 1-hour)`.
+ * That 1-hour count is the session model's alone (Claude Code writes the main
+ * loop's usage at the top level; both real receipts show it), so it was booked
+ * once PER MODEL: more 1-hour writes than the receipt billed. Now only the one
+ * model whose four counts equal the top-level usage takes its split (the rule
+ * the collector's bookReceiptTokens uses), and any other model's writes that no
+ * transcript line explains take the 5-minute rate, noted in `assumed`.
+ *
+ * CHANGED EXPECTATION: this test used to pin the over-count (Opus 4.8 at 3,365
+ * 5-minute / 8,837 1-hour) and the CLI-mismatch warning it caused. The fixture's
+ * own transcript says Opus 4.8's 12,202 writes were all 5-minute, and the new
+ * rule reproduces that without it, so the figure equals the transcript-split
+ * ledger and no mismatch is logged.
+ */
+test("T8 no readable worker transcript: only the model the top-level usage matches takes its cache_creation split; other models' writes take the 5-minute rate, flagged approximate", async () => {
   const empty = mkdtempSync(join(tmpdir(), "t8-no-transcripts-"));
   const [out, stderr] = await captureStderr(() => adapterFor(RESULT, { projectsDir: empty }).execute(PACKET));
   const attempt = out.attempts[0];
   assert.equal(attempt.ttl_split, "approximate");
   const byModel = Object.fromEntries(attempt.per_model.map((m) => [m.model, m]));
-  // usage.cache_creation says 8837 1-hour writes; each model's 1-hour share is capped at that.
+  // usage equals Opus 5's four counts, so its 8,837 1-hour writes are Opus 5's.
   assert.deepEqual(byModel["claude-opus-5"].tokens, { ...OPUS_5_TOKENS, input_cache_write: 0, input_cache_write_1h: 8837 });
-  assert.deepEqual(byModel["claude-opus-4-8"].tokens, { ...OPUS_4_8_TOKENS, input_cache_write: 3365, input_cache_write_1h: 8837 });
-  const approx = round6(
-    computeCostUsd(byModel["claude-opus-5"].tokens, OPUS) + computeCostUsd(byModel["claude-opus-4-8"].tokens, OPUS) + HAIKU_USD,
-  );
-  assert.equal(out.cost_usd, approx);
-  // The approximation disagrees with the CLI here, and the warning says the split was approximate.
-  assert.match(stderr, /pricing\.cli_cost_mismatch/);
-  assert.match(stderr, /ttl_split=approximate/);
+  assert.equal(byModel["claude-opus-5"].ttl_split, "approximate");
+  // Opus 4.8 matches no usage: its writes are 5-minute, and the assumption is written down.
+  assert.deepEqual(byModel["claude-opus-4-8"].tokens, OPUS_4_8_TOKENS);
+  assert.equal(byModel["claude-opus-4-8"].ttl_split, "approximate");
+  assert.match(byModel["claude-opus-4-8"].assumed.join(" | "), /12202 cache-write token\(s\) no worker transcript line explains: the 5-minute rate/);
+  assert.equal(out.tokens.input_cache_write_1h, 8837, "the 1-hour writes are the receipt's 8,837, counted once");
+  assert.equal(out.cost_usd, LEDGER_USD);
+  assert.doesNotMatch(stderr, /pricing\.cli_cost_mismatch/);
+});
+
+// The real 2026-09-10 headless result (tools/test/fixtures/headless-unlogged-calls):
+// an Opus 5 [1m] session with 20,329 1-hour writes and four Opus 4.8 helpers whose
+// 423,523 writes the receipt bills (404,585 logged, all 5-minute). Claude Code's own
+// figure is $14.19777625.
+const UNLOGGED_FIXTURE = join(HERE, "..", "..", "..", "..", "tools", "test", "fixtures", "headless-unlogged-calls");
+const SEP10_RESULT = (() => {
+  const lines = readFileSync(join(UNLOGGED_FIXTURE, "pass1", "live-run.log"), "utf-8").split("\n").filter(Boolean);
+  return JSON.parse(lines[lines.length - 1]);
+})();
+const SEP10_DAY = new Date("2026-09-10T18:00:00Z");
+
+test("M2 the real Sep 10 result with no worker transcript: 20,329 1-hour writes (the session's, once) and $14.197776", async () => {
+  const { priceClaudeCliResult: price } = await import("../dist/adapters/claudeCliLedger.js");
+  const ledger = price(SEP10_RESULT, { config: CONFIG, date: SEP10_DAY, transcript: null });
+  assert.deepEqual(ledger.unpriced_models, []);
+  assert.equal(ledger.tokens.input_cache_write_1h, 20_329, "the old rule gave Opus 4.8 the session's 20,329 too: 40,658");
+  const byModel = Object.fromEntries(ledger.per_model.map((m) => [m.model, m]));
+  assert.deepEqual(byModel["claude-opus-5"].tokens, { input: 20, input_cached: 327_898, input_cache_write: 0, input_cache_write_1h: 20_329, output: 5_295 });
+  assert.deepEqual(byModel["claude-opus-4-8"].tokens, { input: 228, input_cached: 12_651_407, input_cache_write: 423_523, input_cache_write_1h: 0, output: 188_968 });
+  assert.equal(ledger.cost_usd, 14.197776);
+  assert.equal(ledger.cli_mismatch, null, "Claude Code's own $14.19777625 agrees");
+});
+
+test("M2 the real Sep 10 result with its real transcripts: logged writes keep their recorded TTL, the unexplained rest is 5-minute, and 1-hour writes never exceed the receipt's 20,329", async () => {
+  const { priceClaudeCliResult: price, readWorkerTranscript: read, findWorkerTranscripts: find } = await import("../dist/adapters/claudeCliLedger.js");
+  const files = find(UNLOGGED_FIXTURE, SEP10_RESULT.session_id);
+  assert.equal(files?.length, 5, `the session file and its four helper files: ${JSON.stringify(files)}`);
+  const ledger = price(SEP10_RESULT, { config: CONFIG, date: SEP10_DAY, transcript: read(files, SEP10_RESULT.session_id) });
+  assert.deepEqual(ledger.unpriced_models, []);
+  assert.ok(ledger.tokens.input_cache_write_1h <= 20_329, `1-hour writes ${ledger.tokens.input_cache_write_1h}`);
+  const byModel = Object.fromEntries(ledger.per_model.map((m) => [m.model, m]));
+  assert.equal(byModel["claude-opus-5"].ttl_split, "transcript");
+  assert.equal(byModel["claude-opus-4-8"].ttl_split, "approximate");
+  assert.deepEqual([byModel["claude-opus-4-8"].tokens.input_cache_write, byModel["claude-opus-4-8"].tokens.input_cache_write_1h], [423_523, 0]);
+  assert.match(byModel["claude-opus-4-8"].assumed.join(" | "), /18938 cache-write token\(s\) no worker transcript line explains: the 5-minute rate/);
+  assert.equal(ledger.cost_usd, 14.197776);
 });
 
 test("T8 a model the list cannot price: cost is the priced part, the model is listed unpriced, a warning is logged", async () => {

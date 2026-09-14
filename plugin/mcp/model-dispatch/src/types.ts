@@ -214,9 +214,11 @@ export interface AttemptRecord {
   /**
    * claude-cli only: where the 5-minute / 1-hour cache-write split came from.
    * `transcript` = the worker session's own transcript explained every
-   * written token; `approximate` = at least one model's split was taken from
-   * the result's top-level `usage.cache_creation`, capped at that model's
-   * writes; `no_cache_writes` = nothing to split.
+   * written token; `approximate` = some model's writes were not all explained
+   * by it: the one model whose four token counts equal the result's top-level
+   * `usage` takes that usage's `cache_creation` split, and any other model's
+   * unexplained writes are priced at the 5-minute rate (written into its
+   * `per_model[].assumed`); `no_cache_writes` = nothing to split.
    */
   ttl_split?: TtlSplit;
   /** claude-cli only: the per-model ledger behind `cost_usd`. */
@@ -249,6 +251,13 @@ export interface WorkerModelCost {
   cli_cost_usd: number | null;
   ttl_split: TtlSplit;
   unpriced_reason?: string;
+  /**
+   * What the price had to assume, in words: cache writes that no worker
+   * transcript line explains are priced at the 5-minute rate, unless the
+   * result's top-level `usage` proves this model's split. Absent when nothing
+   * was assumed.
+   */
+  assumed?: string[];
 }
 
 export interface ModelPricing {

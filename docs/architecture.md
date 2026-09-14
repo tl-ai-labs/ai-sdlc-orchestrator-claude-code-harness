@@ -154,7 +154,7 @@ One JSON object per LLM call, appended to `<pass-dir>/telemetry.jsonl`. `manifes
 | `input_tokens_cache_write`, `input_tokens_cache_write_1h` | Total cache writes, and the 1-hour share of them when known (`claude-cli` workers, the collector's orchestrator line). |
 | `price_basis` | `list` or `custom` (policy block under `pricing_override: true`). Absent on direct-tier events. |
 | `unpriced_models` | `[{model, reason}]` for billed models with no price; their tokens are not in `cost_usd`. Absent when everything was priced. |
-| `cli_reported_cost_usd`, `ttl_split` | `claude-cli` only: Claude Code's own dollars (a check, never the cost), and whether the 5-minute / 1-hour split came from the worker's transcript (`transcript`), the result's usage block (`approximate`), or was not needed (`no_cache_writes`). |
+| `cli_reported_cost_usd`, `ttl_split` | `claude-cli` only: Claude Code's own dollars (a check, never the cost), and whether the 5-minute / 1-hour split came from the worker's transcript (`transcript`), was not fully explained by it (`approximate`: the result's top-level `usage` split, taken only by the one model whose four counts equal it, and the 5-minute rate for any other model's writes no transcript line explains, noted in `per_model[].assumed`), or was not needed (`no_cache_writes`). |
 | `attempt_number`, `ceiling_used`, `retry_reason` | Doubling-loop attempts share a `task_id`. |
 | `routing.select` | `{slot, chosen, overridden}` when the matched rule went through a slot. Absent on unslotted policies. |
 | `latency_ms` | `null` for direct-tier events (the server never saw the call). Real ms for MCP-dispatched calls. |
