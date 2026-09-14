@@ -189,6 +189,28 @@ The list gives each model one or more periods (`from`, `to`, the five token rate
 | `resolveModel(name)` | The list id for an exact id, an id plus `-YYYYMMDD`, or either followed by one bracketed option such as `[1m]`. `null` for anything else. The longest id wins, so `claude-fable-5-1` never reads as `claude-fable-5`. |
 | `lookupPrice(name, date, {speed, service_tier, inference_geo})` | The period's rates, with fast mode (Opus 5 and Opus 4.8) or US-only inference (×1.1, Claude 4.6 and later) applied. Otherwise `unpriced` with the reason: an unknown model, no period for the date, or a modifier value the list has no price for. A rate is never borrowed from a similar model. It also returns the period's fee per web search, `web_search_per_request` ($0.01 on every Claude period; `null` where the list has none, so searches there are unpriced). |
 
+The Claude rows were verified on 2026-09-14 against [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing). The list carries every model on that page except Mythos, which has limited availability. Each Claude model has one period, from 2026-01-01 with no end date. Rates are USD per 1M tokens: a 5-minute cache write is 1.25× input, a 1-hour cache write is 2× input, and a cache read is 0.1× input (0.025× on Fable 5.1).
+
+| Model | Input | Cache read | Cache write, 5 min | Cache write, 1 h | Output | Fast mode (input / output) | US-only inference ×1.1 |
+|---|---|---|---|---|---|---|---|
+| `claude-fable-5-1` | 10.00 | 0.25 | 12.50 | 20.00 | 50.00 | — | yes |
+| `claude-fable-5` | 10.00 | 1.00 | 12.50 | 20.00 | 50.00 | — | yes |
+| `claude-opus-5` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 | 10.00 / 50.00 | yes |
+| `claude-opus-4-8` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 | 10.00 / 50.00 | yes |
+| `claude-opus-4-7` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 | — | yes |
+| `claude-opus-4-6` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 | — | yes |
+| `claude-opus-4-5` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 | — | — |
+| `claude-opus-4-1` | 15.00 | 1.50 | 18.75 | 30.00 | 75.00 | — | — |
+| `claude-opus-4` | 15.00 | 1.50 | 18.75 | 30.00 | 75.00 | — | — |
+| `claude-sonnet-5` | 2.00 | 0.20 | 2.50 | 4.00 | 10.00 | — | yes |
+| `claude-sonnet-4-6` | 3.00 | 0.30 | 3.75 | 6.00 | 15.00 | — | yes |
+| `claude-sonnet-4-5` | 3.00 | 0.30 | 3.75 | 6.00 | 15.00 | — | — |
+| `claude-sonnet-4` | 3.00 | 0.30 | 3.75 | 6.00 | 15.00 | — | — |
+| `claude-haiku-4-5` | 1.00 | 0.10 | 1.25 | 2.00 | 5.00 | — | — |
+| `claude-3-5-haiku` | 0.80 | 0.08 | 1.00 | 1.60 | 4.00 | — | — |
+
+Fast mode (`usage.speed: "fast"`) is priced on Opus 5 and Opus 4.8 only, with the cache rates scaled by the same ratio; a fast message on any other model is unpriced. US-only inference (`inference_geo: "us"`) multiplies every token rate by 1.1 on the models marked. Web search bills $10 per 1,000 searches on every Claude model, on top of tokens. Before v0.7.3 the shipped Sonnet 5 card said 3.00 / 0.30 / 15.00; the list price is 2.00 / 0.20 / 10.00.
+
 The Gemini periods on the list were verified on 2026-09-14 against both of Google's pages, the [AI Studio](https://ai.google.dev/gemini-api/docs/pricing) Standard paid tier and the [Vertex AI](https://cloud.google.com/vertex-ai/generative-ai/pricing) Global rows, which agree on every rate. Each model's first period starts on its GA day in the [Gemini API changelog](https://ai.google.dev/gemini-api/docs/changelog). Rates are USD per 1M tokens. Gemini has no cache-write premium, so cache writes bill at the input rate.
 
 | Model | Period | Input | Cached input | Output |
