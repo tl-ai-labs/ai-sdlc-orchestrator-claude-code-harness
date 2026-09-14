@@ -124,7 +124,7 @@ Two consequences worth knowing when reading a report:
 
 `opus-plus-flash` declares two ways of reaching Gemini 3.5 Flash. The default calls it as a **model**: one request per packet, with the orchestrator reading the files and writing the answer back. The alternative runs it as an **agent** through the Antigravity SDK, working in the directory itself. Which one an install uses is chosen once, outside the policy file, by the setup wizard or by `--enable-agent` on the verify script — see [setup.md](setup.md#gemini-as-an-agent--antigravity-sdk).
 
-Both leaves declare the same `pricing:` block, because they reach the same model at the same published rates. That is deliberate, and it is the reason the vendor model name alone cannot tell you which one ran — `gemini-3.5-flash` appears on both. Two fields on every event carry the distinction:
+Both leaves bill the same price-list entry and carry the same `pricing:` block, because they reach the same model at the same published rates. That is deliberate, and it is the reason the vendor model name alone cannot tell you which one ran — `gemini-3.5-flash` appears on both. Two fields on every event carry the distinction:
 
 - **`model_id`** — the policy leaf that executed: `flash-completion` or `flash-agsdk-worker`. This is the field to group by when comparing the two.
 - **`routing.select`** — the slot that resolved, what it resolved to, and whether the run asked (`overridden: true`) or inherited the default. Absent entirely on policies that declare no slots, so events from `opus-only` are byte-for-byte what they were before slots existed.
@@ -161,7 +161,7 @@ node plugin/scripts/collect-orchestrator-usage.mjs <pass-dir>
 - **Cache-write TTL.** `usage.cache_creation` splits writes into the 5-minute tier (1.25× input) and the 1-hour tier (2× input). Long sessions use the 1-hour tier exclusively; pricing every write at 1.25× was measured 6% low against the receipt on a real 32-minute session. Each tier is priced at its own rate; a transcript without the split is booked at 5-minute, as before.
 - **In-session dispatch.** Packets the session executed itself (provenance `estimated` or `apportioned_from_measured_total`, or a `claude-cli` worker whose own `claude -p` session shares the project's transcript tree) are already inside the transcript overhead. Their dispatched dollars are subtracted once — `true_total = dispatched − in-session + overhead` — never more than the dispatched figure, and only for models the manifest's `models_used` names. Without this a real run reported 21% over the receipt.
 
-Regression fixtures for all three, taken from real runs with their receipts, live in `tools/test/fixtures/receivables-ops/`.
+Regression fixtures, taken from real runs, live under `tools/test/fixtures/`: `receivables-ops/` (the receipt check, the cache-write TTL and the in-session share, from three runs with their receipts), `headless-unlogged-calls/` (a booked receipt with 2.3% billed but not logged), `headless-side-call/` (a `[1m]` receipt name and a Haiku side call no transcript records) and `fable-session-opus-helpers/` (a session and its helpers on different models, no receipt).
 
 The load-bearing details, each verified against a real transcript before the tool was written:
 
@@ -204,6 +204,44 @@ The Vertex regional surcharge (+10% on Gemini 3+ at a non-`global` endpoint) is 
 
 The orchestrator's own session cost ([The orchestrator's own cost](#the-orchestrators-own-cost-and-the-transcript-collector)) follows the same rule, message by message: each transcript message bills at the list price for its own model, day and modifiers, or at a policy block only under `pricing_override: true`. A transcript message the list cannot price has already been billed, so the collector cannot refuse it the way a dispatch is refused: it lists the tokens under `orchestrator_overhead.unpriced`, labels the figure `INCOMPLETE`, and exits 1 under `--strict-pricing`.
 
-Before publishing a study that relies on these numbers, check both fields against the current vendor page. If the vendor changed rates and this repo hasn't caught up, submit a PR that updates the period in `prices.ts` and the matching YAML cards together — the report will then compute costs at the correct schedule automatically.
+Before publishing a study that relies on these numbers, check both fields, and the list's `verified` date, against the current vendor page. When a vendor changes a rate, add a new period to `prices.ts` instead of editing the old one: set the old period's `to` (inclusive) to the day before the change and start the new period on the change day, so runs before the change keep their price. Update the matching YAML cards in the same PR. Telemetry events already written keep the `cost_usd` stamped at dispatch, and the report sums those as they are; dispatches on or after the new period's `from` day bill the new rates. The collector prices each transcript message on its own day, so re-running it over an older pass reproduces that pass's prices.
 
 Under `--auth=estimated`, the orchestrator subagent prices its own in-session estimates from the loaded policy YAML's `pricing:` block (via `plugin/agents/orchestrator.md` rule 6), never from its own trained knowledge. That is why every shipped block must equal the list, and why `preflight_dispatch` halts an estimated run whose in-session model has no block, before anything is spent. If a block is malformed, the policy does not load.
+
+## Version notes
+
+What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
+
+### v0.7.3
+
+| Area | Before | From v0.7.3 |
+|---|---|---|
+| Where rates come from | Each policy YAML's `pricing:` block, with no dates | One dated price list, [`prices.ts`](../plugin/mcp/model-dispatch/src/prices.ts). A policy block bills only under `pricing_override: true` (`price_basis: "custom"`); a block more than 0.5% off the list is ignored with a warning naming both prices. Shipped blocks equal the list, and `npm test` fails when one drifts. |
+| A model or day with no price | Every leaf carried a block, so any number in it was billed | Unpriced, never borrowed from a similar model. `preflight_dispatch` halts before the run, an adapter refuses the dispatch, and the collector lists the tokens under `unpriced` and labels the figure `INCOMPLETE` (exit 1 with `--strict-pricing`). |
+| Model names | Compared as written, so the receipt's `claude-opus-5[1m]` never matched the transcript's `claude-opus-5` | Read through `resolveModel`: an exact id, an id plus `-YYYYMMDD`, or either plus a bracketed Claude Code option such as `[1m]`. A name it cannot read stops the collector (exit 3). |
+| `claude-cli` worker cost | Claude Code's own `total_cost_usd`, copied | The result's per-model `modelUsage` tokens at the list. Claude Code's figure is kept as `cli_reported_cost_usd`, and a difference past 0.5% logs `pricing.cli_cost_mismatch`. |
+| Orchestrator transcript | Every token at the policy driver model's one rate | Each message at its own model's list price for its day, `speed`, `service_tier`, `inference_geo` and cache-write TTL, recorded per model and role in `per_model`. |
+| Headless receipt | Booked at Claude Code's own dollars only when input, cache read and cache write equalled the receipt for every model and output did not exceed it; a shortfall exited 3 | Booked at the receipt's token counts priced from the list when no transcript bucket is above the receipt and the window is provably the receipt's invocation (or every bucket is equal). The gap is `unlogged_billed`, `attribution_complete` says whether every helper transcript was read, and Claude Code's dollars are kept as `receipt_cli_usd`. A receipt with no `modelUsage` exits 3. |
+| Report | One orchestrator figure | The figure by role and model, what a booked receipt billed that no transcript logged or a floor note when none was booked, and lines for custom prices, unpriced tokens and incomplete helper attribution. |
+| Driver-model start check | Said a project's settings files are never applied | Gives the terminal routes (an `export`, or the project's `.claude/settings.local.json`) and the desktop route (`~/.claude/settings.json`), and reads `settings.local.json` when it looks for a value this session does not see. |
+
+Figures that move on the same tokens:
+
+| Case | Before | From v0.7.3 |
+|---|---|---|
+| Sonnet 5 dispatched through the API (`opus-plus-sonnet`) | Card 3.00 / 0.30 / 15.00 | List 2.00 / 0.20 / 10.00 (verified 2026-09-14: the launch price became the standing price), so two thirds of the earlier dollars |
+| Claude Fable 5.1 session with Claude Opus 5 helpers (fixture `fable-session-opus-helpers`) | $12.577352 | $13.933431 |
+| Headless run with two Opus 4.8 calls no transcript recorded (fixture `headless-unlogged-calls`) | exit 3, nothing written | $14.197776, 2.32% billed but not logged |
+| A run using Gemini 3.7 Flash on or after 1 Jan 2027 | Billed at the introductory card | Halts at pre-flight: the list's introductory period ends 31 Dec 2026 and no later period is on it yet |
+
+Shipped Opus and Gemini leaves bill the same dollars as before: their cards already equalled the list, and the Vertex regional surcharge is still applied at dispatch.
+
+### v0.7.2
+
+- When `manifest.json` has no top-level `started_at` / `ended_at`, the collector rebuilds the window from the run's own `telemetry.jsonl` with `buildManifest` instead of stopping.
+- A window opened at the first dispatched call is labelled a lower bound (`window.lower_bound`), not approximate: it leaves out everything the driver did before that call.
+
+### v0.7.1
+
+- The collector's window opens at the run's own command turn and closes at the first human turn after `run.end`, or at the end of the session file; both anchors are exact.
+- The receipt check compares every token bucket per model, and `--receipt-tolerance` (a 5% shortfall allowance) is removed.

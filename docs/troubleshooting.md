@@ -39,6 +39,7 @@ npm run verify --prefix /path/to/ai-sdlc-orchestrator-claude-code-harness
 | `this run requires auth_mode=vendor\|estimated` | `/mmo:pass` invoked without `--auth`. | Add `--auth=vendor` (needs `ANTHROPIC_API_KEY`) or `--auth=estimated` (needs a Claude Code subscription sign-in). |
 | Report labels a run "Mixed" | `--auth=estimated` and the policy also dispatched Gemini. Direct-tier events are estimated, Gemini events are vendor-reported. | Expected. `E` next to a phase marks the estimated ones. |
 | Report totals don't match the Anthropic dashboard exactly | The run was `--auth=estimated`. | Re-run with `--auth=vendor` for numbers that reconcile to the console. |
+| An `--auth=vendor` total differs from the Anthropic or Google dashboard by more than a few cents | A telemetry gap, or a stale rate: each dispatched dollar is the event's vendor tokens at the dated price list (or at a `pricing_override` card, `price_basis: "custom"`), not the vendor's own figure. | Compare each event's `model`, tokens and `price_basis` with the vendor's price page. For a stale rate, add a new period to `plugin/mcp/model-dispatch/src/prices.ts` (see [methodology.md](methodology.md#pricing-table-provenance)). |
 
 ## Pre-flight (`preflight_dispatch`)
 

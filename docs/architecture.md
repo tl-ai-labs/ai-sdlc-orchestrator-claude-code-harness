@@ -117,7 +117,7 @@ Both live in [geminiTransports.ts](../plugin/mcp/model-dispatch/src/adapters/gem
 3. Any Vertex signal (`GOOGLE_APPLICATION_CREDENTIALS`, ADC file, or `GOOGLE_CLOUD_PROJECT`) → `vertex-adc`.
 4. Nothing → throw, naming both doors.
 
-**Regional surcharge.** `GOOGLE_CLOUD_LOCATION` defaults to `global`. The platform bills non-global endpoints **+10%** on every token class for Gemini 3 and later, effective 2026-07-01. `applyVertexSurcharge` multiplies the policy's pinned rates at dispatch when the backend is `vertex-adc`, the location is not `global`, and the model family is `gemini-3+`. The `flash-agsdk-worker` leaf in `opus-plus-flash.yaml` deliberately does not pin `region:`, so both leaves follow the same env var and both hit the flat global endpoint by default.
+**Regional surcharge.** `GOOGLE_CLOUD_LOCATION` defaults to `global`. The platform bills non-global endpoints **+10%** on every token class for Gemini 3 and later, effective 2026-07-01. `applyVertexSurcharge` multiplies the dispatch's effective rates (the dated price list, or the policy block under `pricing_override: true`) at dispatch when the backend is `vertex-adc`, the location is not `global`, and the model family is `gemini-3+`. The `flash-agsdk-worker` leaf in `opus-plus-flash.yaml` deliberately does not pin `region:`, so both leaves follow the same env var and both hit the flat global endpoint by default.
 
 **Billed output tokens.** `billedOutputTokens(usage) = candidatesTokenCount + thoughtsTokenCount`. Gemini 3.x reports reasoning tokens in `thoughtsTokenCount` — a sibling of the candidate count, billed at the output rate. `cachedContentTokenCount`, by contrast, is a subset of `promptTokenCount` and is subtracted before pricing. Getting either wrong moves the headline number.
 

@@ -204,6 +204,19 @@ test("the Markdown branch carries every new line", () => {
   assert.match(transcript, /_Attribution incomplete: 2 helper file\(s\) named by no Agent\/Task result/);
 });
 
+// From v0.7.3 a dispatched dollar comes from the dated price list (or a
+// pricing_override card), not the policy YAML, so "a pricing-YAML drift" is the
+// wrong thing to tell a reader whose total differs from the dashboard. Only
+// v0.7.3 dispatched events carry price_basis; older runs keep the old sentence,
+// which was true when they ran (report-old-manifests.test.mjs pins those bytes).
+test("the dashboard cross-check names the price list for a run whose dispatches carry price_basis, and keeps the old sentence otherwise", () => {
+  const listPriced = report({ events: [event("tp_1", "codegen", 0.1, { price_basis: "list" })] });
+  assert.match(listPriced, /a material divergence means a telemetry gap, a stale period on the dated price list \(plugin\/mcp\/model-dispatch\/src\/prices\.ts\), or a policy's pricing_override card\./);
+  assert.doesNotMatch(listPriced, /pricing-YAML drift/);
+  const older = report({ events: [event("tp_1", "codegen", 0.1)] });
+  assert.match(older, /a material divergence means either a telemetry gap or a pricing-YAML drift\./);
+});
+
 test("telemetry-only overhead (manifest not yet patched) takes the new lines from the orchestrator event", () => {
   const { per_model, unpriced, unlogged_billed, attribution_complete, missing_helper_ids, unreferenced_helper_files, receipt_cli_usd, price_list_verified } = BOOKED;
   const out = report({

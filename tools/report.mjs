@@ -784,7 +784,13 @@ const nextIterations = [
    "Why: doubling from too-low an initial burns extra output tokens on the retries before converging; a moderate raise of the initial catches large files first-shot.",
    "Pitfall: raising the initial across the board pays extra ceiling on every packet, most of which don't need it."],
   ["Cross-check the report's total against the vendor dashboard for the run's time window.",
-   "Why: the only end-to-end integrity check for vendor-authoritative mode; a material divergence means either a telemetry gap or a pricing-YAML drift.",
+   // From v0.7.3 a dispatch bills the dated price list (or a pricing_override
+   // card) and stamps price_basis, so a divergence can no longer be YAML drift.
+   // Runs without price_basis billed the policy YAML; they keep the sentence
+   // that was true for them, byte for byte (report-old-manifests.test.mjs).
+   events.some((e) => e.price_basis != null)
+     ? "Why: the only end-to-end integrity check for vendor-authoritative mode; a material divergence means a telemetry gap, a stale period on the dated price list (plugin/mcp/model-dispatch/src/prices.ts), or a policy's pricing_override card."
+     : "Why: the only end-to-end integrity check for vendor-authoritative mode; a material divergence means either a telemetry gap or a pricing-YAML drift.",
    "Pitfall: dashboards aggregate by API key, so mixing keys or running other work in the window contaminates the comparison."],
 ];
 if (asMarkdown) {
