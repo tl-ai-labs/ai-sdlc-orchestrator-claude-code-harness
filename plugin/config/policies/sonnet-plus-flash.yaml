@@ -19,10 +19,10 @@ models:
     adapter: builtin-anthropic
     model_name: claude-sonnet-5
     # Sonnet 5 list card: input 2.00 / cached 0.20 / output 10.00 per 1M.
-    # Source: platform.claude.com pricing page, checked 2026-09-11.
+    # Source: platform.claude.com pricing page, checked 2026-09-14.
     pricing: { input: 2.00, input_cached: 0.20, output: 10.00 }
-    pricing_source: https://platform.claude.com/docs/en/docs/about-claude/pricing
-    pricing_last_verified: 2026-09-11
+    pricing_source: https://platform.claude.com/docs/en/about-claude/pricing
+    pricing_last_verified: 2026-09-14
     auth: { env: ANTHROPIC_API_KEY }
     max_output_tokens_absolute: 32000
 
@@ -36,7 +36,7 @@ models:
     # at dispatch via geminiTransports.ts::applyVertexSurcharge.
     pricing: { input: 0.75, input_cached: 0.075, output: 3.75 }
     pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
-    pricing_last_verified: 2026-09-11
+    pricing_last_verified: 2026-09-14
     auth: { env: GEMINI_API_KEY }
     max_output_tokens_absolute: 8192
 
@@ -49,7 +49,7 @@ models:
     display_name: gemini-3.7-flash (Antigravity agent)
     pricing: { input: 0.75, input_cached: 0.075, output: 3.75 }
     pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
-    pricing_last_verified: 2026-09-11
+    pricing_last_verified: 2026-09-14
     worker_timeout_sec: 540
 
 select:

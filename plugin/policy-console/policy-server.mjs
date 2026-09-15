@@ -96,6 +96,7 @@ const SHIPPED_PRESETS = [
   "opus-plus-flash-v38",
   "opus-plus-sonnet",
   "opus-plus-sonnet-max",
+  "sonnet-plus-flash",
 ];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
