@@ -439,7 +439,20 @@ export interface Policy {
   rules: Rule[];
   /** Optional; absent from policies written before slots existed. */
   select?: Record<string, SelectSlot>;
+  /**
+   * The Claude Code `subagentPromptCacheTtl` this policy wants for its
+   * estimated-mode driver subagents. "1h" pays 2x per cache write but keeps
+   * the orchestrator's context warm while it waits on dispatched work and
+   * reviewers; "5m" is Claude Code's default and is cheaper for helpers that
+   * never wait. Measured 2026-09-18 on the kaneo BIG brief: 1h saved the
+   * opus+flash arm and cost the opus-only arm ≈$2. Enforced at run start by
+   * scripts/cache-ttl-check.mjs; absent means the policy has no preference.
+   */
+  subagent_cache_ttl?: SubagentCacheTtl;
 }
+
+export type SubagentCacheTtl = "5m" | "1h";
+export const SUBAGENT_CACHE_TTLS: readonly SubagentCacheTtl[] = ["5m", "1h"];
 
 export interface RoutingDecision {
   modelId: string;

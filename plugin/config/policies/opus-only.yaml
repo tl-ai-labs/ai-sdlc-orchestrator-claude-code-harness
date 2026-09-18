@@ -41,3 +41,10 @@ rules:
 # a clear message. Prevents runaway spend on an unexpectedly large repo.
 # Users on custom policies may raise or omit this.
 hard_cost_cap_usd: 50
+
+# Single-model: the driver subagents never wait on a dispatch, so the 5m default TTL is
+# cheaper than paying the 1h write rate for nothing.
+# Measured 2026-09-18, kaneo BIG brief: 1h saved the opus+flash arm and cost the opus-only
+# arm ≈ $2 (docs/planning/opus-plus-flash-cost-plan.md §2.2). Enforced at run start by
+# scripts/cache-ttl-check.mjs --fix, which writes .claude/settings.local.json for you.
+subagent_cache_ttl: 5m

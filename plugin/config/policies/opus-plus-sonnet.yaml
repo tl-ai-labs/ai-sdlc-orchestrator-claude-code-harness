@@ -106,3 +106,10 @@ rules:
 # Hard per-run cost cap. When accumulated cost_usd exceeds this, the
 # orchestrator aborts. Prevents runaway spend on an unexpectedly large repo.
 hard_cost_cap_usd: 50
+
+# The estimated-mode driver subagents wait on dispatched packets and reviewers, so the 1h
+# prompt-cache TTL (2x write rate, no re-writes after a long wait) pays for itself.
+# Measured 2026-09-18, kaneo BIG brief: 1h saved the opus+flash arm and cost the opus-only
+# arm ≈ $2 (docs/planning/opus-plus-flash-cost-plan.md §2.2). Enforced at run start by
+# scripts/cache-ttl-check.mjs --fix, which writes .claude/settings.local.json for you.
+subagent_cache_ttl: 1h

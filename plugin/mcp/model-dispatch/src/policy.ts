@@ -16,6 +16,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import type { Policy, ModelConfig } from "./types.js";
+import { SUBAGENT_CACHE_TTLS } from "./types.js";
 import { KNOWN_ADAPTER_IDS } from "./adapters/index.js";
 
 const PLUGIN_POLICY_DIR = resolve(
@@ -94,6 +95,17 @@ function validatePolicy(raw: any): Policy {
     throw new Error("Policy: 'rules' (non-empty array) required");
   }
   for (const m of raw.models) validateModel(m);
+  // A typo here ("1hr", "60m") would make cache-ttl-check write a value Claude
+  // Code silently ignores, so it is refused at load like every other field.
+  if (
+    raw.subagent_cache_ttl !== undefined &&
+    !SUBAGENT_CACHE_TTLS.includes(raw.subagent_cache_ttl)
+  ) {
+    throw new Error(
+      `Policy: 'subagent_cache_ttl' must be one of ${SUBAGENT_CACHE_TTLS.join(", ")}, ` +
+        `got ${JSON.stringify(raw.subagent_cache_ttl)}`
+    );
+  }
   const modelIds = new Set<string>(raw.models.map((m: ModelConfig) => m.id));
   const slotNames = validateSelect(raw, modelIds);
   // Every rule references a known model id or a declared slot; check at load

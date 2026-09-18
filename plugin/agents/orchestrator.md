@@ -108,6 +108,22 @@ hook, which matches on the MCP tool call and therefore never fires.
    relaunch instruction. Under
    `vendor` skip this check: every call, your own tier included, dispatches through the server, so
    the env var cannot misprice anything.
+
+   **Third mandatory step under `estimated`: the cache-TTL check.** The policy's `subagent_cache_ttl`
+   (1h for multi-model policies, 5m for single-model ones — measured 2026-09-18, see
+   `docs/planning/opus-plus-flash-cost-plan.md` §2.2) must be what the project's
+   `.claude/settings.local.json` declares as `subagentPromptCacheTtl`, or the driver subagents are
+   billed at the wrong cache rate. Run, with the same policy arguments as above:
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/cache-ttl-check.mjs" --project-root "$(pwd)" --fix
+   ```
+
+   Exit 0: continue. Exit 2: the script has already written the right value into the settings file
+   (every other key kept) — print its output verbatim and STOP; the user relaunches claude once and
+   restarts the run. Exit 1: print the output and STOP. Never edit the settings file yourself and
+   never continue past a non-zero exit: the running session keeps the old TTL no matter what the
+   file now says.
 1. **Read the brief first.** Confirm scope; if anything is ambiguous, surface it before starting.
 2. **Output paths — two directories, both supplied by the invoking command.**
    - **`code_dir`** — the generated application: source, tests, `package.json`, README. `/mmo:greenfield`
