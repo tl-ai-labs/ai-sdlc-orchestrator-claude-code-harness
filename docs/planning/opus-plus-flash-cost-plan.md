@@ -178,6 +178,15 @@ Packets without `apply` behave exactly as today.
 
 **Change.** `.claude/settings.json` in the study project (`kaneo`): `{ "subagentPromptCacheTtl": "1h" }`. Requires Claude Code ≥ 2.1.242 (installed: 2.1.276). No plugin change. Applied to both arms; the opus-only arm is re-run too.
 
+**Decision after the 2026-09-18 pair: per-arm, not both arms.** The setting is a Claude Code session setting, not a policy field — the plugin cannot flip it per run, and it is read once when `claude` starts. The measured pair confirmed the what-if: it saved the long-waiting opus+flash orchestrator and cost the short-lived opus-only helpers (+≈$2). So each arm runs at its own best setting, which is also what a real user of that policy would do:
+
+| Arm | `subagentPromptCacheTtl` in `kaneo/.claude/settings.local.json` | Control number to compare against |
+|---|---|---|
+| opus-only-v5 | line absent (5m default) | **$19.16** (`20260916-081500-…`, 0.7.3 — still valid: rows 1–2 never execute under opus-only + `estimated`) |
+| opus-plus-flash-* | `"1h"` | measured per row |
+
+Flip the line and restart `claude` before switching arms. The opus-only control does **not** need re-running for rows 4+; its $22.91 at 1h is kept in the ledger as the row-3 measurement only.
+
 **What-if on the baseline transcripts** (all subagent cache writes re-priced at the 1h rate $10/M, the measured cache-death re-writes removed):
 
 | Arm | Helper cost billed (5m) | What-if (1h) | Δ |
