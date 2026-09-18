@@ -101,6 +101,18 @@ test("checkWriteContract: hardcoded off-limits always apply; no contract otherwi
   assert.equal(checkWriteContract(root, "apps/api/.env.local").allowed, false);
   assert.equal(checkWriteContract(root, ".git/config").allowed, false);
   assert.equal(checkWriteContract(root, "../outside.ts").allowed, false);
+  assert.equal(checkWriteContract(root, ".sdlc/runs/r1/scout.json").allowed, true, "no contract: allowed anyway");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("checkWriteContract: the run's own folder is writable under an active contract that bans .sdlc/**, other runs are not", () => {
+  const root = tmpRoot();
+  mkdirSync(join(root, ".sdlc", "local"), { recursive: true });
+  writeFileSync(join(root, ".sdlc", "local", "write-contract.json"), JSON.stringify({ schema_version: 1, active: true, strict: true, allowlist: ["src/**"], off_limits: [".sdlc/**"] }));
+  assert.equal(checkWriteContract(root, ".sdlc/runs/r1/scout.json").allowed, false);
+  assert.equal(checkWriteContract(root, ".sdlc/runs/r1/scout.json", { runId: "r1" }).allowed, true);
+  assert.equal(checkWriteContract(root, ".sdlc/runs/r2/scout.json", { runId: "r1" }).allowed, false);
+  assert.equal(checkWriteContract(root, ".sdlc/runs/r1/../../local/write-contract.json", { runId: "r1" }).allowed, false);
   rmSync(root, { recursive: true, force: true });
 });
 

@@ -31,6 +31,14 @@ Additional inputs available:
 - `.sdlc/baseline/stack-profile.md` — adaptive stack profile (if generated); this is the
   authoritative "how this repo does X" reference. When it disagrees with an idiomatic-framework
   suggestion, the profile wins.
+- `.sdlc/runs/<run-id>/scout.json` — when present, the repo scout's findings: for each unit the
+  requirements add or change, the file to **Mirror** (path + lines), the **Edit anchor** lines
+  (path, line, verbatim text) and repo **facts** (formatter, test style, registration order).
+  **Start from it.** Read the slices it names; read a file it does not name only for a unit listed
+  under `not_found` or one you find missing while planning, and say so in the unit's section
+  ("scout: not found; read `path:lines`"). Every Mirror and Edit anchor in the plan traces to a scout
+  entry or to a read you made. On the run this input comes from, the plan needed 17 mirrors and the
+  architect read 79 files to find them.
 
 `change_plan.md` sections (all delta-focused):
 

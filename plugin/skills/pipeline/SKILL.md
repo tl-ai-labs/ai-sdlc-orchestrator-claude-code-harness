@@ -108,6 +108,45 @@ Read `<brief.md>` (passed in $ARGUMENTS) and produce `<output_dir>/requirements.
 
 The orchestrator invokes the `architect` subagent passing `<output_dir>/requirements.md`. Architect writes `<output_dir>/design.md` (see architect.md for content spec).
 
+**Brownfield: scout the repo before the architect (multi-model policies).** The architect's cost is
+mostly search — on the run this comes from it read 79 files (ten test files to choose one mirror, a
+970-line `index.ts` in five chunks) for a 17-unit plan: 110 messages, $3.75. The search goes to the
+mechanical tier; the architect reads what the scout found.
+
+1. Candidates, no model:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/scout-candidates.mjs" --project-root "$(pwd)" \
+     --requirements "<output_dir>/requirements.md" --brief "<output_dir>/intent_brief.md" \
+     --out "<output_dir>/scout-candidates.json"
+   ```
+   It scores every tracked text file by requirement-term hits (path and content), the write-contract
+   allowlist and test/kit adjacency, and keeps ≤ 40 files / ≤ 250 kB; a large file is offered as hit
+   windows (`windows: [[from, to], …]`), not whole.
+2. Skip the scout when the loaded policy has no rule matching `phase: discovery, task_type: repo_scout`
+   (`load_policy` → `rules[].when`). A single-model policy has none; the architect works as before.
+3. Otherwise dispatch **one** packet, apply form, before delegating the architect:
+
+   | Field | Value |
+   |---|---|
+   | `id` / `phase` / `task_type` / `module` | `scout-1` / `discovery` / `repo_scout` / `cross` |
+   | `instruction` | "You are scouting an existing repository for an architect who will write a change plan for the requirements. From the candidate files given — and only those — return, for each thing the requirements add or change: the existing file whose shape it should mirror (path + line range), the exact anchor lines where an edit goes (path, 1-based line, the line's text verbatim), and repo facts the architect needs (formatter and its limits, test runner and assertion style, route registration order, i18n rule). Cite only lines you were given. Do not design; do not write code. Return JSON {path, content} where content is the JSON document." |
+   | `inputs` | `{path: "<output_dir>/requirements.md"}`, `{path: "<output_dir>/intent_brief.md"}`, then every candidate: `{path, reason: "candidate"}` for a whole file, `{path, lines: [from, to], reason: "candidate window"}` per window for a large one. No `content` anywhere — the server reads them. |
+   | `artifact_path` | `<output_dir>/scout.json` (the server may write into the run's own folder under any contract) |
+   | `apply` | `{ "write": true, "verify": ["node -e \"JSON.parse(require('fs').readFileSync('{path}','utf8'))\""] }` |
+   | `budget` | `{ "maxInputTokens": 200000, "maxOutputTokens": 6000 }` |
+   | `acceptance` | `["every mirror and anchor path is one of the candidates", "anchor text is verbatim", "no code in facts"]` |
+
+   `scout.json` shape the instruction asks for:
+   ```json
+   { "mirrors": [{ "for": "api controller GET /public-profile/:id", "path": "…", "lines": [1, 21], "why": "…" }],
+     "anchors": [{ "path": "apps/api/src/index.ts", "line": 248, "text": "  });", "why": "mount after publicProjectApi" }],
+     "facts":   [{ "path": "biome.json", "lines": [1, 12], "fact": "2-space, double quotes, width 80" }],
+     "not_found": ["…"] }
+   ```
+   Read the receipt only (STOP ON PASS). Pass the architect the path `<output_dir>/scout.json` in its
+   delegation; it starts from the scout's mirrors and anchors and reads outside them only for a unit
+   the scout missed (listed under `not_found`, or found wrong while planning).
+
 **Brownfield: lint the plan before Gate 2.** `change_plan.md` is a spec the worker implements, not a
 listing it copies (architect.md, "Per-unit sections"). When the architect returns, run
 

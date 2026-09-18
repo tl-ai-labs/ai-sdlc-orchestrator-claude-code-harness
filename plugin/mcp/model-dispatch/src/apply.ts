@@ -179,11 +179,15 @@ export interface ContractDecision {
  * off_limits and, when strict, its allowlist. No contract, or an inactive one,
  * means the hardcoded list alone — the same fail-open the hook has.
  */
-export function checkWriteContract(projectRoot: string, target: string): ContractDecision {
+export function checkWriteContract(projectRoot: string, target: string, opts: { runId?: string } = {}): ContractDecision {
   const abs = resolve(projectRoot, target);
   const rel = toPosix(relative(projectRoot, abs));
   if (rel.startsWith("../") || rel === ".." || isAbsolute(rel)) {
     return { allowed: false, reason: `path escapes project_root: ${target}`, rel };
+  }
+  // The run's own record (scout.json, a report) is the plugin's to write, whatever the contract says about .sdlc/**.
+  if (opts.runId && rel.startsWith(`.sdlc/runs/${opts.runId}/`) && !rel.includes("/../")) {
+    return { allowed: true, reason: "run artifact", rel };
   }
   for (const p of HARDCODED_OFF_LIMITS) {
     if (matchesAtAnyDepth(rel, p)) return { allowed: false, reason: `off-limits (hardcoded): ${p}`, rel };
@@ -577,7 +581,7 @@ export async function runApplyLoop(deps: ApplyLoopDeps): Promise<ApplyOutcome> {
       summary.failure = failure;
       if (retriesUsed >= maxRetries) return finish("no_content");
     } else {
-      const contract = checkWriteContract(projectRoot, current.artifact_path!);
+      const contract = checkWriteContract(projectRoot, current.artifact_path!, { runId });
       if (!contract.allowed) {
         log("warn", "apply.refused", { packet_id: current.id, path: contract.rel, reason: contract.reason });
         summary.failure = contract.reason;

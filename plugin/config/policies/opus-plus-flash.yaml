@@ -83,6 +83,12 @@ rules:
     use: opus
     reason: "Risk-bearing, low volume"
 
+  # The repo scout runs on the mechanical tier: it reads the candidate files and returns
+  # mirrors, anchors and facts for the architect (pipeline skill, Phase 2). Under a
+  # single-model policy there is no such rule, and the orchestrator skips the scout.
+  - when: { phase: discovery, task_type: repo_scout }
+    use: gemini-flash
+    reason: "Mechanical: locate mirrors and edit anchors among candidate files for the architect"
   # Brownfield-mode phases (added in the v1 brownfield extension). Both
   # explicitly premium — a wrong stack detection cascades into every
   # downstream packet, and the change-plan is the brownfield equivalent
