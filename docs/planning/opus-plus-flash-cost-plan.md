@@ -11,9 +11,9 @@ Re-run protocol for every row: same repo (`kaneo` @ `5d1fc91`), same brief, both
 | # | Improvement | Applies to | Status | opus-only true $ | opus+flash true $ | Δ vs baseline pair |
 |---|---|---|---|---|---|---|
 | 0 | Baseline (BIG brief, 16–17 Sep) | — | measured | 19.16 | 26.02 | opus+flash loses by $6.86 |
-| 1 | Editor-side apply: server hydrates inputs, writes the file, returns a receipt | dispatching policies only (opus-only never dispatches under `estimated`, so it is unchanged) | **implemented, not yet measured** | — | expected ≈ 22.5 | −3.5 expected |
-| 2 | Verify-then-escalate cascade inside the server | dispatching policies only | **implemented, not yet measured** | — | expected ≈ 21 | −1.5 expected (on top of 1) |
-| 3 | `subagentPromptCacheTtl: "1h"` for the study project | **both arms** (settings, not policy) | **applied** (`kaneo/.claude/settings.local.json`, beside the driver-model pin) | expected ≈ 20 | expected ≈ 19 | −2.0 / +0.8 expected |
+| 1 | Editor-side apply: server hydrates inputs, writes the file, returns a receipt | dispatching policies only (opus-only never dispatches under `estimated`, so it is unchanged) | **measured 2026-09-18 (rows 1–3 as one pair)** | 22.91 (`20260918-064950-…-opus`) | **20.75** (`20260918-080917-…-flash`, re-collected; provisional 18.77) | **opus+flash wins by 2.16 (−9%)**; vs 0.7.3 arm −5.27; vs 0.7.3 opus-only +1.59 |
+| 2 | Verify-then-escalate cascade inside the server | dispatching policies only | **measured with row 1** (22/26 packets apply-form, 74% verify.ok first try, 6 in-server retries, 1 escalation) | — | — | included above |
+| 3 | `subagentPromptCacheTtl: "1h"` for the study project | **both arms** (settings, not policy) | **measured with row 1** — opus-only control rose +3.75 vs its 0.7.3 baseline (short-lived helpers pay the 1h write rate, as the what-if predicted) | 22.91 | 20.75 | pass rule met: same tests, senior verdict better (0 major vs 1) |
 | 4 | Follow-ups (batch dispatch, architect writes a spec not a file, report on Flash) | see §5 Row 4 | not started | — | — | — |
 | 5 | Shared prefix: requirements + architecture run once, both arms fork from it | both arms (study lever) | planned | — | — | removes ≈ ±$1.8 of noise per pair |
 
@@ -58,6 +58,25 @@ Every pipeline phase, in state-machine order, nothing merged. `test_run` in the 
 | Helper total | $16.73 | $24.20 | +7.47 | |
 
 Reading the table: the phases that got more expensive are the ones where Flash *did* the work. The cost is not in the model doing the work; it is in what the Opus orchestrator has to emit and re-read to hand the work over. Routing more phases to Flash as the dispatch is wired today makes the number worse, not better.
+
+### 2.2 Rows 1–3 measured — the 2026-09-18 pair (plugin 0.7.4, both arms with the 1h subagent cache TTL)
+
+| | opus-only (Run A, `20260918-064950-…-opus`) | opus+flash-v38 (Run B, `20260918-080917-…-flash`) | Δ |
+|---|---|---|---|
+| Driver session | $2.62 | $2.38 | −0.24 |
+| Helper subagents (orchestrator + architect + 2 reviewers) | $20.29 | $17.91 | −2.38 |
+| Dispatched work | $3.01 (all in-session Opus, no server call) | $2.46 ($0.45 Flash / 37 events, $2.00 in-session Opus) | |
+| **True total** | **$22.91** | **$20.75** (in-session provisional read $18.77) | **−2.16 (−9%)** |
+| Helper cache reads | 23.9M | 19.9M | −4.0M |
+| Helper cache writes (1h rate) | 554k | 549k | ≈ |
+| Helper output | 217k | 194k | −23k |
+| Wall clock | 71 min | 51 min | −20 min |
+| Plan | 478 lines / 0 code blocks | 1,041 lines / 54 code blocks | architect still writes the program |
+| Packets | 25, all inline Opus, 6 debug | 26 calls, 22 apply-form, 74% verify.ok first try, 6 in-server retries, 1 escalation | |
+| Senior / security | approved-with-changes (1 major) / approve-with-notes | approved (0 major) / PASS, 2 hardenings | B no worse |
+| Tests | api 393 pass + 3 known flakes; web new suites pass scoped | same | same |
+
+Reading it against the baseline pair (§2): the Flash arm fell $26.02 → $20.75 (−20%) and the file round trip is gone — helper cache reads −3.8M and output −2k against its own baseline despite a longer plan. The opus-only control **rose** $19.16 → $22.91: row 3's 1h write rate on helpers that never wait long (+≈$2, as the §5 what-if predicted) plus a heavier run (6 debug rounds vs 0, 217k vs 142k output — reviewer variance, not policy). Rows 1–2 do not touch opus-only at all under `estimated` (it never calls the server). So the pass rule holds on the like-for-like pair, but against the 5m-TTL opus-only number Flash is still $1.59 dearer, inside the ±$2–5 run-to-run noise. Two consequences for the next pair: run each arm at its own best cache setting (5m for opus-only, 1h for opus+flash) and record both; and row 4's "architect writes a spec" is the remaining lever — every one of the plan's 54 code blocks is Opus output that two reviewers then re-read. Collector caveat: a subagent-driven run has no `/mmo:` command turn, so the window is approximate and spans every project transcript; the $20.75 may include a few parent-session status turns (over-count, not under).
 
 ## 3. The two mechanisms behind the gap
 
