@@ -60,6 +60,13 @@ export interface FileSlice {
 export interface ApplySpec {
   write: boolean;
   /**
+   * `content` (default): the model returns the whole file. `edits`: the model
+   * returns `{edits: [{anchor, position, text, line?}]}` and the server splices
+   * them into the existing file — for an edit to a large file, where returning
+   * the whole file would cost more output than the change is worth.
+   */
+  mode?: "content" | "edits";
+  /**
    * Shell commands run from `project_root` after the write; `{path}` is
    * replaced by the artifact path. All must exit 0 for the attempt to pass.
    */

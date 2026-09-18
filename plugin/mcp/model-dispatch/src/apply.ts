@@ -25,6 +25,27 @@ export const FILE_OUTPUT_SCHEMA = {
   required: ["path", "content"],
 } as const;
 
+/** What an `apply.mode: "edits"` packet returns; substituted when the packet omits outputSchema. */
+export const EDITS_OUTPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    edits: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          line: { type: "number" },
+          anchor: { type: "string" },
+          position: { type: "string", enum: ["after", "before", "replace"] },
+          text: { type: "string" },
+        },
+        required: ["anchor", "position", "text"],
+      },
+    },
+  },
+  required: ["edits"],
+} as const;
+
 export const DEFAULT_MAX_RETRIES = 2;
 export const DEFAULT_VERIFY_TIMEOUT_SEC = 120;
 /** A hydrated slice larger than this is refused — the packet wanted a section, not the file. */
@@ -322,6 +343,7 @@ export function normalizeApply(spec: unknown): ApplySpec | null {
   const verify = Array.isArray(s.verify) ? s.verify.filter((v): v is string => typeof v === "string") : undefined;
   return {
     write: true,
+    mode: s.mode === "edits" ? "edits" : "content",
     verify,
     max_retries: typeof s.max_retries === "number" ? Math.max(0, Math.floor(s.max_retries)) : DEFAULT_MAX_RETRIES,
     verify_timeout_sec:
@@ -336,6 +358,71 @@ export function extractFileContent(result: unknown): { content: string; path?: s
   if (typeof r.content === "string") return { content: r.content, path: typeof r.path === "string" ? r.path : undefined };
   if (r.result && typeof r.result === "object") return extractFileContent(r.result);
   return null;
+}
+
+export interface EditOp {
+  anchor: string;
+  position: "after" | "before" | "replace";
+  text: string;
+  line?: number;
+}
+
+export function extractEdits(result: unknown): EditOp[] | null {
+  if (!result || typeof result !== "object") return null;
+  const r = result as Record<string, unknown>;
+  if (Array.isArray(r.edits)) {
+    const ops: EditOp[] = [];
+    for (const e of r.edits) {
+      if (!e || typeof e !== "object") return null;
+      const o = e as Record<string, unknown>;
+      if (typeof o.anchor !== "string" || typeof o.text !== "string") return null;
+      if (o.position !== "after" && o.position !== "before" && o.position !== "replace") return null;
+      ops.push({ anchor: o.anchor, position: o.position, text: o.text, line: typeof o.line === "number" ? o.line : undefined });
+    }
+    return ops;
+  }
+  if (r.result && typeof r.result === "object") return extractEdits(r.result);
+  return null;
+}
+
+/**
+ * Splice an edit list into `original`. Every anchor is resolved against the
+ * ORIGINAL text (so later inserts never shift earlier line numbers): the
+ * `line` hint wins when that line's text equals the anchor (trailing
+ * whitespace ignored), otherwise the anchor must match exactly one line.
+ * Returns the new text, or the reason it could not be applied — which is
+ * what the retry packet carries back to the model.
+ */
+export function spliceEdits(original: string, edits: EditOp[]): { ok: true; content: string } | { ok: false; reason: string } {
+  if (edits.length === 0) return { ok: false, reason: "the edit list was empty" };
+  const lines = original.split("\n");
+  const norm = (s: string) => s.replace(/\s+$/, "");
+  const resolved: Array<{ index: number; op: EditOp }> = [];
+  for (const op of edits) {
+    const want = norm(op.anchor);
+    let index = -1;
+    if (op.line && op.line >= 1 && op.line <= lines.length && norm(lines[op.line - 1]) === want) index = op.line - 1;
+    else {
+      const hits: number[] = [];
+      lines.forEach((l, i) => { if (norm(l) === want) hits.push(i); });
+      if (hits.length === 1) index = hits[0];
+      else if (hits.length === 0) return { ok: false, reason: `anchor not found in the file: ${JSON.stringify(op.anchor)}` };
+      else return { ok: false, reason: `anchor matches ${hits.length} lines (${hits.map((h) => h + 1).join(", ")}); give \`line\` to pick one: ${JSON.stringify(op.anchor)}` };
+    }
+    if (resolved.some((r) => r.index === index && (r.op.position === "replace" || op.position === "replace"))) {
+      return { ok: false, reason: `two edits target line ${index + 1}` };
+    }
+    resolved.push({ index, op });
+  }
+  // Bottom-up so earlier indices stay valid; stable for same-line before/after pairs.
+  resolved.sort((x, y) => y.index - x.index);
+  for (const { index, op } of resolved) {
+    const ins = op.text.replace(/\n$/, "").split("\n");
+    if (op.position === "replace") lines.splice(index, 1, ...ins);
+    else if (op.position === "after") lines.splice(index + 1, 0, ...ins);
+    else lines.splice(index, 0, ...ins);
+  }
+  return { ok: true, content: lines.join("\n") };
 }
 
 // ---------------------------------------------------------------------------
@@ -469,10 +556,24 @@ export async function runApplyLoop(deps: ApplyLoopDeps): Promise<ApplyOutcome> {
       return finish("dispatch_failed");
     }
 
-    let failure: string;
-    const file = extractFileContent(one.result.result);
-    if (!file) {
-      failure = "the response had no `content` string; return JSON {path, content} with the complete file in `content`";
+    let failure = "";
+    let content: string | null = null;
+    if (apply.mode === "edits") {
+      const edits = extractEdits(one.result.result);
+      if (!edits) failure = "the response had no `edits` array; return JSON {edits: [{anchor, position, text, line?}]}";
+      else {
+        const abs = resolve(projectRoot, current.artifact_path!);
+        if (!existsSync(abs)) return finish("refused", { refusal: `${current.artifact_path}: edits mode needs an existing file` });
+        const spliced = spliceEdits(readFileSync(abs, "utf8"), edits);
+        if (spliced.ok) content = spliced.content;
+        else failure = `edit list could not be applied: ${spliced.reason}`;
+      }
+    } else {
+      const file = extractFileContent(one.result.result);
+      if (file) content = file.content;
+      else failure = "the response had no `content` string; return JSON {path, content} with the complete file in `content`";
+    }
+    if (content === null) {
       summary.failure = failure;
       if (retriesUsed >= maxRetries) return finish("no_content");
     } else {
@@ -482,7 +583,7 @@ export async function runApplyLoop(deps: ApplyLoopDeps): Promise<ApplyOutcome> {
         summary.failure = contract.reason;
         return finish("refused", { refusal: `${contract.rel}: ${contract.reason}` });
       }
-      receipt = applyContent(projectRoot, contract.rel, file.content, { runId, packetId: current.id });
+      receipt = applyContent(projectRoot, contract.rel, content, { runId, packetId: current.id });
       log("info", "apply.write", { packet_id: current.id, path: receipt.path, bytes: receipt.bytes, sha16: receipt.sha16 });
       verify = runVerify(apply.verify, projectRoot, contract.rel, apply.verify_timeout_sec);
       summary.verify_ok = verify.ok;

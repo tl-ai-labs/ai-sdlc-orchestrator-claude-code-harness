@@ -25,6 +25,8 @@ const {
   extractFileContent,
   provenanceScriptPath,
   runApplyLoop,
+  spliceEdits,
+  extractEdits,
 } = await import(join(DIST, "apply.js"));
 const offLimits = await import(join(HERE, "..", "..", "..", "scripts", "lib", "off-limits.mjs"));
 
@@ -178,7 +180,9 @@ test("refinePacket bumps retry_count, re-ids the packet and appends the failure;
 test("normalizeApply and extractFileContent", () => {
   assert.equal(normalizeApply(undefined), null);
   assert.equal(normalizeApply({ write: false }), null);
-  assert.deepEqual(normalizeApply({ write: true }), { write: true, verify: undefined, max_retries: 2, verify_timeout_sec: 120 });
+  assert.deepEqual(normalizeApply({ write: true }), { write: true, mode: "content", verify: undefined, max_retries: 2, verify_timeout_sec: 120 });
+  assert.equal(normalizeApply({ write: true, mode: "edits" }).mode, "edits");
+  assert.equal(normalizeApply({ write: true, mode: "bogus" }).mode, "content");
   assert.deepEqual(normalizeApply({ write: true, verify: ["a", 3], max_retries: 0.9 }).verify, ["a"]);
   assert.equal(normalizeApply({ write: true, max_retries: 0.9 }).max_retries, 0);
   assert.deepEqual(extractFileContent({ path: "a", content: "b" }), { path: "a", content: "b" });
@@ -298,6 +302,49 @@ test("runApplyLoop: a reply without content is retried with that told to the mod
   });
   assert.equal(out.status, "applied");
   assert.match(model.calls[1].instruction, /no `content` string/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("spliceEdits resolves anchors on the original text, applies bottom-up, and names what it cannot apply", () => {
+  const src = "import a from \"a\";\nconst x = 1;\n  });\nreturn {\n  a,\n};\n  });\n";
+  const ok = spliceEdits(src, [
+    { anchor: "import a from \"a\";", position: "after", text: "import b from \"b\";" },
+    { anchor: "  a,", position: "after", text: "  b,\n" },
+    { anchor: "const x = 1;", position: "replace", text: "const x = 2;" },
+    { anchor: "  });", position: "before", text: "  // second", line: 7 },
+  ]);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.content, "import a from \"a\";\nimport b from \"b\";\nconst x = 2;\n  });\nreturn {\n  a,\n  b,\n};\n  // second\n  });\n");
+  assert.match(spliceEdits(src, [{ anchor: "nope", position: "after", text: "x" }]).reason, /anchor not found/);
+  assert.match(spliceEdits(src, [{ anchor: "  });", position: "after", text: "x" }]).reason, /matches 2 lines \(3, 7\)/);
+  assert.match(spliceEdits(src, [{ anchor: "  });", position: "after", text: "x", line: 2 }]).reason, /matches 2 lines/, "a wrong line hint falls back to the search");
+  assert.match(spliceEdits(src, []).reason, /empty/);
+  assert.deepEqual(extractEdits({ edits: [{ anchor: "a", position: "after", text: "b" }] }), [{ anchor: "a", position: "after", text: "b", line: undefined }]);
+  assert.equal(extractEdits({ edits: [{ anchor: "a", position: "sideways", text: "b" }] }), null);
+  assert.equal(extractEdits({ content: "whole file" }), null);
+});
+
+test("runApplyLoop in edits mode splices into the existing file and retries a bad anchor with the reason", async () => {
+  const root = tmpRoot();
+  mkdirSync(join(root, "src"));
+  writeFileSync(join(root, "src", "out.ts"), "line1\nline2\n");
+  const model = stubModel([
+    { edits: [{ anchor: "missing", position: "after", text: "x" }] },
+    { edits: [{ anchor: "line1", position: "after", text: "inserted" }] },
+  ]);
+  const out = await runApplyLoop({
+    packet: basePacket(), apply: normalizeApply({ write: true, mode: "edits" }),
+    projectRoot: root, keepEvents: true, route: flashUntil(2), dispatch: model.dispatch, log: silent,
+  });
+  assert.equal(out.status, "applied");
+  assert.equal(model.calls.length, 2);
+  assert.match(model.calls[1].instruction, /anchor not found/);
+  assert.equal(readFileSync(join(root, "src", "out.ts"), "utf8"), "line1\ninserted\nline2\n");
+  const missing = await runApplyLoop({
+    packet: basePacket({ artifact_path: "src/absent.ts" }), apply: normalizeApply({ write: true, mode: "edits" }),
+    projectRoot: root, keepEvents: true, route: flashUntil(2), dispatch: stubModel([{ edits: [] }]).dispatch, log: silent,
+  });
+  assert.equal(missing.status, "refused");
   rmSync(root, { recursive: true, force: true });
 });
 

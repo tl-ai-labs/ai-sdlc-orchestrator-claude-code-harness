@@ -169,7 +169,7 @@ hook, which matches on the MCP tool call and therefore never fires.
    | `artifact_path` | string (optional) | Brownfield only — the repo-relative path this packet writes; validated against the write-contract allowlist before dispatch |
    | `retry_count` | number (optional) | Defaults to 0 |
    | `subtype` | string (optional) | Adapter-specific refinement |
-   | `apply` | `{ write: true, verify?: string[], max_retries?: number }` (optional) | Brownfield, every file-producing mechanical packet: the server writes `artifact_path`, runs `verify` (`{path}` = the artifact), retries on the same tier with the failure appended, and returns a receipt instead of the file. Pass `run_id` beside `packet` so provenance is recorded. Contract and receipt statuses: pipeline skill, Phase 5 "Apply form" |
+   | `apply` | `{ write: true, mode?: "content" | "edits", verify?: string[], max_retries?: number }` (optional) | Brownfield, every file-producing mechanical packet: the server writes `artifact_path`, runs `verify` (`{path}` = the artifact), retries on the same tier with the failure appended, and returns a receipt instead of the file. Pass `run_id` beside `packet` so provenance is recorded. Contract and receipt statuses: pipeline skill, Phase 5 "Apply form" |
 
    The MCP server validates required fields on entry and refuses with a clean "missing field X" error rather than crashing downstream. See `plugin/skills/pipeline/SKILL.md` for canonical examples per phase.
 
@@ -190,7 +190,7 @@ hook, which matches on the MCP tool call and therefore never fires.
    }
    ```
 5. **Persist the packet plan — required.** After `design.md` is approved at Gate 2 and BEFORE you begin dispatching any codegen/tests/docs/debug work, do the planning step explicitly:
-   - Decompose `design.md` into TaskPackets (one per file-sized unit of work).
+   - Brownfield: run `scripts/plan-to-packets.mjs` on `change_plan.md` (pipeline skill, Phase 4) — it writes `packets.json` from the unit sections with no model call; you read its summary and warnings and touch a packet only when a warning names it. Greenfield: decompose `design.md` into TaskPackets (one per file-sized unit of work).
    - Write the full list to `<output_dir>/packets.json` as a JSON array of TaskPacket objects.
    - Log ONE TelemetryEvent with `phase: "plan_task_packets"`, `task_type: "decomposition"`, capturing the tokens spent on this planning step.
    - The report's per-phase breakdown depends on this event firing; without it the planning phase is invisible in downstream summaries. `packets.json` must exist for external readers to audit the plan.

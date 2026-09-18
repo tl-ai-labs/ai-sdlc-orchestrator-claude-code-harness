@@ -151,6 +151,27 @@ Suggested packet types and one packet per:
 
 When the app uses a validating `ConfigModule` (or Joi / Zod / envalid equivalent), packets for `env_docs` and `env_test_fixture` are **required** — omitting either is a senior-reviewer blocker. The two files must be internally consistent: every key listed in `.env.example` must appear in `.env.test` with a schema-valid value.
 
+**Brownfield: derive the packets, do not write them.** After the plan passes the lint (Phase 2), run
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/plan-to-packets.mjs" "<output_dir>/change_plan.md" \
+  --run-id <run-id> --intent <intent> --project-root "$(pwd)"
+```
+
+It writes `<output_dir>/packets.json` from the plan's unit sections with no model call: one packet per
+`## An — <path>` unit in plan order, `new_file` → apply packet returning the file, `edit` → apply packet in
+`edits` mode with the Edit-anchor windows as inputs, `tooling` → a shell step, test paths → the `tests`
+phase; `task_type` from the path (override with a `- **Packet** task_type=…, module=…` bullet in the
+unit); `inputs` = unit section + `House style` + Mirror slices; `verify` from the Verify bullet;
+`depends_on` from Depends on. It also checks the plan against the repo: a mirror file that does not exist
+or a line past its end is a **warning** on stderr, an edit to a missing file or a mirror outside the repo
+is an **error** (exit 1). On exit 1 the plan is wrong, not the script — re-delegate the architect with
+the error lines, as for a lint failure. On exit 0, read the summary line and the warnings; adjust a
+packet only when a warning names it (a dropped mirror the worker needs, a wrong `task_type` for the
+policy's routing) and log the `plan_task_packets` event with the tokens you actually spent — on the run
+this comes from, hand-writing the same 17 packets cost $1.03 and 9 turns. Greenfield still plans by
+hand from `design.md`, as below.
+
 ### Brownfield-mode task types (v1)
 
 The table above is greenfield-Nest-centric. In brownfield mode (`mode: brownfield`), packets use a **stack-agnostic** base set of primitives plus an optional `subtype` hint that the loaded stack adapter (`plugin/skills/pipeline/stacks/*.md`) resolves to concrete codegen guidance.
@@ -220,7 +241,7 @@ Write the returned file content to disk at the packet's stated `artifact_path` �
 | `inputs[]` | Paths only — no `content`. Narrow with `section: "<heading>"` (a `change_plan.md` section such as `"A1"`) or `lines: [from, to]`. The server reads them; you never paste file text into a packet. **The standard set for a codegen / test packet is three:** the unit section (`change_plan.md` § `An — …`), the plan's `House style` section, and the unit's **Mirror** slice (`path` + `lines` from the section — the existing file whose shape the new one copies). Add the **Edit anchor** lines for an edit. Nothing else: the worker does not need the whole plan, the requirements, or the repo facts. |
 | `instruction` | Names the section and says *implement*, not *reproduce*: "Implement `<artifact_path>` from change_plan section `An`: satisfy every Exports signature and Behavior rule; copy the shape of the Mirror input for imports, errors and structure; follow House style. Return JSON {path, content}." Do not restate the section's content in the instruction — the section is the input. |
 | `outputSchema` | Omit it. The server supplies `{path, content}`. |
-| `apply` | `{ "write": true, "verify": [<commands>], "max_retries": 2 }`. Verify commands come from `baseline.json` (the package's lint / typecheck / test commands), scoped to the file where the tool allows it: `{path}` is replaced by `artifact_path`. Typical: `["npx biome check {path}"]` for a source file, `["npx biome check {path}", "npx vitest run {path}"]` for a test file. Leave `verify` out only when no cheap check exists. |
+| `apply` | `{ "write": true, "mode": "content" | "edits", "verify": [<commands>], "max_retries": 2 }`. `mode: "edits"` (edits to an existing file): the worker returns `{edits: [{line, anchor, position: "after" | "before" | "replace", text}]}` instead of the file and the server splices them in — an anchor that is not found, or matches more than one line without a `line`, is a retry with that reason; the file must exist. `plan-to-packets.mjs` picks the mode from the unit's Action. Verify commands come from `baseline.json` (the package's lint / typecheck / test commands), scoped to the file where the tool allows it: `{path}` is replaced by `artifact_path`. Typical: `["npx biome check {path}"]` for a source file, `["npx biome check {path}", "npx vitest run {path}"]` for a test file. Leave `verify` out only when no cheap check exists. |
 | `run_id` (tool argument, beside `packet`) | The run id, so the server records provenance for the write under `.sdlc/runs/<run_id>/` and `/mmo:revert` still works. Do not run `write-provenance.mjs --before/--after` yourself for an applied packet. |
 
 Read the receipt's `status`:

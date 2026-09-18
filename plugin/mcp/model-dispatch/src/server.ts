@@ -38,6 +38,7 @@ import {
 } from "./adapters/geminiTransports.js";
 import type { TaskPacket, TelemetryEvent, Policy, SelectOverrides, ApplySpec } from "./types.js";
 import {
+  EDITS_OUTPUT_SCHEMA,
   FILE_OUTPUT_SCHEMA,
   applyContent,
   checkWriteContract,
@@ -621,7 +622,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ({ packet, hydrated } = hydrateInputs(packet0, projectRoot!));
           if (hydrated.length) log("info", "packet.hydrate", { packet_id: packet.id, files: hydrated.join(",") });
         }
-        if (apply && !packet.outputSchema) packet = { ...packet, outputSchema: FILE_OUTPUT_SCHEMA };
+        if (apply && !packet.outputSchema) {
+          packet = { ...packet, outputSchema: apply.mode === "edits" ? EDITS_OUTPUT_SCHEMA : FILE_OUTPUT_SCHEMA };
+        }
 
         if (!apply) {
           const one = await dispatchOnce(packet, policy, a);
