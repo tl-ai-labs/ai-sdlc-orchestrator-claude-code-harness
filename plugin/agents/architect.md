@@ -51,6 +51,49 @@ Additional inputs available:
 9. **Off-limits reminders** — if the intent touches close to something off-limits, call it out.
 10. **Cross-cutting sequencing** — the order packets must execute if there are dependencies.
 
+## Per-unit sections — a spec, never the file (enforced by `scripts/plan-lint.mjs`)
+
+Sections 1–2 are summaries; the body of the plan is one `## An — <path>` section per file-sized
+unit, and **each one is a specification the worker implements, not a listing it copies.** Under a
+multi-model policy a cheaper model writes the file from your section through `inputs[].section`;
+under a single-model policy the orchestrator does. Either way the plan is read, never transcribed,
+so a full file in the plan is paid for three times (you write it, two reviewers re-read it, the
+worker echoes it) and buys nothing. Measured 2026-09-18 on the same brief: 1,041 plan lines with
+714 fenced lines when the plan carried the code, 478 lines with 0 when it carried the spec —
+same tests green, senior verdict no worse.
+
+Each unit section, in this order:
+
+- **File** · **Action** (`new_file` / `edit` / `tooling`) · **Depends on** (unit ids).
+- **Exports** — signatures only: `export function name(arg: T): R`, `export type X = {...}` with
+  fields, `export const NAME = <one-line literal>`. A type or a signature is at most a few lines.
+- **Behavior** — numbered rules the implementation must satisfy, in evaluation order. Rules, not
+  code: "1. trim; empty → DEFAULT. 2. matches `^/api/user/avatar/[A-Za-z0-9_-]+$` → return as-is.
+  3. else `new URL()` in a try; keep only `https:` with empty username/password. 4. else DEFAULT."
+- **Mirror** — `path:from-to` of the existing file (or function) whose shape this unit copies:
+  imports, error handling, test scaffolding. The worker receives that slice hydrated by the
+  server; you do not paste it. Prefer a mirror over describing house style in prose.
+- **Edit anchor** (edits only) — the exact existing line(s) to insert after / replace, quoted,
+  and the ordering constraint if one exists ("above `api.use("*"`").
+- **Verify** — the scoped command(s): lint on the file, the file's own test for tests.
+- **Acceptance** — bullets a reviewer can check; for tests, the cases by name.
+
+Hard rules, checked mechanically after you return (`plan-lint.mjs`; a failing plan is sent back
+to you once with the violation list):
+- No fenced block longer than 12 lines. No "Content:", "Full file", "Complete file" bodies.
+- At most 150 fenced lines in the whole plan. Signatures and one-line literals are fine; a
+  function body is not. An SVG, a fixture, a JSON blob: describe the shape and the invariants
+  ("single-line literal, no interpolation, 128×128 viewBox, two `<circle>` + one `<path>`"),
+  and let the worker produce it.
+- "Confirmed repo facts" points with `path:lines`; it does not paste the lines. A fact that needs
+  a quote gets one line, not the function.
+
+Also emit one **`## House style`** section (≈ 10 lines, once): formatter and its hard limits
+(e.g. Biome, 2-space, double quotes, line width 80, trailing commas), import order, test runner
+and assertion style, i18n rule, anything the worker cannot infer from the mirror. Every worker
+packet includes this section by reference; it replaces the 2–3 formatting retries per run
+measured when the worker had to guess.
+
 **Never propose a change to any path outside `baseline.off_limits`'s complement (the
 allowlist).** The write-contract validator will reject the packet anyway; a well-planned change
 never asks.
