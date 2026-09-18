@@ -197,7 +197,31 @@ For each packet, in dependency order:
 
 **Mechanical-tier work (routed to another model):** call `execute_with_model` with the packet, `policy_name`, `project_root: $(pwd)`, and `cache_context`. The server routes per policy. Pass `project_root` on every dispatch, exactly as pre-flight received it: it is what lets the loader prefer a repo-local `routing-policy.yaml` over the shipped preset, and omitting it is the historical bug — the preview named the user's policy while the billed calls quietly routed under a different one. Validate the returned structured output against the schema; if invalid, construct a *refined* packet (new id, `retry_count+1`, with the validation error appended to instruction) and re-dispatch. After 2 mechanical-tier retries fail, the policy escalates to the subagent's own tier automatically (rule with `retry_count: { gte: 2 }`).
 
-Write the returned file content to disk at the packet's stated `artifact_path`.
+Write the returned file content to disk at the packet's stated `artifact_path` — **only for packets without `apply`**. Every brownfield codegen, tests, docs and debug packet that produces a file uses the apply form below instead.
+
+**Apply form (brownfield, every file-producing mechanical packet).** The server writes the file, runs the verify commands, retries on the mechanical tier with the failure appended, and returns a receipt. Your side of the contract:
+
+| Field | Value |
+|---|---|
+| `inputs[]` | Paths only — no `content`. Narrow with `section: "<heading>"` (a `change_plan.md` section such as `"A1"`) or `lines: [from, to]`. The server reads them; you never paste file text into a packet. |
+| `outputSchema` | Omit it. The server supplies `{path, content}`. |
+| `apply` | `{ "write": true, "verify": [<commands>], "max_retries": 2 }`. Verify commands come from `baseline.json` (the package's lint / typecheck / test commands), scoped to the file where the tool allows it: `{path}` is replaced by `artifact_path`. Typical: `["npx biome check {path}"]` for a source file, `["npx biome check {path}", "npx vitest run {path}"]` for a test file. Leave `verify` out only when no cheap check exists. |
+| `run_id` (tool argument, beside `packet`) | The run id, so the server records provenance for the write under `.sdlc/runs/<run_id>/` and `/mmo:revert` still works. Do not run `write-provenance.mjs --before/--after` yourself for an applied packet. |
+
+Read the receipt's `status`:
+
+| `status` | What happened | What you do |
+|---|---|---|
+| `applied` | Written, verify passed (or no verify) | **STOP ON PASS.** Nothing. Do not `cat` the file, do not re-run the verify command, do not read the packet result back. Move to the next packet. `apply.path`, `apply.sha16`, `apply.lines` are the record. |
+| `escalate` | Verify failed `escalate.retry_count` times on the mechanical tier and the policy routes the next attempt to `escalate.model_id` | Handle the retry exactly as an escalated packet today: under `estimated` in your own conversation with `provenance: "estimated"`, under `vendor` via `execute_with_model` with `retry_count: escalate.retry_count`. `escalate.failure` is the last verify output; the last attempt is on disk at `artifact_path`. |
+| `verify_failed` | `max_retries` spent and the policy never re-routed | Same as `escalate`: the failure is in `attempts[].failure`, the last attempt is on disk. |
+| `refused` | `artifact_path` is outside the write contract | Planner bug. Fix the packet's `artifact_path` or the allowlist decision; never work around it. |
+| `dispatch_failed` | The vendor call failed (network, no price, cap) | As today for a failed dispatch. |
+| `no_content` | The model never returned a `content` string within `max_retries` | Rewrite the instruction to demand JSON `{path, content}`; re-dispatch. |
+
+The receipt is small by design (≤ 2 kB; verify output tailed to 1,500 characters). One `execute_with_model` call per file is the whole cost of a mechanical packet in your context: the packet (paths + instruction, ~150 tokens) and the receipt (~80 tokens). On the run this contract comes from, the previous form put ≈ 62k tokens of file text through the orchestrator's context for 24 packets, against 8k when the same files were written inline.
+
+`telemetry.jsonl` gets one event per attempt as before (`events_written` says how many); the events are not echoed in the receipt when `telemetry_path` is set.
 
 ### Phase 6 — senior_code_review
 
@@ -237,7 +261,7 @@ The test command in brownfield is `baseline.test_command` (confirmed at Gate 0),
 
 On failure:
 - If the error is `Config validation error: "X" is required` or equivalent → the codegen phase missed keys. In greenfield build a debug TaskPacket routed to codegen to add the missing keys with schema-valid values. In brownfield, ask the user via the mini-gate above; do NOT patch `.env` from the plugin.
-- Any other failure → parse the output, build a `debug` TaskPacket with the failing test name + error + relevant source slice. Route via policy. Retry up to 2 cost-efficient tier attempts; escalate to Opus.
+- Any other failure → parse the output, build a `debug` TaskPacket with the failing test name + error + relevant source slice (as `inputs[]` paths with `lines`, not pasted text). Route via policy. In brownfield use the apply form with `verify` set to the failing test command scoped to the file, so the mechanical-tier retries and the check happen in the server; you see the receipt. Retry up to 2 cost-efficient tier attempts; escalate to Opus.
 
 **Test-command probe (optional Phase 0.5 in brownfield).** The pipeline pre-check (§7.4) already ran the discovered test command with `--collect-only` / `--dry-run` at prompt 1 to prove deps are installed. If pre-check step 2 failed for this run, Phase 7 halts with the recorded error rather than attempting the real run.
 

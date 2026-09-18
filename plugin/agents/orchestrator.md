@@ -145,14 +145,15 @@ hook, which matches on the MCP tool call and therefore never fires.
    | `task_type` | string | E.g. `controller_handler`, `dto`, `doc_addition`, `smoke` |
    | `module` | string | Coarse grouping for telemetry (e.g. `auth`, `cross`, `smoke`) |
    | `instruction` | string | <300 tokens |
-   | `inputs` | `FileSlice[]` | **Required. Use `[]` for smoke/analysis packets that read no files.** Never omit — downstream adapters call `inputs.filter(...)` |
-   | `outputSchema` | object | JSON Schema for the expected output |
+   | `inputs` | `FileSlice[]` | **Required. Use `[]` for smoke/analysis packets that read no files.** Never omit — downstream adapters call `inputs.filter(...)`. A slice is `{path, reason}` plus either `content` (pasted text — greenfield, or a slice that exists nowhere on disk) or nothing (the server reads `path` under `project_root`, narrowed by `section: "<heading>"` or `lines: [from, to]`). Brownfield packets use paths, never pasted content. |
+   | `outputSchema` | object | JSON Schema for the expected output. Omit under `apply` — the server supplies `{path, content}` |
    | `acceptance` | string[] | Testable bullets |
    | `budget` | `{ maxInputTokens: number; maxOutputTokens: number }` | Both required |
    | `pass_id` | string | The run's pass_id (e.g. `pre-check`, or the current run_id) |
    | `artifact_path` | string (optional) | Brownfield only — the repo-relative path this packet writes; validated against the write-contract allowlist before dispatch |
    | `retry_count` | number (optional) | Defaults to 0 |
    | `subtype` | string (optional) | Adapter-specific refinement |
+   | `apply` | `{ write: true, verify?: string[], max_retries?: number }` (optional) | Brownfield, every file-producing mechanical packet: the server writes `artifact_path`, runs `verify` (`{path}` = the artifact), retries on the same tier with the failure appended, and returns a receipt instead of the file. Pass `run_id` beside `packet` so provenance is recorded. Contract and receipt statuses: pipeline skill, Phase 5 "Apply form" |
 
    The MCP server validates required fields on entry and refuses with a clean "missing field X" error rather than crashing downstream. See `plugin/skills/pipeline/SKILL.md` for canonical examples per phase.
 
@@ -212,8 +213,14 @@ hook, which matches on the MCP tool call and therefore never fires.
      single `cmd1 && cmd2 && cmd3` invocation. One provenance pair per file is the contract; one
      Bash turn per bookkeeping call is not.
    - **Context per turn.** Never paste a file you did not need to decide something. Do not `cat`
-     or `Read` the generated file back after writing it; the packet result you already hold is
-     the content. Do not read `discovery.md`, `stack-profile.md`, or `baseline/current.json` in
+     or `Read` the generated file back after writing it; an applied packet's receipt (`apply.sha16`,
+     `verify.ok`) is the record, and a non-apply packet result you already hold is the content.
+     **STOP ON PASS**: a receipt with `status: "applied"` ends that packet — no re-check, no
+     re-test, no read-back. Mechanical file work goes through the apply form (pipeline skill,
+     Phase 5) so the file never enters this conversation: on the run this rule comes from, the
+     packets, results and heredoc re-writes of 24 files put 62k tokens through this session
+     against 8k for the same files written inline, and that difference was re-read on every
+     later turn. Do not read `discovery.md`, `stack-profile.md`, or `baseline/current.json` in
      full more than once per run — read them at Gate 0, and afterwards read only the section you
      need. Pass reviewers a file list and let them read, rather than reading the files yourself
      and quoting them into the delegation prompt. Slice packet inputs (§`inputs` — SLICED) to the
@@ -370,7 +377,7 @@ the logger drops missing fields rather than printing them empty.
 
 **Applies only when a brownfield run is active** (same trigger as the Write gate above). Every file the run touches must land in `.sdlc/runs/<run-id>/provenance.json` so `/mmo:revert <run-id>` can restore the pre-run state. Uncommitted files (dirty tracked or untracked) additionally need a backup copy taken **before** the write — git has no record of their pre-run content, so the backup is the only recovery path.
 
-Do this per Write/Edit; the helper handles sha computation, git-tracked detection, and backup placement:
+Do this per Write/Edit you make yourself; the helper handles sha computation, git-tracked detection, and backup placement. A packet dispatched with `apply` (pipeline skill, Phase 5) is written by the server, which runs steps 2 and 3 itself when `run_id` is passed beside the packet — do not repeat them for that file:
 
 **Every call passes `--project-root "$(pwd)"`** so the helper writes into the project the user is standing in, not into whichever git worktree the shell has drifted to (an earlier `cd`, a helper that shells out). Without this, per-run bookkeeping can land in the plugin's own worktree — see docs/brownfield-write-contract.md.
 
