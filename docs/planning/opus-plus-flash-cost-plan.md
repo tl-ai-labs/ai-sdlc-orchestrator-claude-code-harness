@@ -13,11 +13,11 @@ Re-run protocol for every row: same repo (`kaneo` @ `5d1fc91`), same brief, both
 | 0 | Baseline (BIG brief, 16–17 Sep) | — | measured | 19.16 | 26.02 | opus+flash loses by $6.86 |
 | 1 | Editor-side apply: server hydrates inputs, writes the file, returns a receipt | dispatching policies only (opus-only never dispatches under `estimated`, so it is unchanged) | **implemented, not yet measured** | — | expected ≈ 22.5 | −3.5 expected |
 | 2 | Verify-then-escalate cascade inside the server | dispatching policies only | **implemented, not yet measured** | — | expected ≈ 21 | −1.5 expected (on top of 1) |
-| 3 | `subagentPromptCacheTtl: "1h"` for the study project | **both arms** (settings, not policy) | planned | expected ≈ 20 | expected ≈ 19 | −2.0 / +0.8 expected |
+| 3 | `subagentPromptCacheTtl: "1h"` for the study project | **both arms** (settings, not policy) | **applied** (`kaneo/.claude/settings.local.json`, beside the driver-model pin) | expected ≈ 20 | expected ≈ 19 | −2.0 / +0.8 expected |
 | 4 | Follow-ups (batch dispatch, architect writes a spec not a file, report on Flash) | see §5 Row 4 | not started | — | — | — |
 | 5 | Shared prefix: requirements + architecture run once, both arms fork from it | both arms (study lever) | planned | — | — | removes ≈ ±$1.8 of noise per pair |
 
-Expected numbers are derived in §5 from the token deltas in §3, not guessed. They are filled with measurements as each row lands.
+Expected numbers are derived in §5 from the token deltas in §3, not guessed. They are filled with measurements as each row lands. **Decision 2026-09-18:** rows 1–3 are measured together in one pair (a pair costs 2–3 hours of wall clock); the ledger records the combined number against all three rows, and the per-row split stays an estimate.
 
 ## 2. Where the money goes (measured, big brief)
 
@@ -220,5 +220,6 @@ disk                                               (escalates only when the poli
 |---|---|---|---|
 | 2026-09-18 | — | Diagnosis (§2–3), research (§4), plan | — |
 | 2026-09-18 | 1 | `types.ts` and `apply.ts` drafted, not wired, not built | — |
+| 2026-09-18 | 3 | `subagentPromptCacheTtl: "1h"` added to `kaneo/.claude/settings.local.json` (Claude Code 2.1.276); both arms re-run under it | not yet |
 | 2026-09-18 | 1+2 | Server loop wired (`runApplyLoop` in `apply.ts`, `dispatchOnce` in `server.ts`), tool schema, validator, orchestrator + pipeline docs, 16 tests; root suite 411/411 | not yet — needs the BIG-brief pair re-run |
 | 2026-09-18 | — | SWE-bench Pro v1→v2 guide folded in: §4 row, §4.1 ceiling + pre-registered rule, receipt cap + STOP ON PASS in Row 1, retry payload in Row 2, no-code gate in Row 4, Row 5 shared prefix, cost-view rules in §7 | — |
