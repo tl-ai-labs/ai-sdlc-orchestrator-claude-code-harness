@@ -108,6 +108,10 @@ test("parseRef reads path:lines forms and rejects identifiers and globs", () => 
   assert.equal(parseRef("vi.mock"), null);
   assert.equal(parseRef("useTranslation"), null);
   assert.equal(parseRef("tests/api/**"), null);
+  assert.equal(parseRef("../../../apps/api/src/database"), null, "an import specifier is not a mirror");
+  assert.equal(parseRef("./avatar.ts"), null);
+  assert.equal(parseRef("@/components/public-project/error-view.tsx"), null);
+  assert.equal(parseRef("@kaneo/libs"), null);
 });
 
 test("parseAnchors takes :line text pairs and prose :line references, deduplicated and sorted", () => {
@@ -201,15 +205,17 @@ test("buildPackets: one packet per unit, apply form, edit lists with anchor cont
   rmSync(root, { recursive: true, force: true });
 });
 
-test("buildPackets: errors for a missing File bullet, an unknown Action, an edit to a missing file, a mirror outside the repo", () => {
+test("buildPackets: errors for a missing File bullet, an unknown Action, an edit to a missing file; an unusable mirror is only a warning", () => {
   const root = repo();
-  const bad = `## House style\n- x\n\n## A1 — a.ts\n\n- **Behavior** nothing\n\n## A2 — b.ts\n\n- **File** \`b.ts\` · **Action** \`rewrite\`\n\n## A3 — c.ts\n\n- **File** \`c.ts\` · **Action** \`edit\`\n- **Edit anchor** after \`:1\` \`x\`\n\n## A4 — d.ts\n\n- **File** \`d.ts\` · **Action** \`new_file\`\n- **Mirror** \`../../etc/passwd:1-2\`\n`;
-  const { packets, errors } = buildPackets(parsePlan(bad), { runId: "r", planPath: "p.md", projectRoot: root });
-  assert.equal(packets.length, 0);
+  const bad = `## House style\n- x\n\n## A1 — a.ts\n\n- **Behavior** nothing\n\n## A2 — b.ts\n\n- **File** \`b.ts\` · **Action** \`rewrite\`\n\n## A3 — c.ts\n\n- **File** \`c.ts\` · **Action** \`edit\`\n- **Edit anchor** after \`:1\` \`x\`\n\n## A4 — d.ts\n\n- **File** \`d.ts\` · **Action** \`new_file\`\n- **Mirror** \`apps/x/../../../etc/passwd:1-2\` (mocks \`../../../apps/api/src/database\`)\n- **Verify** \`true\`\n`;
+  const { packets, errors, warnings } = buildPackets(parsePlan(bad), { runId: "r", planPath: "p.md", projectRoot: root });
+  assert.equal(packets.length, 1, "A4 still gets a packet; only its mirror is dropped");
   assert.match(errors[0], /A1: no `- \*\*File\*\*` bullet/);
   assert.match(errors[1], /A2: unknown Action `rewrite`/);
   assert.match(errors[2], /A3: edit target c.ts does not exist/);
-  assert.match(errors[3], /A4: mirror \.\.\/\.\.\/etc\/passwd is outside the project/);
+  assert.equal(errors.length, 3);
+  assert.ok(warnings.some((w) => /A4: mirror .*etc\/passwd is outside the project; dropped/.test(w)), warnings.join("\n"));
+  assert.ok(!warnings.some((w) => /apps\/api\/src\/database/.test(w)), "the vi.mock specifier is not read as a mirror at all");
   rmSync(root, { recursive: true, force: true });
 });
 

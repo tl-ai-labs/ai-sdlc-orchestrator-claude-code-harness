@@ -80,7 +80,9 @@ Each unit section, in this order:
   3. else `new URL()` in a try; keep only `https:` with empty username/password. 4. else DEFAULT."
 - **Mirror** — `path:from-to` of the existing file (or function) whose shape this unit copies:
   imports, error handling, test scaffolding. The worker receives that slice hydrated by the
-  server; you do not paste it. Prefer a mirror over describing house style in prose.
+  server; you do not paste it. Prefer a mirror over describing house style in prose. Repo paths
+  only — never an import specifier (`../../x`, `@/x`, `@scope/pkg`) and no `vi.mock("…")` targets;
+  `plan-to-packets.mjs` reads every backticked path in this bullet as a file to hydrate.
 - **Edit anchor** (edits only) — one sub-bullet per site, in file order, in exactly this form:
   ``after `:59` `import getAvatar from "./user/controllers/get-avatar";` → rule 1`` — the
   position word (`after` / `before` / `replace`), the 1-based line as `` `:N` ``, the line's text
@@ -88,6 +90,11 @@ Each unit section, in this order:
   `api.use("*", …`"). `scripts/plan-to-packets.mjs` reads these; a site written any other way
   (prose, `L59`, "line 59") is parsed on a best-effort basis and may fall back to a whole-file
   packet. More than five sites in one file is fine — the script splits them into packets.
+- **Single-model policy** (the delegation says `policy_kind: single-model`, or no `scout.json`
+  exists and the orchestrator says it writes the files itself): keep **Mirror** to one path with
+  lines, **Edit anchor** to the line numbers with no quoted text, and **Verify** to one command. The
+  orchestrator reads the file it edits; the detail above exists for a worker that cannot. Measured:
+  the full form doubled the architect's output on a single-model run (18.6k vs 9.4k tokens).
 - **Verify** — commands only, each in its own backticks, starting with the runner (`pnpm exec
   biome check <path>`, `pnpm --filter <pkg> exec vitest run <file>`). No prose in backticks
   in this bullet: every backticked span here becomes a shell command. A package-wide check

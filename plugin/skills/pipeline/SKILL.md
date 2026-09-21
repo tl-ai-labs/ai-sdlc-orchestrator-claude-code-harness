@@ -130,6 +130,11 @@ mechanical tier; the architect reads what the scout found.
    windows (`windows: [[from, to], …]`), not whole.
 2. Skip the scout when the loaded policy has no rule matching `phase: discovery, task_type: repo_scout`
    (`load_policy` → `rules[].when`). A single-model policy has none; the architect works as before.
+   **Skip means skip the whole step** — do not run `scout-candidates.mjs`, do not read the candidates
+   yourself, do not write a `scout.json`. The scout exists to move *search* off the premium model; done
+   inline by that model it is the cost it was meant to remove (measured $0.16 plus its turns on a
+   single-model run). The `estimated`-mode rule that routes premium work into your own session applies
+   to packets the policy routes to the premium model, not to a packet type the policy does not route at all.
 3. Otherwise dispatch **one** packet, apply form, before delegating the architect:
 
    | Field | Value |

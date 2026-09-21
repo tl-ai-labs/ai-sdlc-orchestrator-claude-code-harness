@@ -243,8 +243,9 @@ hook, which matches on the MCP tool call and therefore never fires.
      symbols the packet edits, not the whole file.
 
    **Architect input contract (brownfield).** The delegation prompt carries `mode: brownfield`,
-   `intent`, `run_id`, the paths to `requirements.md`, `intent_brief.md` and, when the scout ran
-   (pipeline skill, Phase 2), `scout.json`. No inlined file contents.
+   `intent`, `run_id`, `policy_kind: single-model | multi-model` (multi-model when the loaded policy
+   names more than one model), the paths to `requirements.md`, `intent_brief.md` and, when the scout
+   ran (pipeline skill, Phase 2), `scout.json`. No inlined file contents.
 
    **Reviewer input contract (brownfield).** When you delegate `senior-reviewer` or
    `security-reviewer`, the delegation prompt carries exactly: `mode: brownfield`, `intent`,

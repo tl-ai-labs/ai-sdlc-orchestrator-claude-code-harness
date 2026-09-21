@@ -92,6 +92,8 @@ export function parseRef(ref) {
   // A path, not an identifier: has a directory separator or a source-file extension, and is not a glob.
   if (!/[\/]/.test(m[1]) && !/\.(ts|tsx|js|jsx|mjs|cjs|json|md|ya?ml|svg|html|css|scss|py|go|rs|java|kt|sql|toml|txt|env|prisma)$/i.test(m[1])) return null;
   if (/[*?]/.test(m[1])) return null;
+  // An import specifier (`../../x`, `./x`, `@/x`, `@scope/pkg`) is how code names a module, not where the file is.
+  if (/^(\.\.?\/|@)/.test(m[1])) return null;
   const ranges = [];
   if (m[2]) {
     for (const r of m[2].split(",")) {
@@ -309,7 +311,7 @@ export function buildPackets(plan, opts) {
       for (const ref of backticked([mirror.head, ...mirror.rest].join(" "))) {
         const r = parseRef(ref);
         if (!r) continue;
-        if (!inRepo(r.path)) { errors.push(`${u.id}: mirror ${r.path} is outside the project`); continue; }
+        if (!inRepo(r.path)) { warnings.push(`${u.id}: mirror ${r.path} is outside the project; dropped`); continue; }
         const n = lineCount(r.path);
         if (n === -1) { warnings.push(`${u.id}: mirror ${r.path} does not exist; dropped`); continue; }
         if (r.ranges.length === 0) inputs.push({ path: r.path, reason: "mirror" });
