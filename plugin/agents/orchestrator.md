@@ -169,6 +169,7 @@ hook, which matches on the MCP tool call and therefore never fires.
    | `artifact_path` | string (optional) | Brownfield only — the repo-relative path this packet writes; validated against the write-contract allowlist before dispatch |
    | `retry_count` | number (optional) | Defaults to 0 |
    | `subtype` | string (optional) | Adapter-specific refinement |
+   | `depends_on` | string[] (optional) | Packet ids this one waits for; `plan-to-packets.mjs` fills it from the plan. `execute_batch` schedules on it |
    | `apply` | `{ write: true, mode?: "content" | "edits", verify?: string[], max_retries?: number }` (optional) | Brownfield, every file-producing mechanical packet: the server writes `artifact_path`, runs `verify` (`{path}` = the artifact), retries on the same tier with the failure appended, and returns a receipt instead of the file. Pass `run_id` beside `packet` so provenance is recorded. Contract and receipt statuses: pipeline skill, Phase 5 "Apply form" |
 
    The MCP server validates required fields on entry and refuses with a clean "missing field X" error rather than crashing downstream. See `plugin/skills/pipeline/SKILL.md` for canonical examples per phase.
@@ -223,7 +224,9 @@ hook, which matches on the MCP tool call and therefore never fires.
    cache-read rate, and a feature-extend run took ~200 turns at ~130k tokens each. Two things drive
    that number, and both are yours to control:
 
-   - **Turn count.** Every Bash call is a turn. Chain bookkeeping into one call wherever the calls
+   - **Turn count.** Every Bash call is a turn, and so is every `execute_with_model` call: in brownfield
+     under a multi-model policy the phase's packets go in **one `execute_batch` call** (pipeline skill,
+     Phase 5 "Batch the phase"), not one call each. Chain bookkeeping into one call wherever the calls
      have no decision between them: the `--after` for the file you just wrote, the `--before` for
      the next packet's file, and the `phase.start` / `phase.end` / `gate.*` log lines all go in a
      single `cmd1 && cmd2 && cmd3` invocation. One provenance pair per file is the contract; one

@@ -47,6 +47,7 @@ import {
   normalizeApply,
   runApplyLoop,
 } from "./apply.js";
+import { runBatch } from "./batch.js";
 import { resolveProjectRoot } from "./project-root.js";
 import { log, setLevel, configureSinks, type Level } from "./log.js";
 
@@ -440,6 +441,58 @@ async function dispatchOnce(packet: TaskPacket, policy: Policy, a: any): Promise
   return { decision, result, events };
 }
 
+/**
+ * One packet, start to receipt: validate, hydrate, route, dispatch — and under
+ * `apply`, write / verify / retry (runApplyLoop). Shared by execute_with_model
+ * and execute_batch so a batched packet behaves exactly like a single one.
+ */
+async function runPacket(raw: unknown, a: any): Promise<unknown> {
+  const packet0 = validateTaskPacket(raw);
+  const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
+  const apply = normalizeApply(packet0.apply);
+  const projectRoot: string | undefined = a.project_root ?? resolveProjectRoot(undefined);
+
+  const needsDisk = apply !== null || packet0.inputs.some((s) => typeof s.content !== "string");
+  if (needsDisk && !projectRoot) {
+    throw new Error(
+      "execute_with_model: project_root is required when a packet uses apply or an inputs[] slice without content.",
+    );
+  }
+  let packet: TaskPacket = packet0;
+  let hydrated: string[] = [];
+  if (needsDisk) {
+    ({ packet, hydrated } = hydrateInputs(packet0, projectRoot!));
+    if (hydrated.length) log("info", "packet.hydrate", { packet_id: packet.id, files: hydrated.join(",") });
+  }
+  if (apply && !packet.outputSchema) {
+    packet = { ...packet, outputSchema: apply.mode === "edits" ? EDITS_OUTPUT_SCHEMA : FILE_OUTPUT_SCHEMA };
+  }
+
+  if (!apply) {
+    const one = await dispatchOnce(packet, policy, a);
+    return { decision: one.decision, result: one.result, events: one.events, terminal_reason: one.result.terminal_reason };
+  }
+
+  return runApplyLoop({
+    packet,
+    apply,
+    projectRoot: projectRoot!,
+    runId: a.run_id,
+    keepEvents: !a.telemetry_path,
+    route: (p) =>
+      pickModel(
+        { phase: p.phase, task_type: p.task_type, module: p.module, retry_count: p.retry_count ?? 0, intent: p.intent },
+        policy,
+        selectOverrides(),
+      ),
+    dispatch: async (p) => {
+      const one = await dispatchOnce(p, policy, a);
+      return { decision: one.decision, result: one.result, events: one.events };
+    },
+    log: (level, event, fields) => log(level, event, fields),
+  });
+}
+
 const server = new Server(
   { name: SERVER_NAME, version: SERVER_VERSION },
   { capabilities: { tools: {} } }
@@ -491,6 +544,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           verbose: { type: "boolean", description: "Shorthand for log_level: debug." },
         },
         required: ["packet"],
+      },
+    },
+    {
+      name: "execute_batch",
+      description:
+        "Execute several apply-form TaskPackets in one call: the server runs them in parallel (max_parallel, default 4) " +
+        "in depends_on order, never two on the same artifact_path at once, and returns one receipt per packet plus " +
+        "totals. Same routing, apply, verify and telemetry as execute_with_model; one orchestrator turn for the phase " +
+        "instead of one per packet.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          packets: { type: "array", items: { type: "object" }, description: "TaskPackets, each with an apply block (plan-to-packets output)." },
+          policy_name: { type: "string" },
+          project_root: { type: "string" },
+          policy_path: { type: "string" },
+          run_id: { type: "string" },
+          cache_context: { type: "string" },
+          telemetry_path: { type: "string" },
+          max_parallel: { type: "number", description: "1–8, default 4." },
+          log_level: { type: "string", enum: ["error", "warn", "info", "debug", "trace"] },
+        },
+        required: ["packets"],
       },
     },
     {
@@ -609,62 +685,26 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     switch (name) {
       case "execute_with_model": {
         const a = args as any;
-        const packet0 = validateTaskPacket(a.packet);
-        const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
-        const apply = normalizeApply(packet0.apply);
-        const projectRoot: string | undefined = a.project_root ?? resolveProjectRoot(undefined);
-
-        const needsDisk = apply !== null || packet0.inputs.some((s) => typeof s.content !== "string");
-        if (needsDisk && !projectRoot) {
-          throw new Error(
-            "execute_with_model: project_root is required when a packet uses apply or an inputs[] slice without content.",
-          );
+        const out = await runPacket(a.packet, a);
+        return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
+      }
+      case "execute_batch": {
+        const a = args as any;
+        if (!Array.isArray(a.packets) || a.packets.length === 0) throw new Error("execute_batch: `packets` must be a non-empty array of TaskPackets.");
+        const packets: TaskPacket[] = a.packets.map((p: unknown) => validateTaskPacket(p));
+        for (const p of packets) {
+          if (!normalizeApply(p.apply)) throw new Error(`execute_batch: packet ${p.id} has no apply block; a batch carries apply-form packets only (the receipt is what makes a batch cheap).`);
         }
-        let packet: TaskPacket = packet0;
-        let hydrated: string[] = [];
-        if (needsDisk) {
-          ({ packet, hydrated } = hydrateInputs(packet0, projectRoot!));
-          if (hydrated.length) log("info", "packet.hydrate", { packet_id: packet.id, files: hydrated.join(",") });
-        }
-        if (apply && !packet.outputSchema) {
-          packet = { ...packet, outputSchema: apply.mode === "edits" ? EDITS_OUTPUT_SCHEMA : FILE_OUTPUT_SCHEMA };
-        }
-
-        if (!apply) {
-          const one = await dispatchOnce(packet, policy, a);
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  { decision: one.decision, result: one.result, events: one.events, terminal_reason: one.result.terminal_reason },
-                  null,
-                  2,
-                ),
-              },
-            ],
-          };
-        }
-
-        const outcome = await runApplyLoop({
-          packet,
-          apply,
-          projectRoot: projectRoot!,
-          runId: a.run_id,
-          keepEvents: !a.telemetry_path,
-          route: (p) =>
-            pickModel(
-              { phase: p.phase, task_type: p.task_type, module: p.module, retry_count: p.retry_count ?? 0, intent: p.intent },
-              policy,
-              selectOverrides(),
-            ),
-          dispatch: async (p) => {
-            const one = await dispatchOnce(p, policy, a);
-            return { decision: one.decision, result: one.result, events: one.events };
-          },
+        ensurePolicy(a.policy_name, a.project_root, a.policy_path);
+        const maxParallel = Math.max(1, Math.min(8, Number(a.max_parallel ?? 4)));
+        const result = await runBatch({
+          packets,
+          maxParallel,
+          run: (p) => runPacket(p, a) as Promise<any>,
           log: (level, event, fields) => log(level, event, fields),
         });
-        return { content: [{ type: "text", text: JSON.stringify(outcome, null, 2) }] };
+        log("info", "batch.done", { packets: packets.length, status: result.status, counts: JSON.stringify(result.counts), cost_usd: result.cost_usd, duration_ms: result.duration_ms });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
       case "simulate_policy": {
         const a = args as any;

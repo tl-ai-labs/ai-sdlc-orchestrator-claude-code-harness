@@ -292,6 +292,25 @@ For each packet, in dependency order:
 
 Write the returned file content to disk at the packet's stated `artifact_path` — **only for packets without `apply`**. Every brownfield codegen, tests, docs and debug packet that produces a file uses the apply form below instead.
 
+**Batch the phase (brownfield, multi-model policies).** Do not dispatch the derived packets one call at
+a time. One `execute_batch` call carries every apply-form packet of the phase (`packets.json` minus
+`tooling` steps and anything already done), with the same `policy_name`, `project_root`, `run_id`,
+`telemetry_path` and `cache_context` you would pass to `execute_with_model`. The server runs them in
+parallel (`max_parallel`, default 4) in `depends_on` order, never two on one `artifact_path` at once,
+and returns one receipt per packet plus totals — one turn for the phase instead of one per packet
+(measured: 25 turns, $3.21, for 21 packets on the row-8 run). Read the batch result:
+
+| `items[].status` | What you do |
+|---|---|
+| `applied` | Nothing (STOP ON PASS) |
+| `escalate` / `verify_failed` / `no_content` | As for a single packet (table below), one at a time, after the batch returns |
+| `blocked` | Its dependency did not apply (`blocked_by`); resolve the dependency first, then re-dispatch the blocked packets in a second batch |
+| `error` | The dispatch threw (`error` says why); re-dispatch after fixing the cause, or escalate |
+
+`tooling` packets (no model) run as shell steps between batches where their `depends_on` puts them:
+batch everything before the tooling step, run it, batch the rest. Then run every `verify_deferred`
+command once. Under a single-model policy nothing is dispatched and this paragraph does not apply.
+
 **Apply form (brownfield, every file-producing mechanical packet).** The server writes the file, runs the verify commands, retries on the mechanical tier with the failure appended, and returns a receipt. Your side of the contract:
 
 | Field | Value |

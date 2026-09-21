@@ -390,6 +390,7 @@ test("the compiled server wires the apply loop and stops before a routed model c
   assert.match(loop, /decision\.modelId !== firstDecision\.modelId/, "escalation is decided by comparing the routed model to the first attempt's");
   assert.match(src, /apply\.write requires artifact_path/, "apply without artifact_path is refused up front");
   assert.match(src, /applying && k === "outputSchema"/, "outputSchema is optional under apply");
-  const handler = src.indexOf('case "execute_with_model"');
-  assert.ok(src.indexOf("hydrateInputs(packet0", handler) > handler, "inputs are hydrated inside the handler before dispatch");
+  const fn = src.indexOf("async function runPacket(");
+  assert.ok(src.indexOf("hydrateInputs(packet0", fn) > fn, "inputs are hydrated in runPacket before dispatch");
+  assert.ok(src.indexOf("runBatch({", src.indexOf('case "execute_batch"')) > 0, "execute_batch schedules through runBatch");
 });
