@@ -121,8 +121,11 @@ export function parseAnchors(b) {
   const out = [];
   const seen = new Set();
   for (const line of [b.head, ...b.rest]) {
+    // An ordering constraint ("stays above `:574` `api.use(…`") names a line the edit must not
+    // cross, not a site. Everything from the constraint word to the end of the sub-bullet is skipped.
+    const sites = line.replace(/\b(above|below|before the|after the|ordering constraint|constraint|stays?)\b[^;]*$/i, (m, w, off) => (off > 0 ? "" : m));
     // `:59` `text` · `L59` `text` · line 59 · (`:59`) — the first two are the canonical pair form.
-    for (const m of line.matchAll(/(?:`:(\d+)(?:-\d+)?`|`?\bL(\d+)(?:-\d+)?\b`?|\bline\s+(\d+)\b)(?:\s*`([^`]+)`)?/gi)) {
+    for (const m of sites.matchAll(/(?:`:(\d+)(?:-\d+)?`|`?\bL(\d+)(?:-\d+)?\b`?|\bline\s+(\d+)\b)(?:\s*`([^`]+)`)?/gi)) {
       const n = Number(m[1] ?? m[2] ?? m[3]);
       if (!n || seen.has(n)) continue;
       seen.add(n);
@@ -343,8 +346,11 @@ export function buildPackets(plan, opts) {
             }
           }
         }
+        // Chunks run bottom-up: the packet nearest the end of the file goes first, so no earlier
+        // packet's insertions shift the line numbers the next packet carries.
         anchorChunks = [];
         for (let i = 0; i < anchors.length; i += MAX_ANCHORS_PER_PACKET) anchorChunks.push(anchors.slice(i, i + MAX_ANCHORS_PER_PACKET));
+        anchorChunks.reverse();
         if (anchorChunks.length > 1) warnings.push(`${u.id}: ${anchors.length} anchors split into ${anchorChunks.length} packets of ≤ ${MAX_ANCHORS_PER_PACKET}`);
       }
     }

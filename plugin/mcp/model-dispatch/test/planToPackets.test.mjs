@@ -115,13 +115,16 @@ test("parseAnchors takes :line text pairs and prose :line references, deduplicat
   assert.deepEqual(parseAnchors(b), [
     { line: 3, anchor: "import x;" },
     { line: 9, anchor: "  });" },
-    { line: 12, anchor: "api.use(" },
-  ]);
+  ], "the `above :12` reference is an ordering constraint, not a site");
   assert.deepEqual(parseAnchors({ head: "replace the brace (`:2147`) and insert before (`:2148`).", rest: [] }), [
     { line: 2147, anchor: null },
     { line: 2148, anchor: null },
   ]);
   assert.deepEqual(parseAnchors(null), []);
+  assert.deepEqual(parseAnchors({ head: "", rest: ["  - after `:248` `  });` → rule 2; ordering constraint: stays above `:250` `api.post(\"/x\", …)`."] }),
+    [{ line: 248, anchor: "  });" }], "an ordering-constraint reference is not an edit site");
+  assert.deepEqual(parseAnchors({ head: "", rest: ["  - after L59 `import x;` (must stay above L574 `api.use(`)"] }),
+    [{ line: 59, anchor: "import x;" }]);
 });
 
 test("classify and moduleOf follow the path", () => {
@@ -174,7 +177,7 @@ test("buildPackets: one packet per unit, apply form, edit lists with anchor cont
   assert.equal(a2.task_type, "module_wiring");
   assert.match(a2.instruction, /Return JSON \{edits:/);
   assert.deepEqual(a2.depends_on, ["tp_codegen_001"]);
-  assert.deepEqual(a2.inputs.filter((i) => i.reason === "edit anchor context").map((i) => i.lines), [[1, 14]], "anchors at 3, 9 and 12 merge into one window clipped to the file");
+  assert.deepEqual(a2.inputs.filter((i) => i.reason === "edit anchor context").map((i) => i.lines), [[1, 13]], "anchors at 3 and 9 merge into one window");
   assert.deepEqual(a2.apply.verify, ["pnpm exec biome check apps/api/src/index.ts"], "only the file-scoped command runs in the loop");
   assert.deepEqual(a2.verify_deferred, ["pnpm --filter @kaneo/api typecheck"], "the package-wide command is deferred to the end of the phase");
   assert.equal(a2.budget.maxOutputTokens, 8000);
@@ -217,8 +220,8 @@ test("buildPackets: L59 / line 59 anchor forms parse; prose in a Verify bullet i
   assert.deepEqual(errors, []);
   assert.deepEqual(packets.map((p) => p.id), ["tp_codegen_001-a", "tp_codegen_001-b"]);
   assert.deepEqual(packets[1].depends_on, ["tp_codegen_001-a"], "chunk b waits for chunk a");
-  assert.match(packets[0].instruction, /Apply ONLY these Edit anchors.*:1 "import a from \\"a\\";".*:5 "y"/);
-  assert.match(packets[1].instruction, /:9; :12\./);
+  assert.match(packets[0].instruction, /Apply ONLY these Edit anchors.*:9; :12\./, "the chunk nearest the end of the file goes first");
+  assert.match(packets[1].instruction, /:1 "import a from \\"a\\";".*:5 "y"/);
   assert.deepEqual(packets[0].apply.verify, ["pnpm exec biome check apps/api/src/index.ts"]);
   assert.deepEqual(packets[1].verify_deferred, ["pnpm --filter @kaneo/api typecheck"]);
   assert.equal(packets[0].verify_deferred, undefined, "deferred commands ride on the last chunk only");
