@@ -360,6 +360,29 @@ test("runApplyLoop in edits mode splices into the existing file and retries a ba
   rmSync(root, { recursive: true, force: true });
 });
 
+test("runApplyLoop in edits mode: a verify failure restores the original, and the retry splices from it (no duplicate insert)", async () => {
+  const root = tmpRoot();
+  mkdirSync(join(root, "src"));
+  writeFileSync(join(root, "src", "out.ts"), "a\nb\nc\n");
+  const model = stubModel([
+    { edits: [{ anchor: "a", position: "after", text: "inserted-bad" }] },
+    { edits: [{ anchor: "a", position: "after", text: "inserted-good" }] },
+  ]);
+  const out = await runApplyLoop({
+    packet: basePacket(), apply: normalizeApply({ write: true, mode: "edits", verify: ["grep -q inserted-good {path}"] }),
+    projectRoot: root, keepEvents: true, route: flashUntil(2), dispatch: model.dispatch, log: silent,
+  });
+  assert.equal(out.status, "applied");
+  assert.equal(readFileSync(join(root, "src", "out.ts"), "utf8"), "a\ninserted-good\nb\nc\n", "exactly one insertion; attempt 0's line is gone");
+  const failed = await runApplyLoop({
+    packet: basePacket(), apply: normalizeApply({ write: true, mode: "edits", verify: ["false"], max_retries: 0 }),
+    projectRoot: root, keepEvents: true, route: flashUntil(2), dispatch: stubModel([{ edits: [{ anchor: "b", position: "after", text: "x" }] }]).dispatch, log: silent,
+  });
+  assert.equal(failed.status, "verify_failed");
+  assert.equal(readFileSync(join(root, "src", "out.ts"), "utf8"), "a\ninserted-good\nb\nc\n", "a failed edit leaves the file as it was");
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("the compiled server wires the apply loop and stops before a routed model change", () => {
   const src = readFileSync(join(DIST, "server.js"), "utf8");
   assert.match(src, /runApplyLoop\(\{/);

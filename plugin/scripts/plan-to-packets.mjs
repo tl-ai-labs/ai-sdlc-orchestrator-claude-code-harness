@@ -121,11 +121,12 @@ export function parseAnchors(b) {
   const out = [];
   const seen = new Set();
   for (const line of [b.head, ...b.rest]) {
-    for (const m of line.matchAll(/`:(\d+)`(?:\s*`([^`]+)`)?/g)) {
-      const n = Number(m[1]);
-      if (seen.has(n)) continue;
+    // `:59` `text` · `L59` `text` · line 59 · (`:59`) — the first two are the canonical pair form.
+    for (const m of line.matchAll(/(?:`:(\d+)(?:-\d+)?`|`?\bL(\d+)(?:-\d+)?\b`?|\bline\s+(\d+)\b)(?:\s*`([^`]+)`)?/gi)) {
+      const n = Number(m[1] ?? m[2] ?? m[3]);
+      if (!n || seen.has(n)) continue;
       seen.add(n);
-      out.push({ line: n, anchor: m[2] ?? null });
+      out.push({ line: n, anchor: m[4] ?? null });
     }
   }
   return out.sort((x, y) => x.line - y.line);
@@ -186,6 +187,32 @@ const EDIT_INSTRUCTION = (path, id) =>
   `Do NOT return the file. Return JSON {edits: [{line, anchor, position, text}]} — one entry per anchor in file order: ` +
   `\`line\` is the anchor's 1-based line number, \`anchor\` the exact existing text of that line, \`position\` "after" | "before" | "replace", ` +
   `\`text\` the lines to insert (or the replacement line), formatted per House style.`;
+
+const RUNNERS = /^(pnpm|npm|npx|yarn|bun|node|deno|python3?|pip|go|cargo|make|sh|bash|cd|vitest|jest|biome|tsc|eslint|prettier|pytest|ruff|mypy|dotnet|mvn|gradle|test|grep)\b/;
+/** A backticked span in a Verify bullet is a command only when it starts with a runner. Prose (`"<svg "`, `11`) is not. */
+export function isCommand(span) {
+  return RUNNERS.test(span.trim());
+}
+
+/**
+ * A verify command that names the file (or `{path}`) checks this packet's own output and runs in the
+ * loop; one that does not (a package typecheck, the full suite) sees every unfinished packet's work
+ * and is deferred to the end of the phase — measured: a route-tree edit was retried for another
+ * packet's import errors.
+ */
+export function splitVerify(cmds, path) {
+  const base = path.split("/").pop();
+  const scoped = [];
+  const deferred = [];
+  for (const c of cmds) {
+    if (c.includes("{path}") || c.includes(path) || (base && c.includes(base))) scoped.push(c);
+    else deferred.push(c);
+  }
+  return { scoped, deferred };
+}
+
+/** Edit lists longer than this are split into chunk packets: Flash's output cap is spent on reasoning first. */
+export const MAX_ANCHORS_PER_PACKET = 5;
 
 /** Merge ±pad line windows around anchors into a few ranges for hydration. */
 function anchorRanges(anchors, pad = 4) {
@@ -294,8 +321,11 @@ export function buildPackets(plan, opts) {
     if (errors.length > errorsBefore) continue;
 
     let mode = "content";
+    let anchorChunks = [null]; // one packet; edits mode with many anchors makes several
+    let fileLines = null;
     if (action === "edit") {
       const n = lineCount(path);
+      fileLines = n;
       if (n === -1) { errors.push(`${u.id}: edit target ${path} does not exist`); continue; }
       const anchors = parseAnchors(bullet(u.body, "Edit anchor"));
       if (anchors.length === 0) {
@@ -313,36 +343,55 @@ export function buildPackets(plan, opts) {
             }
           }
         }
-        for (const [a, b] of anchorRanges(anchors)) inputs.push({ path, lines: [a, n !== null && n > 0 ? Math.min(b, n) : b], reason: "edit anchor context" });
+        anchorChunks = [];
+        for (let i = 0; i < anchors.length; i += MAX_ANCHORS_PER_PACKET) anchorChunks.push(anchors.slice(i, i + MAX_ANCHORS_PER_PACKET));
+        if (anchorChunks.length > 1) warnings.push(`${u.id}: ${anchors.length} anchors split into ${anchorChunks.length} packets of ≤ ${MAX_ANCHORS_PER_PACKET}`);
       }
     }
 
     const verify = bullet(u.body, "Verify");
-    const verifyCmds = verify ? backticked([verify.head, ...verify.rest].join(" ")) : [];
-    if (verifyCmds.length === 0) warnings.push(`${u.id}: no Verify command; the server cannot check the worker's output`);
+    const spans = verify ? backticked([verify.head, ...verify.rest].join(" ")) : [];
+    const cmds = spans.filter(isCommand);
+    const { scoped: verifyCmds, deferred } = splitVerify(cmds, path);
+    if (verifyCmds.length === 0) warnings.push(`${u.id}: no file-scoped Verify command; the server cannot check the worker's output${deferred.length ? " (package-wide commands are deferred)" : ""}`);
 
-    packets.push({
-      id,
-      unit: u.id,
-      phase,
-      task_type,
-      subtype: isTest ? "test_add" : action === "edit" ? "existing_file_edit" : "new_file_add",
-      module,
-      intent,
-      pass_id: runId,
-      artifact_path: path,
-      depends_on: depIds,
-      instruction: mode === "edits" ? EDIT_INSTRUCTION(path, u.id) : NEW_FILE_INSTRUCTION(path, u.id),
-      inputs,
-      acceptance: acceptanceOf(u.body),
-      budget: { ...BUDGET },
-      retry_count: 0,
-      apply: { write: true, mode, verify: verifyCmds, max_retries: MAX_RETRIES },
+    let prevChunkId = null;
+    anchorChunks.forEach((chunk, ci) => {
+      const chunkId = anchorChunks.length > 1 ? `${id}-${String.fromCharCode(97 + ci)}` : id;
+      const chunkInputs = [...inputs];
+      let instruction = mode === "edits" ? EDIT_INSTRUCTION(path, u.id) : NEW_FILE_INSTRUCTION(path, u.id);
+      if (chunk) {
+        for (const [a, b] of anchorRanges(chunk)) chunkInputs.push({ path, lines: [a, fileLines !== null && fileLines > 0 ? Math.min(b, fileLines) : b], reason: "edit anchor context" });
+        if (anchorChunks.length > 1) {
+          instruction += ` Apply ONLY these Edit anchors (the section's other anchors belong to another packet): ${chunk.map((a) => `:${a.line}${a.anchor ? " " + JSON.stringify(a.anchor) : ""}`).join("; ")}.`;
+        }
+      }
+      packets.push({
+        id: chunkId,
+        unit: u.id,
+        phase,
+        task_type,
+        subtype: isTest ? "test_add" : action === "edit" ? "existing_file_edit" : "new_file_add",
+        module,
+        intent,
+        pass_id: runId,
+        artifact_path: path,
+        depends_on: prevChunkId ? [...depIds, prevChunkId] : depIds,
+        instruction,
+        inputs: chunkInputs,
+        acceptance: acceptanceOf(u.body),
+        budget: mode === "edits" ? { ...BUDGET, maxOutputTokens: 8000 } : { ...BUDGET },
+        retry_count: 0,
+        apply: { write: true, mode, verify: ci === anchorChunks.length - 1 ? verifyCmds : verifyCmds.filter((c) => !/vitest|jest|pytest|test\b/.test(c)), max_retries: MAX_RETRIES },
+        ...(deferred.length && ci === anchorChunks.length - 1 ? { verify_deferred: deferred } : {}),
+      });
+      prevChunkId = chunkId;
     });
   }
 
   // Resolve plan:An → packet ids now that every unit has one.
-  const byUnit = new Map(packets.map((p) => [p.unit, p.id]));
+  const byUnit = new Map();
+  for (const p of packets) byUnit.set(p.unit, p.id); // the last chunk of a unit is what dependents wait for
   for (const p of packets) {
     p.depends_on = p.depends_on.map((d) => byUnit.get(d.slice(5)) ?? d);
   }

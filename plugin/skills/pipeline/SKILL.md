@@ -211,6 +211,14 @@ policy's routing) and log the `plan_task_packets` event with the tokens you actu
 this comes from, hand-writing the same 17 packets cost $1.03 and 9 turns. Greenfield still plans by
 hand from `design.md`, as below.
 
+Two more things the derived packets carry: an edit with more than five anchor sites is split into
+chunk packets (`tp_codegen_004-a`, `-b`, …) chained by `depends_on` — dispatch them in order, they
+edit the same file; and a package-wide verify command (`typecheck`, the full suite) is on the packet
+as `verify_deferred`, not in `apply.verify`. **Run every `verify_deferred` command once, after the
+last packet of the phase**, and treat a failure as a debug packet against the file whose error it
+reports — a per-packet package check fails on other packets' unfinished work (measured: a
+route-tree edit was retried twice for another packet's import errors).
+
 ### Brownfield-mode task types (v1)
 
 The table above is greenfield-Nest-centric. In brownfield mode (`mode: brownfield`), packets use a **stack-agnostic** base set of primitives plus an optional `subtype` hint that the loaded stack adapter (`plugin/skills/pipeline/stacks/*.md`) resolves to concrete codegen guidance.
@@ -288,8 +296,8 @@ Read the receipt's `status`:
 | `status` | What happened | What you do |
 |---|---|---|
 | `applied` | Written, verify passed (or no verify) | **STOP ON PASS.** Nothing. Do not `cat` the file, do not re-run the verify command, do not read the packet result back. Move to the next packet. `apply.path`, `apply.sha16`, `apply.lines` are the record. |
-| `escalate` | Verify failed `escalate.retry_count` times on the mechanical tier and the policy routes the next attempt to `escalate.model_id` | Handle the retry exactly as an escalated packet today: under `estimated` in your own conversation with `provenance: "estimated"`, under `vendor` via `execute_with_model` with `retry_count: escalate.retry_count`. `escalate.failure` is the last verify output; the last attempt is on disk at `artifact_path`. |
-| `verify_failed` | `max_retries` spent and the policy never re-routed | Same as `escalate`: the failure is in `attempts[].failure`, the last attempt is on disk. |
+| `escalate` | Verify failed `escalate.retry_count` times on the mechanical tier and the policy routes the next attempt to `escalate.model_id` | Handle the retry exactly as an escalated packet today: under `estimated` in your own conversation with `provenance: "estimated"`, under `vendor` via `execute_with_model` with `retry_count: escalate.retry_count`. `escalate.failure` is the last verify output. In `content` mode the last attempt is on disk at `artifact_path`; in `edits` mode the file is back to its pre-packet state (every attempt splices into the original, and a failed one is undone), so the escalated packet redoes the edit. |
+| `verify_failed` | `max_retries` spent and the policy never re-routed | Same as `escalate`: the failure is in `attempts[].failure`. |
 | `refused` | `artifact_path` is outside the write contract | Planner bug. Fix the packet's `artifact_path` or the allowlist decision; never work around it. |
 | `dispatch_failed` | The vendor call failed (network, no price, cap) | As today for a failed dispatch. |
 | `no_content` | The model never returned a `content` string within `max_retries` | Rewrite the instruction to demand JSON `{path, content}`; re-dispatch. |

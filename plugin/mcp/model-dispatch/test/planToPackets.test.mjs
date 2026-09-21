@@ -175,7 +175,9 @@ test("buildPackets: one packet per unit, apply form, edit lists with anchor cont
   assert.match(a2.instruction, /Return JSON \{edits:/);
   assert.deepEqual(a2.depends_on, ["tp_codegen_001"]);
   assert.deepEqual(a2.inputs.filter((i) => i.reason === "edit anchor context").map((i) => i.lines), [[1, 14]], "anchors at 3, 9 and 12 merge into one window clipped to the file");
-  assert.deepEqual(a2.apply.verify, ["pnpm exec biome check apps/api/src/index.ts", "pnpm --filter @kaneo/api typecheck"]);
+  assert.deepEqual(a2.apply.verify, ["pnpm exec biome check apps/api/src/index.ts"], "only the file-scoped command runs in the loop");
+  assert.deepEqual(a2.verify_deferred, ["pnpm --filter @kaneo/api typecheck"], "the package-wide command is deferred to the end of the phase");
+  assert.equal(a2.budget.maxOutputTokens, 8000);
 
   const a3 = packets[2];
   assert.equal(a3.phase, "tests");
@@ -205,6 +207,22 @@ test("buildPackets: errors for a missing File bullet, an unknown Action, an edit
   assert.match(errors[1], /A2: unknown Action `rewrite`/);
   assert.match(errors[2], /A3: edit target c.ts does not exist/);
   assert.match(errors[3], /A4: mirror \.\.\/\.\.\/etc\/passwd is outside the project/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("buildPackets: L59 / line 59 anchor forms parse; prose in a Verify bullet is not a command; > 5 anchors split into chained chunk packets", () => {
+  const root = repo();
+  const plan = `## House style\n- x\n\n## A1 — apps/api/src/index.ts\n\n- **File** \`apps/api/src/index.ts\` · **Action** \`edit\` · **Depends on** —\n- **Edit anchor**\n  - after L1 \`import a from "a";\`; after line 2; after \`:3\` \`x\`; before \`L5\` \`y\`; replace \`:7\`; after \`:9\`; before \`:12\`\n- **Verify** starts with \`<svg\` and \`pnpm exec biome check apps/api/src/index.ts\` then \`pnpm --filter @kaneo/api typecheck\` (\`11\` cases)\n`;
+  const { packets, errors, warnings } = buildPackets(parsePlan(plan), { runId: "r", planPath: "p.md", projectRoot: root });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(packets.map((p) => p.id), ["tp_codegen_001-a", "tp_codegen_001-b"]);
+  assert.deepEqual(packets[1].depends_on, ["tp_codegen_001-a"], "chunk b waits for chunk a");
+  assert.match(packets[0].instruction, /Apply ONLY these Edit anchors.*:1 "import a from \\"a\\";".*:5 "y"/);
+  assert.match(packets[1].instruction, /:9; :12\./);
+  assert.deepEqual(packets[0].apply.verify, ["pnpm exec biome check apps/api/src/index.ts"]);
+  assert.deepEqual(packets[1].verify_deferred, ["pnpm --filter @kaneo/api typecheck"]);
+  assert.equal(packets[0].verify_deferred, undefined, "deferred commands ride on the last chunk only");
+  assert.ok(warnings.some((w) => /7 anchors split into 2 packets/.test(w)));
   rmSync(root, { recursive: true, force: true });
 });
 

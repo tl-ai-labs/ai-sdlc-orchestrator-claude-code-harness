@@ -39,6 +39,10 @@ models:
     pricing_last_verified: 2026-09-14
     auth: { env: GEMINI_API_KEY }
     max_output_tokens_absolute: 8192
+    # Mechanical packets: low thinking. Gemini bills thinking as output and it counts against
+    # the output cap; at the default level a 295-byte SVG cost 5,952 output tokens and long edit
+    # lists hit the 8,192 cap (measured 2026-09-21). The agent leaf keeps its own setting.
+    reasoning: { tier: low }
 
   # The SAME model reached as an AGENT. Kept selectable for docs / test
   # backfill jobs that need the worker to explore; on feature-extend runs it

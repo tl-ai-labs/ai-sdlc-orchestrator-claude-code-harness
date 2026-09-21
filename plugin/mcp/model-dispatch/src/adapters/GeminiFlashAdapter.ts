@@ -10,6 +10,7 @@ import type {
   ExecutionResult,
   ModelConfig,
   ModelPricing,
+  ReasoningConfig,
   TaskPacket,
 } from "../types.js";
 import { computeCostUsd, estimateTokens } from "../pricing.js";
@@ -153,6 +154,12 @@ export class GeminiFlashAdapter implements ModelAdapter {
         ...(wantsJson ? { responseMimeType: "application/json" } : {}),
       };
       if (wantsJson) generationConfig.responseSchema = packet.outputSchema;
+      // Thinking is billed as output and counts against maxOutputTokens: left at the
+      // model's default, a 295-byte SVG cost 5,952 output tokens and long edit lists hit
+      // the absolute cap four times on one run. The policy's `reasoning` block sets the level
+      // for this leaf (the agent adapter already honours it).
+      const thinking = thinkingConfigFor(this.modelConfig.reasoning);
+      if (thinking) generationConfig.thinkingConfig = thinking;
 
       let outcome: GenerateOutcome;
       try {
@@ -278,6 +285,14 @@ export class GeminiFlashAdapter implements ModelAdapter {
       terminal_reason: terminalReason,
     };
   }
+}
+
+/** Gemini's `thinkingConfig` for a policy `reasoning` block: `enabled: false` → budget 0; `tier` → thinkingLevel. */
+export function thinkingConfigFor(reasoning?: ReasoningConfig): Record<string, unknown> | null {
+  if (!reasoning) return null;
+  if (reasoning.enabled === false) return { thinkingBudget: 0 };
+  if (reasoning.tier) return { thinkingLevel: reasoning.tier.toUpperCase() };
+  return null;
 }
 
 function buildUserPrompt(packet: TaskPacket, headerInline: string): string {

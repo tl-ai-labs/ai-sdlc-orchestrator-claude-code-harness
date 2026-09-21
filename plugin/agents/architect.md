@@ -81,9 +81,18 @@ Each unit section, in this order:
 - **Mirror** — `path:from-to` of the existing file (or function) whose shape this unit copies:
   imports, error handling, test scaffolding. The worker receives that slice hydrated by the
   server; you do not paste it. Prefer a mirror over describing house style in prose.
-- **Edit anchor** (edits only) — the exact existing line(s) to insert after / replace, quoted,
-  and the ordering constraint if one exists ("above `api.use("*"`").
-- **Verify** — the scoped command(s): lint on the file, the file's own test for tests.
+- **Edit anchor** (edits only) — one sub-bullet per site, in file order, in exactly this form:
+  ``after `:59` `import getAvatar from "./user/controllers/get-avatar";` → rule 1`` — the
+  position word (`after` / `before` / `replace`), the 1-based line as `` `:N` ``, the line's text
+  verbatim in backticks, then the rule it serves and any ordering constraint ("above `:574`
+  `api.use("*", …`"). `scripts/plan-to-packets.mjs` reads these; a site written any other way
+  (prose, `L59`, "line 59") is parsed on a best-effort basis and may fall back to a whole-file
+  packet. More than five sites in one file is fine — the script splits them into packets.
+- **Verify** — commands only, each in its own backticks, starting with the runner (`pnpm exec
+  biome check <path>`, `pnpm --filter <pkg> exec vitest run <file>`). No prose in backticks
+  in this bullet: every backticked span here becomes a shell command. A package-wide check
+  (`typecheck`, the full suite) may be listed; the script runs it once after every packet,
+  not per packet.
 - **Acceptance** — bullets a reviewer can check; for tests, the cases by name.
 
 Hard rules, checked mechanically after you return (`plan-lint.mjs`; a failing plan is sent back

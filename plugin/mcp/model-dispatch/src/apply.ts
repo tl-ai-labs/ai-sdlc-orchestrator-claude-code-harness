@@ -514,6 +514,15 @@ export async function runApplyLoop(deps: ApplyLoopDeps): Promise<ApplyOutcome> {
   let retriesUsed = 0;
   let current = packet;
   const maxRetries = apply.max_retries ?? 2;
+  // Edits are spliced into the file as it was before this packet, on every attempt: a retry
+  // onto the already-edited file finds its anchors shifted or duplicated (measured: "anchor
+  // matches 3 lines" after attempt 0 had inserted eleven lines above them).
+  let editsBase: string | null = null;
+  if (apply.mode === "edits") {
+    const abs = resolve(projectRoot, packet.artifact_path!);
+    if (!existsSync(abs)) return { status: "refused", decision: route(packet), attempts, tokens, cost_usd: 0, events_written: 0, events: keepEvents ? [] : undefined, refusal: `${packet.artifact_path}: edits mode needs an existing file` };
+    editsBase = readFileSync(abs, "utf8");
+  }
 
   const finish = (status: ApplyStatus, extra: Partial<ApplyOutcome> = {}): ApplyOutcome => ({
     status,
@@ -566,9 +575,7 @@ export async function runApplyLoop(deps: ApplyLoopDeps): Promise<ApplyOutcome> {
       const edits = extractEdits(one.result.result);
       if (!edits) failure = "the response had no `edits` array; return JSON {edits: [{anchor, position, text, line?}]}";
       else {
-        const abs = resolve(projectRoot, current.artifact_path!);
-        if (!existsSync(abs)) return finish("refused", { refusal: `${current.artifact_path}: edits mode needs an existing file` });
-        const spliced = spliceEdits(readFileSync(abs, "utf8"), edits);
+        const spliced = spliceEdits(editsBase!, edits);
         if (spliced.ok) content = spliced.content;
         else failure = `edit list could not be applied: ${spliced.reason}`;
       }
@@ -600,6 +607,7 @@ export async function runApplyLoop(deps: ApplyLoopDeps): Promise<ApplyOutcome> {
         duration_ms: verify.duration_ms,
       });
       if (verify.ok) return finish("applied");
+      if (editsBase !== null) writeFileSync(resolve(projectRoot, contract.rel), editsBase, "utf8");
       failure = `verify failed: ${verify.failed_command} (exit ${verify.exit_code ?? "timeout"})\n${verify.output_tail ?? ""}`;
       summary.failure = failure;
       if (retriesUsed >= maxRetries) return finish("verify_failed");
