@@ -26,7 +26,7 @@ import {
   validateSelectOverrides,
   unreachableModelIds,
 } from "./routing.js";
-import { assessModels, parseAuthMode, type AuthMode } from "./preflight.js";
+import { assessModels, parseAuthMode, policyWarnings, type AuthMode } from "./preflight.js";
 import { checkModelPrice, withEffectivePrices } from "./effectivePrice.js";
 import { appendEvent, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
 import { createAdapter } from "./adapters/index.js";
@@ -198,6 +198,10 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
   );
   for (const message of assessment.price_warnings) {
     log("warn", "pricing.policy_mismatch", { message });
+  }
+  assessment.policy_warnings = policyWarnings(policy);
+  for (const message of assessment.policy_warnings) {
+    log("warn", "policy.shape", { message });
   }
 
   // Resolved Gemini configuration — the project and region the run will bill.

@@ -56,6 +56,13 @@ export interface PreflightAssessment {
    * `warnings`, which only ever means "a model this run does not dispatch to".
    */
   price_warnings: string[];
+  /**
+   * Policy shape notes that do not stop the run. Today one: a single-model
+   * policy that asks for the 1-hour subagent cache. Its helpers are short-lived
+   * and never wait on a dispatched packet, so the 1h write rate is paid with
+   * nothing to recover — measured +$2–4 per run against the 5m default.
+   */
+  policy_warnings: string[];
 }
 
 /**
@@ -184,5 +191,20 @@ export function assessModels(
       `through this server. Not a blocker. It would block a vendor-mode run of the same policy.`,
   );
 
-  return { models: results, ok: reasons.length === 0, halt_reason, warnings, price_warnings: priceWarnings };
+  return { models: results, ok: reasons.length === 0, halt_reason, warnings, price_warnings: priceWarnings, policy_warnings: [] };
+}
+
+/** Non-halting notes about the policy's shape; the server fills `policy_warnings` from this. */
+export function policyWarnings(policy: { name: string; models: Array<{ model_name: string }>; subagent_cache_ttl?: string }): string[] {
+  const out: string[] = [];
+  const distinct = new Set(policy.models.map((m) => m.model_name));
+  if (distinct.size === 1 && policy.subagent_cache_ttl === "1h") {
+    out.push(
+      `Policy '${policy.name}' is single-model but sets subagent_cache_ttl: 1h. A single-model run never waits on a ` +
+      `dispatched packet, so its helpers pay the 1-hour cache-write rate (2x input) with nothing to recover — measured ` +
+      `+$2–4 per run against 5m. Remove the field (Claude Code's default is 5m) unless this run is deliberately ` +
+      `matching a multi-model arm's setting for a comparison.`,
+    );
+  }
+  return out;
 }

@@ -64,6 +64,12 @@ no rate (rule 6).
 block that differs from the dated price list. The server bills the list, not the block, so the run's
 numbers stay right; the fix belongs in the policy file, not in this run.
 
+**If `policy_warnings` is non-empty, print each one and keep going.** Today it names one shape: a
+single-model policy that sets `subagent_cache_ttl: 1h`. Nothing in such a run waits on a dispatched
+packet, so its helpers pay the 1-hour cache-write rate with nothing to recover — measured +$2–4 per
+run against the 5m default. The run is not halted, because a study may set it on purpose to match a
+multi-model arm; a real user should remove the field.
+
 **`not_selected` is not a warning and not a problem.** A policy may hold more than one way of reaching a
 tier — `opus-plus-flash` reaches its mechanical tier either as a Gemini model call or as an Antigravity
 agent — and only the one this install selected can be dispatched to. The other is listed here, unchecked,

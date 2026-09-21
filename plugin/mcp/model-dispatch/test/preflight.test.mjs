@@ -182,3 +182,12 @@ test("a missing claude binary halts an estimated run that names the claude-cli a
   assert.equal(sonnet.required, true);
   assert.equal(sonnet.severity, "blocking");
 });
+
+test("policyWarnings: a single-model policy asking for the 1h subagent cache is warned, others are not", async () => {
+  const { policyWarnings } = await import("../dist/preflight.js");
+  const single = { name: "opus-only-x", models: [{ model_name: "claude-opus-5" }], subagent_cache_ttl: "1h" };
+  assert.match(policyWarnings(single)[0], /single-model but sets subagent_cache_ttl: 1h/);
+  assert.deepEqual(policyWarnings({ ...single, subagent_cache_ttl: "5m" }), []);
+  assert.deepEqual(policyWarnings({ ...single, subagent_cache_ttl: undefined }), []);
+  assert.deepEqual(policyWarnings({ name: "mixed", models: [{ model_name: "claude-opus-5" }, { model_name: "gemini-3.8-flash" }], subagent_cache_ttl: "1h" }), []);
+});
