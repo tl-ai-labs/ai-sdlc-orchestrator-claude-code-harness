@@ -1,6 +1,7 @@
 ---
 name: brownfield-guide
 description: The shared seven-step brownfield operating manual. Every brownfield entry point — /mmo:brownfield and the seven per-job commands (/mmo:bugfix, /mmo:docs, /mmo:test, /mmo:refactor, /mmo:deps, /mmo:feature-new, /mmo:feature-extend) — points here. Step 4 branches on an optional handover the invoking command supplies: intent (job type already chosen) and seed_description (the user's own words for the job).
+disable-model-invocation: true
 ---
 
 You are Claude Code, following this operating manual. Work through the steps in order. Do not skip

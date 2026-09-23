@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "note": "First match wins. A prompt that OPENS with a heading naming a brief, spec or requirements document is the build that document describes, whatever words appear inside it: 23 Sep, a greenfield build read as a bug fix because its heading said \"Tech stack (fixed)\". A prompt that opens by asking to build something is a feature before anything else; a consolidation is a refactor before a bug fix. Patterns run on the first 4 KB of a prompt, lower-cased. Only the rule id is stored, never the text. Labels feed reports; no routing decision reads them.",
+  "rules": [
+    {
+      "id": "pipeline_command",
+      "pattern": "^\\s*/mmo:"
+    },
+    {
+      "id": "feature",
+      "pattern": "^\\s*(please\\s+)?(build|create|implement|scaffold|make|write)\\s+(me\\s+)?(a|an|the|new|this|small|simple|basic)\\b"
+    },
+    {
+      "id": "refactor",
+      "pattern": "\\b(refactor(ing|ed)?|extract (a |the )?(function|method|module|class|util|helper)|rename|clean ?up|dedupe|de-duplicate|deduplicate|consolidate|restructure|simplify|(one |a )?shared (helper|util|function)|use one helper|replace (all|every) |split (it|this|that|the [\\w./-]+|[\\w./-]+\\.\\w+)( into|:)|one file per \\w+|(move|extract) .{0,80}\\b(out of|into) (their |its |a |an |the |one )?(own )?(module|file|folder|schema file|package)|reorgani[sz]e (the |this )?[\\w-]+ (folder|directory|module|package))\\b"
+    },
+    {
+      "id": "feature",
+      "pattern": "^\\s*#{1,3}\\s+[^\\n]*\\b(brief|spec|specification|requirements|prd|design doc(ument)?)\\b"
+    },
+    {
+      "id": "bugfix",
+      "pattern": "\\b(bug|fix(es|ed|ing)?|broken|crash(es|ed|ing)?|regression|stack ?trace|exception|traceback|fail(s|ed|ing)? (test|build)|not working|doesn'?t work)\\b"
+    },
+    {
+      "id": "test",
+      "pattern": "\\b(unit tests?|integration tests?|test coverage|add tests?|write tests?|test cases?|spec files?)\\b"
+    },
+    {
+      "id": "docs",
+      "pattern": "\\b(readme|docs?|documentation|docstrings?|changelog|comments?|jsdoc)\\b"
+    },
+    {
+      "id": "deps",
+      "pattern": "\\b(upgrade|bump|dependenc(y|ies)|package(-lock)?\\.json|requirements\\.txt|go\\.mod|npm (install|update|audit)|pip install|migrate to v?\\d)\\b"
+    },
+    {
+      "id": "feature",
+      "pattern": "\\b(add|implement|build|create|support|introduce|new (endpoint|feature|page|screen|command|flag|option))\\b"
+    },
+    {
+      "id": "review",
+      "pattern": "\\b(review|audit|critique|check (this|my|the) (pr|diff|change|code))\\b"
+    },
+    {
+      "id": "lookup",
+      "pattern": "\\b(where is|where does|how does|what does|what is|which file|explain|show me|find (the|all|where)|list (the|all)|why does)\\b"
+    },
+    {
+      "id": "ops",
+      "pattern": "\\b(commit|push|merge|rebase|branch|deploy|release|pull request|\\bpr\\b|ci|pipeline run|docker|kubectl)\\b"
+    }
+  ],
+  "inherit": {
+    "max_chars": 40,
+    "pattern": "^\\s*(y|yes|yep|ok|okay|sure|go|go ahead|continue|proceed|do it|next|again|retry|thanks|thank you|no|nope|stop)\\b"
+  }
+}

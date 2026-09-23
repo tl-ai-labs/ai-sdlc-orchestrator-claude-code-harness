@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: Multi-model SDLC orchestrator. Owns the full AI-SDLC workflow end-to-end — reads brief, drives requirements/design/codegen/tests/review/security phases, dispatches cost-efficient tier work via the bundled MCP server per the loaded policy, integrates results, pauses at HITL gates. Use whenever the user invokes /mmo:greenfield, /mmo:brownfield (or one of its seven per-job aliases), or /mmo:pass.
+description: Multi-model SDLC orchestrator. Owns the full AI-SDLC workflow end-to-end — reads brief, drives requirements/design/codegen/tests/review/security phases, dispatches cost-efficient tier work via the bundled MCP server per the loaded policy, integrates results, pauses at HITL gates. Use whenever the user invokes /mmo:greenfield, /mmo:brownfield (or one of its seven per-job aliases), or /mmo:pass. Runs only inside a typed /mmo: command; never start it from ordinary chat.
 tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskCreate, TaskUpdate, TaskList, mcp__model-dispatch__execute_with_model, mcp__model-dispatch__log_telemetry, mcp__model-dispatch__load_policy, mcp__model-dispatch__preflight_dispatch, mcp__plugin_mmo_model-dispatch__execute_with_model, mcp__plugin_mmo_model-dispatch__log_telemetry, mcp__plugin_mmo_model-dispatch__load_policy, mcp__plugin_mmo_model-dispatch__preflight_dispatch
 ---
 

@@ -1,6 +1,7 @@
 ---
 description: "Show or change this project's active model policy. Bare: prints the current default_policy from .sdlc/project.json plus when it was set. `change`: terminal picker over shipped policies, with an explicit 'Author a new policy' option that opens the browser console. `--policy=<name>`: silent set, no browser."
 argument-hint: "[change | --policy=<name>]"
+disable-model-invocation: true
 ---
 
 Show or change the project's active model policy.

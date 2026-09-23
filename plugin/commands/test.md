@@ -1,6 +1,7 @@
 ---
 description: "Backfill test coverage toward a stated target on this repo. Alias into /mmo:brownfield with intent=test pre-selected. Example: backfill unit tests for src/payments to reach 80% line coverage."
 argument-hint: "[what to backfill coverage for, in one line]"
+disable-model-invocation: true
 ---
 
 Test-backfill job on an existing repository — an alias into `/mmo:brownfield` with the job type

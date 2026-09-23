@@ -44,7 +44,12 @@ models:
     pricing_last_verified: 2026-09-14
     # AI Studio door. Unset → adapter falls through to Vertex ADC, same rates.
     auth: { env: GEMINI_API_KEY }
-    max_output_tokens_absolute: 8192
+    # 8,192 fitted the pipeline's patch answers. A chat job that writes a whole
+    # test file, plus the model's own reasoning tokens, did not: three live jobs
+    # on 22 Sep 2026 were cut off at the cap after ~45 s and failed. The model's
+    # output limit is far above 32,768; at 3.75 per million that caps one
+    # answer at about 12 cents.
+    max_output_tokens_absolute: 32768
 
   # The SAME model reached as an AGENT (Antigravity SDK session with tools and
   # a working directory). Same rates; several times more tokens per packet
@@ -115,7 +120,6 @@ rules:
         - service_method
         - dto
         - module_wiring
-        - migration
         - seed_data
         - entity
         - guard

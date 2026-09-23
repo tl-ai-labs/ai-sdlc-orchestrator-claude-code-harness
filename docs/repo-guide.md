@@ -1,6 +1,6 @@
 # Repo guide
 
-This repository holds `mmo` (Multi-Model Orchestrator) v0.7.3 — a Claude Code plugin that runs a
+This repository holds `mmo` (Multi-Model Orchestrator) v0.8.2 — a Claude Code plugin that runs a
 full software-delivery pipeline against a brief (requirements → design → code → senior review →
 tests → security review), routes each phase to the model that fits it, and records what each phase
 cost — plus the harness, tests and documentation that ship it.
@@ -73,8 +73,8 @@ path, one API call per unit of work, nothing here is installed and nothing here 
 | `config/intents.json` | The seven brownfield job types. |
 | `mcp/model-dispatch/` | The MCP server package (see the table above). |
 | `policy-console/` | The policy console package. |
-| `scripts/` | Node scripts the commands shell out to — setup checks, credential discovery, the write-contract hook, provenance recording, run logging. |
-| `hooks/` | `hooks.json` registers two: a `PreToolUse` write-contract check that refuses edits outside an approved file list, and a `PostToolUse` telemetry heartbeat. |
+| `scripts/` | Node scripts the commands shell out to — setup checks, credential discovery, the write-contract hook, provenance recording, run logging. `scripts/ambient/` holds ambient mode: the hook dispatcher, the task census, the apply/undo script and their libraries ([ambient-mode.md](ambient-mode.md)). |
+| `hooks/` | `hooks.json` registers the `PreToolUse` write-contract check that refuses edits outside an approved file list, the `PostToolUse` telemetry heartbeat, and the ambient-mode hooks, which all go through the POSIX shim `ambient.sh` and do nothing until ambient mode is switched on. Every hook sets a timeout of 5 s. |
 | `templates/` | Fragments copied into a target project, such as the `.gitignore` entry for run artifacts. |
 | `examples/` | Sandbox projects you point the plugin at by hand — six tiny apps, one per brownfield job type — plus copies of the four example briefs, which live here because only `plugin/` is copied on install. |
 

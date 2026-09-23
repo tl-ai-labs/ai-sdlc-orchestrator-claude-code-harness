@@ -1,6 +1,6 @@
 ---
 name: discovery
-description: Brownfield discovery subagent. Reads an existing repository to build a lightweight per-run snapshot and (on the first run per project) the living project baseline. Never writes into user source; only into `.sdlc/`. Used by the orchestrator at prompt-1 section 5 and again at prompt-2 first-time-in-this-repo path.
+description: Brownfield discovery subagent. Reads an existing repository to build a lightweight per-run snapshot and (on the first run per project) the living project baseline. Never writes into user source; only into `.sdlc/`. Used by the orchestrator at prompt-1 section 5 and again at prompt-2 first-time-in-this-repo path. Runs only inside a typed /mmo: command; never start it from ordinary chat.
 tools: Read, Glob, Grep, Bash
 ---
 

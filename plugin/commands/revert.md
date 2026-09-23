@@ -1,6 +1,7 @@
 ---
 description: "Revert the file changes made by a specific brownfield run. Reads .sdlc/runs/<run-id>/provenance.json and restores each touched file to its pre-run state, using git for tracked-committed files and a per-run backup for uncommitted ones. Refuses in dirty cases (subsequent runs touched the same files); prints a three-way diff for manual resolution instead."
 argument-hint: "<run-id>"
+disable-model-invocation: true
 ---
 
 Revert a specific brownfield run. Takes one required argument: the `run-id` (matches the

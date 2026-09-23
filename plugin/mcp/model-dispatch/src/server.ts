@@ -18,7 +18,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 import { existsSync } from "node:fs";
 
-import { loadPolicy, loadPolicyFromPath, getModel } from "./policy.js";
+import { loadPolicy, loadPolicyFromPath, getModel, policyFileFor, policyStamp } from "./policy.js";
 import {
   pickModel,
   simulatePolicyCost,
@@ -29,7 +29,7 @@ import {
 import { assessModels, parseAuthMode, type AuthMode } from "./preflight.js";
 import { checkModelPrice, withEffectivePrices } from "./effectivePrice.js";
 import { appendEvent, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
-import { createAdapter } from "./adapters/index.js";
+import { adapterCacheKey, createAdapter } from "./adapters/index.js";
 import {
   defaultAdcPath,
   selectGeminiBackend,
@@ -38,6 +38,10 @@ import {
 } from "./adapters/geminiTransports.js";
 import type { TaskPacket, TelemetryEvent, Policy, SelectOverrides } from "./types.js";
 import { resolveProjectRoot } from "./project-root.js";
+import { checkCostCap } from "./costCap.js";
+import { assertPathAllowed } from "./safePath.js";
+import { tmpdir } from "node:os";
+import { AMBIENT_TOOLS, AMBIENT_TOOL_NAMES, chatPolicyNames, handleAmbientTool } from "./ambient/tools.js";
 import { log, setLevel, configureSinks, type Level } from "./log.js";
 
 /**
@@ -101,7 +105,10 @@ function ensurePolicy(policyName?: string, projectRoot?: string, policyPath?: st
   // An omitted project_root falls back to the one an earlier caller supplied,
   // so a dispatch resolves the same policy the preview did. See project-root.ts.
   projectRoot = resolveProjectRoot(projectRoot);
-  const key = `${policyName ?? "opus-only"}|${projectRoot ?? ""}|${policyPath ?? ""}`;
+  // The file's size and time are part of the key: an edited policy is picked
+  // up on the next call instead of at the next server restart.
+  const file = policyFileFor({ policyName, projectRoot, policyPath });
+  const key = `${policyName ?? "opus-only"}|${projectRoot ?? ""}|${policyPath ?? ""}|${file}|${policyStamp(file)}`;
   if (activePolicy && activePolicyKey === key) return activePolicy;
   const policy = policyPath
     ? loadPolicyFromPath(policyPath)
@@ -139,15 +146,16 @@ function legacySelectValue(): string | undefined {
 }
 
 function adapterFor(policy: Policy, modelId: string) {
-  const cacheHit = adapterCache.has(modelId);
+  const cacheKey = adapterCacheKey(getModel(policy, modelId));
+  const cacheHit = adapterCache.has(cacheKey);
   if (cacheHit) {
-    const cached = adapterCache.get(modelId)!;
+    const cached = adapterCache.get(cacheKey)!;
     log("debug", "adapter.construct", { model_id: modelId, adapter: getModel(policy, modelId).adapter, cache_hit: true });
     return cached;
   }
   const model = getModel(policy, modelId);
   const adapter = createAdapter(model);
-  adapterCache.set(modelId, adapter);
+  adapterCache.set(cacheKey, adapter);
   log("debug", "adapter.construct", { model_id: modelId, adapter: model.adapter, cache_hit: false });
   return adapter;
 }
@@ -382,6 +390,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    // Ambient-mode job tools (docs/ambient-mode.md). Listed always; every call
+    // is refused unless a plugin hook stamped it, so they do nothing in a
+    // session where ambient mode is off.
+    ...AMBIENT_TOOLS,
   ],
 }));
 
@@ -394,6 +406,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (a0?.log_level) setLevel(a0.log_level as Level);
   else if (a0?.verbose) setLevel("debug");
 
+  // Every path below is chosen by the model. Checked before ANY of them is
+  // used, including by the log sinks on the next line.
+  try {
+    const roots = [process.env.CLAUDE_PROJECT_DIR ?? process.cwd(), tmpdir()];
+    for (const key of ["telemetry_path", "project_root", "work_dir", "policy_path", "manifest_path"]) assertPathAllowed(key, a0?.[key], roots);
+  } catch (err: any) {
+    return { content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }], isError: true };
+  }
+
   if (a0?.telemetry_path) configureSinks({ telemetryPath: a0.telemetry_path });
   else if (a0?.project_root) configureSinks({ projectRoot: a0.project_root });
 
@@ -402,6 +423,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   log("debug", "tool.call.start", { tool: name, arg_keys: Object.keys(a0 ?? {}).join(",") });
 
   try {
+    if (AMBIENT_TOOL_NAMES.has(name)) {
+      const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+      return await handleAmbientTool(name, args, {
+        projectDir,
+        // Loaded directly, not through ensurePolicy: a chat job must never swap
+        // the policy a typed pipeline in this server process is using.
+        policies: () => chatPolicyNames(process.env).map((policyName) => loadPolicy({ policyName, projectRoot: projectDir })),
+      });
+    }
     switch (name) {
       case "execute_with_model": {
         const a = args as any;
@@ -431,6 +461,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           select_chosen: decision.selection?.chosen,
           select_overridden: decision.selection?.overridden,
         });
+
+        // The policy's hard cap, summed from the run's telemetry file so it
+        // holds across sessions. Checked before the adapter is even built:
+        // a refused dispatch must cost nothing.
+        const capCheck = checkCostCap(policy as { hard_cost_cap_usd?: unknown }, a.telemetry_path);
+        if (!capCheck.ok) {
+          log("error", "dispatch.refused", { packet_id: packet.id, error_class: "CostCapReached", spent_usd: capCheck.spent, cap_usd: capCheck.cap ?? undefined });
+          return {
+            content: [{ type: "text", text: `Error: hard_cost_cap_usd reached. This run has spent $${capCheck.spent.toFixed(2)} of its $${capCheck.cap} cap, so this dispatch was refused and cost nothing. Raise hard_cost_cap_usd in the policy to continue, or stop the run.` }],
+            isError: true,
+          };
+        }
 
         const adapter = adapterFor(policy, decision.modelId);
         const dispatchStarted = Date.now();
@@ -635,6 +677,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       error_class: toolCallErrorClass,
     });
   }
+});
+
+// The server must outlive its own faults. It is one long-lived process per
+// session; if it exits, every later tool call in that session fails with a
+// transport error that says nothing about why. A stray rejection from an
+// adapter's background work is logged and the process carries on.
+process.on("uncaughtException", (err) => {
+  log("error", "server.uncaught_exception", { error_class: err?.name ?? "Error", message: String(err?.message ?? err).slice(0, 500) });
+});
+process.on("unhandledRejection", (reason) => {
+  const err = reason as { name?: string; message?: string } | undefined;
+  log("error", "server.unhandled_rejection", { error_class: err?.name ?? "Rejection", message: String(err?.message ?? reason).slice(0, 500) });
 });
 
 const transport = new StdioServerTransport();

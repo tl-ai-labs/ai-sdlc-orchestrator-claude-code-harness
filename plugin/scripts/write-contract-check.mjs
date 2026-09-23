@@ -27,8 +27,8 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { resolve, relative, sep, dirname, isAbsolute } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { resolve, relative, sep, dirname, isAbsolute, basename, join } from "node:path";
 import { HARDCODED_OFF_LIMITS } from "./lib/off-limits.mjs";
 import { log } from "./lib/log.mjs";
 
@@ -80,6 +80,35 @@ function toRepoRelative(target, contractPath) {
   let rel = relative(repoRoot, abs);
   if (sep !== "/") rel = rel.split(sep).join("/");
   return { rel, escapes: rel.startsWith("../") || rel === ".." };
+}
+
+/**
+ * Where a write REALLY lands: the real path of the deepest ancestor that
+ * exists, plus whatever is still to be created below it. Every check in this
+ * hook used the path as written, so a symlink inside an allowed directory that
+ * points at `.env`, or out of the repository, passed while the write landed
+ * somewhere else. Unresolvable input returns the path unchanged (fail-open).
+ */
+function landingPath(abs) {
+  let cur = abs;
+  const tail = [];
+  for (let i = 0; i < 64; i++) {
+    try {
+      return join(realpathSync(cur), ...tail.reverse());
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return abs;
+      tail.push(basename(cur));
+      cur = parent;
+    }
+  }
+  return abs;
+}
+
+/** `landing` relative to the real repo root, "/"-separated, or null when it is outside. */
+function landingRel(repoRoot, landing) {
+  const rel = relative(landingPath(repoRoot), landing).split(sep).join("/");
+  return rel === ".." || rel.startsWith("../") || isAbsolute(rel) ? null : rel;
 }
 
 /**
@@ -180,6 +209,13 @@ async function main() {
 
   const absTarget = isAbsolute(target) ? target : resolve(process.cwd(), target);
   const targetNorm = absTarget.split(sep).join("/");
+  const landing = landingPath(absTarget);
+  const landingNorm = landing.split(sep).join("/");
+  // True when a symlink sits somewhere between `anchor` and the target. The
+  // anchor itself is resolved first: on macOS the temp and home trees live
+  // behind system symlinks, and those must not count.
+  const symlinkedBelow = (anchor) => landing !== join(landingPath(anchor), relative(anchor, absTarget));
+  const viaSymlink = symlinkedBelow(process.cwd());
 
   // Read cwd's contract early so both the escape check and the contract-active
   // check below can consult its `active` field. A stale (active:false)
@@ -208,6 +244,16 @@ async function main() {
     }
   }
 
+  if (cwdContract && cwdContract.active === true && viaSymlink) {
+    const cwdRepoRoot = resolve(cwdContractPath, "..", "..", "..");
+    if (landingRel(cwdRepoRoot, landing) === null) {
+      deny(
+        `${target} is a symlink path that lands at ${landing}, OUTSIDE the contracted repo (${cwdRepoRoot}). ` +
+        `A brownfield run can only write inside the repo whose contract it holds.`
+      );
+    }
+  }
+
   // Contract selection: prefer target-anchored (correct even if the shell
   // has drifted). Fall back to cwd-anchored, then to no contract.
   const contractPath = findContractPath(dirname(absTarget)) ?? cwdContractPath;
@@ -221,7 +267,9 @@ async function main() {
     // deep absolute paths in one call — no need to probe three normalized
     // forms of the target (the old approach dropped `/repo/.git/refs/heads/main`
     // and `/repo/node_modules/pkg/file.js`).
-    const preHit = HARDCODED_OFF_LIMITS.find((p) => matchesAtAnyDepth(targetNorm, p));
+    const preHit =
+      HARDCODED_OFF_LIMITS.find((p) => matchesAtAnyDepth(targetNorm, p)) ??
+      (viaSymlink ? HARDCODED_OFF_LIMITS.find((p) => matchesAtAnyDepth(landingNorm, p)) : undefined);
     if (preHit) {
       deny(
         `${target} matches always-off-limits pattern "${preHit}" (no active brownfield contract; ` +
@@ -273,6 +321,27 @@ async function main() {
       path: rel,
       matchedRule: `${ownRunDir}**`,
     });
+  }
+
+  // A symlinked target is judged twice: by its name (below) and by where it
+  // lands. The landing place must be inside the repo, clear of off-limits, and
+  // itself allowlisted; strict=false does not soften this, because the name the
+  // run confirmed at Gate 0 is not the file being written.
+  const repoRoot = resolve(contractPath, "..", "..", "..");
+  if (symlinkedBelow(repoRoot)) {
+    const realRel = landingRel(repoRoot, landing);
+    if (realRel === null) {
+      deny(`${rel} is a symlink path that lands at ${landing}, outside the contracted repo.`, { runId: contract.run_id, path: rel });
+    }
+    const realOff = firstMatch(realRel, contract.off_limits);
+    if (realOff) {
+      deny(`${rel} is a symlink path that lands on ${realRel}, which matches off-limits pattern "${realOff}".`,
+        { runId: contract.run_id, path: rel, matchedRule: realOff, strict: contract.strict });
+    }
+    if (!firstMatch(realRel, contract.allowlist) && !(ownRunDir && realRel.startsWith(ownRunDir))) {
+      deny(`${rel} is a symlink path that lands on ${realRel}, which is not in the confirmed allowlist.`,
+        { runId: contract.run_id, path: rel, strict: contract.strict });
+    }
   }
 
   // Off-limits check runs first — an off-limits path is refused even if it

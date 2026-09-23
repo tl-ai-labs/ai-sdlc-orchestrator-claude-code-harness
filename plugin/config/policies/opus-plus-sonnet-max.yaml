@@ -73,7 +73,6 @@ rules:
         - service_method
         - dto
         - module_wiring
-        - migration
         - seed_data
         - entity
         - guard

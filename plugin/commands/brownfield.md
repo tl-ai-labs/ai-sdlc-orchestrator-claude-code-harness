@@ -1,6 +1,7 @@
 ---
 description: "Run the AI-SDLC pipeline against an existing repository. Extends the plugin from greenfield-only to any real project — pick one of seven job types (docs, bugfix, feature-extend, feature-new, refactor, test, deps), confirm scope at Gate 0, and run with a non-destructive write contract that guarantees off-limits files stay untouched."
 argument-hint: ""
+disable-model-invocation: true
 ---
 
 Brownfield entry point. This command takes no arguments. Everything it needs it asks for.

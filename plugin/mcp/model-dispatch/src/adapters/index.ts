@@ -43,6 +43,14 @@ const ADAPTER_FACTORIES: Record<string, (config: ModelConfig) => ModelAdapter> =
 /** Every adapter id a policy may name, including the legacy compat alias. */
 export const KNOWN_ADAPTER_IDS: ReadonlySet<string> = new Set(Object.keys(ADAPTER_FACTORIES));
 
+/**
+ * What an adapter instance is bound to. Caching on the leaf id alone kept an
+ * adapter alive after the policy was edited to point that id somewhere else.
+ */
+export function adapterCacheKey(config: Pick<ModelConfig, "id" | "adapter" | "model_name" | "endpoint">): string {
+  return [config.id, config.adapter, config.model_name, config.endpoint ?? ""].join("|");
+}
+
 export function createAdapter(config: ModelConfig): ModelAdapter {
   const factory = ADAPTER_FACTORIES[config.adapter];
   if (!factory) {

@@ -113,6 +113,11 @@ export function buildWorkerArgs(i: WorkerArgsInput): string[] {
  */
 export const WORKER_STRIPPED_ENV = ["GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
 
+/** Credential-shaped variable names. Matched on the NAME only; values are never inspected. */
+const SECRET_ENV_NAME = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|WEBHOOK|DATABASE_URL|_DSN|AUTH_SOCK|COOKIE|SESSION)/i;
+/** Google ADC and gcloud variables the Vertex transport needs, kept even though their names match. */
+const WORKER_KEPT_ENV: ReadonlySet<string> = new Set(["GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_CONFIG", "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE"]);
+
 /**
  * Child env. Starts from the parent's (child needs PATH, HOME for ADC, and
  * on macOS DYLD_LIBRARY_PATH for pyexpat), pins project + location, strips
@@ -128,6 +133,14 @@ export function buildWorkerEnv(
     child[key] = value;
   }
   for (const key of WORKER_STRIPPED_ENV) delete child[key];
+  // The worker is an executing agent that runs allow-all. It needs PATH, HOME
+  // and Google's ADC; it has no use for anyone else's secrets, and whatever it
+  // can read it can also print or send. Anything that looks like a credential
+  // is dropped unless it is one of the Google variables the transport reads.
+  for (const key of Object.keys(child)) {
+    if (WORKER_KEPT_ENV.has(key)) continue;
+    if (SECRET_ENV_NAME.test(key)) delete child[key];
+  }
   child.GOOGLE_CLOUD_PROJECT = pins.project;
   child.GOOGLE_CLOUD_LOCATION = pins.location;
   // Unbuffered so a killed process's last stderr line — often the timeout

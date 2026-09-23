@@ -1,6 +1,7 @@
 ---
 description: "Re-verify or re-configure the SDLC plugin for this project. Runs the mechanical setup steps silently (MCP server build, environment check, credential probe), pauses only when a human decision is genuinely needed (missing credentials, Gemini door choice, policy pick). Idempotent — safe to re-run any time after `/plugin update` or when a credential changes."
 argument-hint: "[--policy=<name>] [--gemini-door=enterprise|antigravity] [--user]"
+disable-model-invocation: true
 ---
 
 Re-verify the SDLC plugin for this project. Auto-by-default: run the mechanical steps silently and

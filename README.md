@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.7.3-blue)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-0.8.2-blue)](.claude-plugin/marketplace.json)
 
 ![How the plugin works — you paste two prompts, an orchestrator routes premium work to Claude Opus and mechanical work to Gemini Flash, and your project gets both generated code and a full audit trail](docs/assets/hero.svg)
 
@@ -196,6 +196,8 @@ Both check the install, show which model each phase will run on, confirm the pla
 
 Thirteen commands, split by purpose. All are declared in [plugin/commands/](plugin/commands/) with the same descriptions shown here.
 
+Every command is typed-only (`disable-model-invocation: true`): it runs when you type it, and the model cannot start one on its own in the middle of ordinary chat. For savings without typing a command, see [ambient mode](docs/ambient-mode.md).
+
 ### Run the pipeline
 
 | Command | What it does | When to use it |
@@ -306,6 +308,7 @@ node tools/setup.mjs
 - [docs/methodology.md](docs/methodology.md) — how tokens and costs are recorded
 - [docs/two-gemini-paths.md](docs/two-gemini-paths.md) — measured comparison of the two doors on the same brief
 - [docs/brownfield-routing.md](docs/brownfield-routing.md) — which model does which work
+- [docs/ambient-mode.md](docs/ambient-mode.md) — savings in ordinary chat with no `/mmo:` command (ships off; `MMO_AMBIENT=observe` to try it)
 - [docs/walkthroughs/](docs/walkthroughs/) — the two Gemini paths, frame by frame ([model](docs/walkthroughs/model-path.html), [agent](docs/walkthroughs/agent-path.html))
 - [examples/unit-convert/](examples/unit-convert/) — one endpoint, one conversion, minutes to run
 - [examples/quick-demo/](examples/quick-demo/) — one-endpoint ping service, minutes to run

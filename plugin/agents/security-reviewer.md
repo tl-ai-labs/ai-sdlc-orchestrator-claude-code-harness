@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: Security reviewer. Performs threat-model-style pass over the generated codebase — PII handling, authz coverage, audit completeness, secret leakage, dependency risk. Produces security_review.md and gates HITL Gate 3.
+description: Security reviewer. Performs threat-model-style pass over the generated codebase — PII handling, authz coverage, audit completeness, secret leakage, dependency risk. Produces security_review.md and gates HITL Gate 3. Runs only inside a typed /mmo: command; never start it from ordinary chat.
 tools: Read, Glob, Grep, Bash, Write
 ---
 

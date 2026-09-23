@@ -42,7 +42,10 @@ models:
     pricing_last_verified: 2026-09-14
     # AI Studio door. Unset → adapter falls through to Vertex ADC, same rates.
     auth: { env: GEMINI_API_KEY }
-    max_output_tokens_absolute: 8192
+    # Raised from 8,192 with opus-plus-flash-v38 (the two policies are kept in
+    # step by test/geminiAdapterPricing.test.mjs): a chat job writing a whole
+    # test file was cut off at 8,192; about 12 cents caps one answer at 32,768.
+    max_output_tokens_absolute: 32768
 
   # The SAME model reached as an AGENT (Antigravity SDK session with tools and
   # a working directory). Same rates; several times more tokens per packet
@@ -112,7 +115,6 @@ rules:
         - service_method
         - dto
         - module_wiring
-        - migration
         - seed_data
         - entity
         - guard

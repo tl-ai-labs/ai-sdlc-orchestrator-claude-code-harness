@@ -1,6 +1,7 @@
 ---
 name: pipeline
 description: The end-to-end AI-SDLC workflow definition consumed by the orchestrator subagent. Defines the state machine, TaskPacket schema, HITL gates, telemetry contract, and the prompts/templates for each phase. The orchestrator reads this skill to know exactly what to do at each step.
+disable-model-invocation: true
 ---
 
 # AI-SDLC Workflow — Orchestrator Playbook

@@ -147,10 +147,17 @@ export class GeminiFlashAdapter implements ModelAdapter {
 
     for (let attemptNumber = 1; attemptNumber <= MAX_DOUBLINGS + 1; attemptNumber++) {
       const attemptStart = Date.now();
+      // The leaf's reasoning tier, when set, becomes Gemini's thinkingLevel.
+      // A typing job (ambient chat work) runs at "low": on 22 Sep whole-test-
+      // file jobs took three to five minutes with the vendor's default thinking,
+      // and those reasoning tokens are billed at the output rate.
+      const tier = this.modelConfig.reasoning?.tier;
+      const thinkingLevel = tier === "minimal" || tier === "low" ? "low" : tier === "medium" ? "medium" : tier === "high" ? "high" : undefined;
       const generationConfig: any = {
         temperature: 0.2,
         maxOutputTokens: ceiling,
         ...(wantsJson ? { responseMimeType: "application/json" } : {}),
+        ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
       };
       if (wantsJson) generationConfig.responseSchema = packet.outputSchema;
 

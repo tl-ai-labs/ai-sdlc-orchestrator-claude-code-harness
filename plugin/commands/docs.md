@@ -1,6 +1,7 @@
 ---
 description: "Write or update documentation on this repo — API docs, README, ADRs, or docstrings. Alias into /mmo:brownfield with intent=docs pre-selected. Example: write API docs, README, ADRs, docstrings for the auth module."
 argument-hint: "[what to document, in one line]"
+disable-model-invocation: true
 ---
 
 Docs job on an existing repository — an alias into `/mmo:brownfield` with the job type

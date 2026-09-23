@@ -1,6 +1,6 @@
 ---
 name: architect
-description: Senior solution architect. Produces design.md from a requirements.md — data model, API contract, module boundaries, key cross-cutting decisions with ADR rationale. Invoked by the orchestrator during the architecture_design phase.
+description: Senior solution architect. Produces design.md from a requirements.md — data model, API contract, module boundaries, key cross-cutting decisions with ADR rationale. Invoked by the orchestrator during the architecture_design phase. Runs only inside a typed /mmo: command; never start it from ordinary chat.
 tools: Read, Write
 ---
 

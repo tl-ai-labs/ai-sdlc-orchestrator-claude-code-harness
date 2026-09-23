@@ -11,7 +11,7 @@
  * if it has one, else this preset".
  */
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { Policy, ModelConfig } from "./types.js";
@@ -25,6 +25,30 @@ const PLUGIN_POLICY_DIR = resolve(
   "config",
   "policies"
 );
+
+/** The file loadPolicy would read for these options; same order of preference. */
+export function policyFileFor(opts: { policyName?: string; projectRoot?: string; policyPath?: string }): string {
+  if (opts.policyPath) return opts.policyPath;
+  if (opts.projectRoot) {
+    const override = join(opts.projectRoot, "routing-policy.yaml");
+    if (existsSync(override)) return override;
+  }
+  return join(PLUGIN_POLICY_DIR, `${opts.policyName ?? "opus-only"}.yaml`);
+}
+
+/**
+ * A cheap fingerprint of a policy file: size and modification time. Part of the
+ * policy cache key, so an edited file is re-read on the next call without a
+ * server restart. Cheaper than hashing, and enough: an edit changes one of them.
+ */
+export function policyStamp(path: string): string {
+  try {
+    const st = statSync(path);
+    return `${st.size}:${st.mtimeMs}`;
+  } catch {
+    return "missing";
+  }
+}
 
 export function loadPolicy(opts: {
   policyName?: string;          // e.g. "opus-only"

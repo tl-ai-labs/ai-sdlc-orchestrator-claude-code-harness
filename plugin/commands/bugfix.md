@@ -1,6 +1,7 @@
 ---
 description: "Fix a specific defect on this repo: reproduce it, diagnose it, fix it, add a regression test. Alias into /mmo:brownfield with intent=bugfix pre-selected. Example: fix the /login endpoint returning 500 on missing password."
 argument-hint: "[the bug, in one line]"
+disable-model-invocation: true
 ---
 
 Bug-fix job on an existing repository — an alias into `/mmo:brownfield` with the job type

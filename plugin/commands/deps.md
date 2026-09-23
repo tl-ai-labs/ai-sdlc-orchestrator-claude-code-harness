@@ -1,6 +1,7 @@
 ---
 description: "Upgrade a dependency on this repo and patch the breaking-change fallout it causes. Alias into /mmo:brownfield with intent=deps pre-selected. Example: upgrade jest 28 → 29 (and adapt breaking changes)."
 argument-hint: "[the dependency + target version, in one line]"
+disable-model-invocation: true
 ---
 
 Dependency-upgrade job on an existing repository — an alias into `/mmo:brownfield` with the job

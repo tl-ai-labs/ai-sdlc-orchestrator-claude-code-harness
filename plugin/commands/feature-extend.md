@@ -1,6 +1,7 @@
 ---
 description: "Add a capability to an existing endpoint or module on this repo. Alias into /mmo:brownfield with intent=feature-extend pre-selected. Example: add a ?filter param to the existing /users endpoint."
 argument-hint: "[the capability to add, in one line]"
+disable-model-invocation: true
 ---
 
 Feature-extend job on an existing repository — an alias into `/mmo:brownfield` with the job type

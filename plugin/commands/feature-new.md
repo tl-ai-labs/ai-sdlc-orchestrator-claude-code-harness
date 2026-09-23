@@ -1,6 +1,7 @@
 ---
 description: "Design and add a new subsystem to this repo — endpoint, storage, and tests together. Alias into /mmo:brownfield with intent=feature-new pre-selected. Example: add a webhooks module (endpoint, storage, retry loop)."
 argument-hint: "[the subsystem to add, in one line]"
+disable-model-invocation: true
 ---
 
 Feature-new job on an existing repository — an alias into `/mmo:brownfield` with the job type

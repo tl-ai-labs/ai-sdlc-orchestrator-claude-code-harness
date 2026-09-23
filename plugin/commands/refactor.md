@@ -1,6 +1,7 @@
 ---
 description: "Extract shared logic and update call sites on this repo, verified by the full test suite. Alias into /mmo:brownfield with intent=refactor pre-selected. Example: extract shared date logic into a util module and update all call sites."
 argument-hint: "[what to refactor, in one line]"
+disable-model-invocation: true
 ---
 
 Refactor job on an existing repository — an alias into `/mmo:brownfield` with the job type

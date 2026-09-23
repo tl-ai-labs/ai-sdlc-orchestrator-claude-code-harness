@@ -1,6 +1,7 @@
 ---
 description: "Run the AI-SDLC pipeline against a project brief. Takes no arguments — asks for whatever it needs, checks the setup before spending anything, and reports tokens and cost per phase when the run finishes."
 argument-hint: ""
+disable-model-invocation: true
 ---
 
 Run one full AI-SDLC pass. This command takes no arguments. Everything it needs it asks for.

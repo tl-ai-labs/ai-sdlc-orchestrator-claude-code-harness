@@ -15,7 +15,9 @@ let remembered: string | undefined;
 /** Record `supplied` when present; return the root to resolve with. */
 export function resolveProjectRoot(supplied?: string): string | undefined {
   if (supplied) remembered = supplied;
-  return supplied ?? remembered;
+  // Claude Code names the project for every process it starts. Used only when
+  // no caller has supplied a root, so an explicit argument always wins.
+  return supplied ?? remembered ?? (process.env.CLAUDE_PROJECT_DIR || undefined);
 }
 
 /** Test seam: forget the recorded root between cases. */
