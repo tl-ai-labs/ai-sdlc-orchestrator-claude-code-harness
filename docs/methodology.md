@@ -247,6 +247,13 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.8.1
+
+| Area | Before | From v0.8.1 |
+|---|---|---|
+| Batched dispatch under a multi-model policy | `execute_batch` was missing from the orchestrator's `tools:` list, so the orchestrator handed each batch to a helper subagent, whose transcript counted toward `orchestrator_overhead` | The orchestrator calls `execute_batch` itself. Rates, telemetry fields and the collector are unchanged. |
+| Architect tools and plan form | `Read, Write` only: files were found by guessing paths, and any fix rewrote the whole plan; the multi-model plan carried the full per-unit form | `Edit` and read-only search added. The plan is written once and fixed section by section; both policies use the brief form, and multi-model adds only verbatim anchor text and import specifiers. Architecture-phase cost per run is expected to fall; the pricing rules are unchanged. |
+
 ### v0.7.3
 
 | Area | Before | From v0.7.3 |

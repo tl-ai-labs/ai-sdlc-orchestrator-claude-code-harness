@@ -166,7 +166,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/plan-lint.mjs" "<output_dir>/change_plan.md"
 ```
 
 Exit 0: open Gate 2. Exit 1: re-delegate the architect **once** with the printed violation list
-("shrink these sections to Exports / Behavior / Mirror"), lint again, and open Gate 2 whatever the
+("Edit these sections in place to Exports / Behavior / Mirror; do not rewrite the file"), lint again, and open Gate 2 whatever the
 second result — but log `phase.end` with `plan_lint=failed` and say so in the gate prompt and in
 SUMMARY.md, because the run's cost will show it. Never edit the plan yourself to pass the lint: the
 sections are the worker's inputs, and a hand edit here is Opus re-typing the program, which is the
@@ -216,7 +216,9 @@ unit); `inputs` = unit section + `House style` + Mirror slices; `verify` from th
 `depends_on` from Depends on. It also checks the plan against the repo: a mirror file that does not exist
 or a line past its end is a **warning** on stderr, an edit to a missing file or a mirror outside the repo
 is an **error** (exit 1). On exit 1 the plan is wrong, not the script — re-delegate the architect with
-the error lines, as for a lint failure. On exit 0, read the summary line and the warnings; adjust a
+the error lines and the unit ids they name, as for a lint failure: "Edit these units in place; do not
+rewrite the file". A fresh delegation that rewrote the whole plan
+for a one-line fix cost ≈ 7.7k output tokens on the run this comes from. On exit 0, read the summary line and the warnings; adjust a
 packet only when a warning names it (a dropped mirror the worker needs, a wrong `task_type` for the
 policy's routing) and log the `plan_task_packets` event with the tokens you actually spent — on the run
 this comes from, hand-writing the same 17 packets cost $1.03 and 9 turns. Greenfield still plans by
