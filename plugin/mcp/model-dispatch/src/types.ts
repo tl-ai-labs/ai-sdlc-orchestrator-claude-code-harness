@@ -71,6 +71,12 @@ export interface ApplySpec {
    * replaced by the artifact path. All must exit 0 for the attempt to pass.
    */
   verify?: string[];
+  /**
+   * Formatter commands run after the write and before `verify` (same `{path}`
+   * substitution). Their exit code is ignored — `verify` still judges the file —
+   * so a formatting-only miss costs a second of formatter time, not a retry.
+   */
+  format?: string[];
   /** Mechanical-tier retries the server may spend on verify failures. Default 2. */
   max_retries?: number;
   /** Seconds each verify command may run. Default 120. */

@@ -36,6 +36,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const DEFAULTS = { maxBlockLines: 12, maxFencedLines: 150 };
 
+/**
+ * Advisory only (never fails the lint — a re-delegation costs more than it saves):
+ * the brief plan form measured 407 lines / 27.5 kB on the kaneo BIG brief; the
+ * multi-model plan for the same brief was 766 / 48.7 kB (Run 23), and it is
+ * Opus output that both reviewers re-read. Notes feed the run's notes.md.
+ */
+export const PLAN_LINE_BUDGET = 500;
+
 /** Headings that announce a transcription target rather than a spec. */
 const LITERAL_BODY_HEADINGS = /^\s*(\*\*)?(content|full file|complete file|file contents?)(\*\*)?\s*:?\s*(\*\*)?\s*$/i;
 
@@ -55,6 +63,8 @@ export function lintPlan(text, opts = {}) {
   let fenceLines = 0;
   let fencedBlocks = 0;
   let fencedLines = 0;
+  const notes = [];
+  const sectionLines = new Map();
 
   lines.forEach((raw, i) => {
     const n = i + 1;
@@ -85,8 +95,10 @@ export function lintPlan(text, opts = {}) {
     if (/^#{1,6}\s/.test(raw)) {
       section = raw.replace(/^#+\s*/, "").trim();
       sections += 1;
+      if (/^###\s+Edits?\b/i.test(raw)) notes.push({ line: n, section, kind: "edit_sites_form", detail: "edit sites under a `### Edits` heading — write them as sub-bullets of `- **Edit anchor**`: after `:N` `<line text>`" });
       return;
     }
+    if (/^#{1,2}\s/.test(section) === false) sectionLines.set(section, (sectionLines.get(section) ?? 0) + 1);
     if (LITERAL_BODY_HEADINGS.test(raw)) {
       violations.push({
         line: n,
@@ -108,13 +120,18 @@ export function lintPlan(text, opts = {}) {
       detail: `${fencedLines} fenced lines in total (max ${maxFencedLines}) across ${fencedBlocks} blocks`,
     });
   }
-  return { ok: violations.length === 0, violations, stats: { fencedBlocks, fencedLines, sections } };
+  const planLines = lines.filter((l) => l.trim()).length;
+  if (planLines > PLAN_LINE_BUDGET) {
+    notes.push({ line: 0, section: "(whole plan)", kind: "long_plan", detail: `${planLines} non-blank lines (brief form ≈ ${PLAN_LINE_BUDGET}); largest sections: ${[...sectionLines].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([s, c]) => `${s} (${c})`).join(", ")}` });
+  }
+  return { ok: violations.length === 0, violations, notes, stats: { fencedBlocks, fencedLines, sections, planLines } };
 }
 
 export function formatReport(path, result) {
   const { stats, violations } = result;
-  const head = `plan-lint ${result.ok ? "ok" : "FAILED"}: ${path} — ${stats.sections} sections, ${stats.fencedBlocks} fenced blocks, ${stats.fencedLines} fenced lines`;
-  if (result.ok) return head;
+  const head = `plan-lint ${result.ok ? "ok" : "FAILED"}: ${path} — ${stats.sections} sections, ${stats.planLines} lines, ${stats.fencedBlocks} fenced blocks, ${stats.fencedLines} fenced lines`;
+  const noteRows = (result.notes ?? []).map((v) => `  note L${v.line || "-"} [${v.section}] ${v.kind}: ${v.detail}`);
+  if (result.ok) return noteRows.length ? `${head}\n${noteRows.join("\n")}` : head;
   const rows = violations.map((v) => `  L${v.line || "-"} [${v.section}] ${v.kind}: ${v.detail}`);
   return `${head}\n${rows.join("\n")}\n\nRe-delegate the architect with this list: shrink each named section to a spec (Exports as signatures, Behavior as numbered rules, Mirror as path:lines). The plan is read by the worker through inputs[].section, so nothing is lost by pointing instead of pasting.`;
 }

@@ -11,7 +11,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const { parsePlan, parseRef, parseAnchors, classify, moduleOf, buildPackets, main } = await import(
+const { parsePlan, parseRef, parseAnchors, editSites, splitVerify, formatCommands, classify, moduleOf, buildPackets, main } = await import(
   join(HERE, "..", "..", "..", "scripts", "plan-to-packets.mjs")
 );
 
@@ -169,7 +169,7 @@ test("buildPackets: one packet per unit, apply form, edit lists with anchor cont
     { path: ".sdlc/runs/r1/change_plan.md", section: "House style", reason: "house style" },
     { path: "apps/api/src/user/controllers/get-avatar.ts", lines: [1, 21], reason: "mirror" },
   ]);
-  assert.deepEqual(a1.apply, { write: true, mode: "content", verify: ["pnpm exec biome check {path}"], max_retries: 2 });
+  assert.deepEqual(a1.apply, { write: true, mode: "content", format: ["pnpm exec biome check --write {path}"], verify: ["pnpm exec biome check {path}"], max_retries: 2 });
   assert.deepEqual(a1.acceptance, ["projection is exactly id,name,image", "null for unknown"]);
   assert.match(a1.instruction, /Implement `apps\/api\/src\/user\/controllers\/get-public-profile.ts` from change_plan section `A1`/);
   assert.equal(a1.outputSchema, undefined, "the server supplies the schema under apply");
@@ -301,4 +301,72 @@ test("main writes packets.json beside the plan by default and returns 0; usage e
   assert.equal(summary.packets, 5);
   assert.equal(summary.edits, 2);
   rmSync(root, { recursive: true, force: true });
+});
+
+// Run 23: the architect wrote `### Edits` + `- **L939** \`text\`` items; no anchors were found and every edit
+// unit fell back to a whole-file packet with exit 0.
+test("editSites reads a `### Edits` sub-heading with **L<n>** items as the Edit anchor bullet", () => {
+  const body = [
+    "- **File** `apps/api/src/index.ts` · **Action** `edit` · **Depends on** A4",
+    "",
+    "### Edits",
+    "",
+    "- **L939** `export type AppType =` → insert a new line **after** it: `  | typeof x`",
+    "- **L59** `import getAvatar from \"./user/controllers/get-avatar\";` → insert after it:",
+    "  `import p from \"./user/public-profile\";` (Biome puts it before `./utils/a` on `:60`.)",
+    "",
+    "- **Acceptance**",
+    "  - mentions `:574` but is not a site",
+  ];
+  assert.deepEqual(parseAnchors(editSites(body)), [
+    { line: 59, anchor: 'import getAvatar from "./user/controllers/get-avatar";' },
+    { line: 939, anchor: "export type AppType =" },
+  ]);
+  assert.equal(editSites(["- **Behavior** none"]), null);
+});
+
+test("parseAnchors ignores line references on wrapped continuation lines (prose, not sites)", () => {
+  const b = { head: "", rest: [
+    "  - before `:250` `  api.post(\"/w\", h);` → insert the mount block.",
+    "    This lands it after the `publicProjectApi` block (`:243-248`) and above",
+    "    the catch-all `api.use(\"*\", …)` at `:574`, which is what makes it public.",
+  ] };
+  assert.deepEqual(parseAnchors(b), [{ line: 250, anchor: '  api.post("/w", h);' }]);
+});
+
+test("buildPackets --multi-model: an edit unit with no sites is an error; without it, a whole-file warning", () => {
+  const root = repo();
+  const plan = parsePlan("## House style\n- x\n\n## A1 — apps/api/src/index.ts\n\n- **File** `apps/api/src/index.ts` · **Action** `edit` · **Depends on** —\n- **Edit anchor** after the last import.\n- **Verify** `pnpm exec biome check apps/api/src/index.ts`\n");
+  const multi = buildPackets(plan, { runId: "r1", planPath: "p.md", projectRoot: root, multiModel: true });
+  assert.equal(multi.packets.length, 0);
+  assert.match(multi.errors[0], /A1: edit of apps\/api\/src\/index.ts has no edit sites/);
+  const single = buildPackets(plan, { runId: "r1", planPath: "p.md", projectRoot: root });
+  assert.deepEqual(single.errors, []);
+  assert.equal(single.packets[0].apply.mode, "content");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("splitVerify keeps a shell-escaped or quoted path file-scoped", () => {
+  const path = "apps/web/src/routes/public-profile.$userId.tsx";
+  const { scoped, deferred } = splitVerify([
+    "pnpm exec biome check apps/web/src/routes/public-profile.\\$userId.tsx",
+    "pnpm exec biome check 'apps/web/src/routes/public-profile.$userId.tsx'",
+    "pnpm --filter @kaneo/web typecheck",
+  ], path);
+  assert.equal(scoped.length, 2);
+  assert.deepEqual(deferred, ["pnpm --filter @kaneo/web typecheck"]);
+});
+
+test("formatCommands derives the write form of biome / prettier checks and nothing else", () => {
+  assert.deepEqual(formatCommands([
+    "pnpm exec biome check {path}",
+    "pnpm exec biome format apps/x.ts",
+    "npx prettier --check apps/y.ts",
+    "pnpm exec biome check --write apps/z.ts",
+    "pnpm --filter @kaneo/api exec vitest run tests/a.test.ts",
+  ]), [
+    "pnpm exec biome check --write {path}",
+    "pnpm exec biome format --write apps/x.ts",
+    "npx prettier --write apps/y.ts",
+  ]);
 });

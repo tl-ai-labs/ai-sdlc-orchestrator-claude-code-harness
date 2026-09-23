@@ -513,7 +513,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "TaskPacket (see types.ts). An inputs[] slice without `content` is read from disk under " +
               "project_root (narrow it with `lines: [from, to]` or `section: '<heading>'`). " +
-              "`apply: { write: true, verify?: ['cmd {path}', ...], max_retries? }` makes the server write the " +
+              "`apply: { write: true, format?: ['cmd {path}'], verify?: ['cmd {path}', ...], max_retries? }` makes the server write the " +
               "returned content to artifact_path (write contract + provenance), run the verify commands, retry on " +
               "the same model with the failure appended, and return a receipt instead of the file. It returns " +
               "status 'escalate' the moment the policy would route the next attempt to a different model.",

@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "..", "..", "..", "scripts", "plan-lint.mjs");
-const { lintPlan, DEFAULTS } = await import(pathToFileURL(SCRIPT).href);
+const { lintPlan, formatReport, DEFAULTS } = await import(pathToFileURL(SCRIPT).href);
 
 const fence = (n, lang = "ts") => ["```" + lang, ...Array.from({ length: n }, (_, i) => `line ${i + 1}`), "```"].join("\n");
 
@@ -36,7 +36,7 @@ Verify: npx biome check {path}
 test("a spec-shaped plan passes with stats", () => {
   const r = lintPlan(SPEC);
   assert.equal(r.ok, true, JSON.stringify(r.violations));
-  assert.deepEqual(r.stats, { fencedBlocks: 1, fencedLines: 3, sections: 3 });
+  assert.deepEqual(r.stats, { fencedBlocks: 1, fencedLines: 3, sections: 3, planLines: 16 });
 });
 
 test("a fenced block longer than the limit fails and names its section", () => {
@@ -105,4 +105,14 @@ test("CLI: exit 0 on a clean plan, 1 with the report on stderr for a literal pla
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("notes (advisory, never failing): `### Edits` form and a plan past the line budget", () => {
+  const units = Array.from({ length: 70 }, (_, i) => `## A${i + 1} — f${i}.ts\n\n- **File** \`f${i}.ts\` · **Action** \`new_file\`\n- **Behavior**\n  1. a\n  2. b\n  3. c\n  4. d\n  5. e\n`).join("\n");
+  const r = lintPlan(`# Plan\n\n## A0 — x.ts\n\n### Edits\n\n- **L3** \`x\` → after\n\n${units}`);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.notes.map((n) => n.kind), ["edit_sites_form", "long_plan"]);
+  assert.ok(r.stats.planLines > 500);
+  assert.match(formatReport("p.md", r), /^plan-lint ok: .*\n  note L5 \[Edits\] edit_sites_form/);
+  assert.deepEqual(lintPlan("## A1 — a.ts\n\n- **Edit anchor**\n  - after `:3` `x`\n").notes, []);
 });

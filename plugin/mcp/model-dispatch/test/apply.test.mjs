@@ -9,6 +9,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = join(HERE, "..", "dist");
@@ -393,4 +394,19 @@ test("the compiled server wires the apply loop and stops before a routed model c
   const fn = src.indexOf("async function runPacket(");
   assert.ok(src.indexOf("hydrateInputs(packet0", fn) > fn, "inputs are hydrated in runPacket before dispatch");
   assert.ok(src.indexOf("runBatch({", src.indexOf('case "execute_batch"')) > 0, "execute_batch schedules through runBatch");
+});
+
+test("applyContent runs format commands before provenance, and the receipt describes the formatted file", () => {
+  const root = tmpRoot();
+  const r = applyContent(root, "src/f.ts", "export const a = 1;   \n", {
+    packetId: "tp_f",
+    runId: "run-f",
+    format: ["sed -i 's/[[:space:]]*$//' {path}", "false"],
+  });
+  assert.equal(readFileSync(join(root, "src", "f.ts"), "utf8"), "export const a = 1;\n", "format ran on the written file");
+  assert.equal(r.bytes, 20, "the receipt is the file as it stays on disk");
+  const prov = JSON.parse(readFileSync(join(root, ".sdlc", "runs", "run-f", "provenance.json"), "utf8"));
+  const touched = prov.files_touched.find((f) => f.path === "src/f.ts");
+  assert.ok(touched.sha_after.endsWith(createHash("sha256").update("export const a = 1;\n").digest("hex")), "provenance hashes the formatted file");
+  rmSync(root, { recursive: true, force: true });
 });

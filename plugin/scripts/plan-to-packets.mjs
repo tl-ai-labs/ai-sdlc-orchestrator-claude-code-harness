@@ -26,7 +26,10 @@
  *
  * Usage: node plan-to-packets.mjs <change_plan.md> --run-id <id> [--intent <i>]
  *          [--project-root <dir>] [--plan-path <repo-relative plan path>]
- *          [--out packets.json] [--json]
+ *          [--out packets.json] [--json] [--multi-model]
+ *
+ * --multi-model (the policy has a mechanical tier): an edit unit with no edit
+ * sites is an error, not a whole-file fallback.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -95,7 +98,7 @@ export function parseRef(ref) {
   if (!/[\/]/.test(m[1]) && !/\.(ts|tsx|js|jsx|mjs|cjs|json|md|ya?ml|svg|html|css|scss|py|go|rs|java|kt|sql|toml|txt|env|prisma)$/i.test(m[1])) return null;
   if (/[*?]/.test(m[1])) return null;
   // An import specifier (`../../x`, `./x`, `@/x`, `@scope/pkg`) is how code names a module, not where the file is.
-  if (/^(\.\.?\/|@)/.test(m[1])) return null;
+  if (/^["']?(\.\.?\/|@)/.test(m[1])) return null;
   const ranges = [];
   if (m[2]) {
     for (const r of m[2].split(",")) {
@@ -160,21 +163,49 @@ function activeContract(projectRoot, runId) {
 }
 
 /**
+ * The edit sites of one unit: the `- **Edit anchor**` bullet, or — the form an
+ * architect wrote on Run 23 — a `### Edits` sub-heading whose items start with
+ * `**L<n>**`. That form yielded no anchors, so all five edit units fell back to
+ * whole-file packets (82 kB and 65 kB files against an 8k output cap) while the
+ * script still exited 0. Both forms are read here as one bullet.
+ */
+export function editSites(body) {
+  const b = bullet(body, "Edit anchor");
+  if (b) return b;
+  const start = body.findIndex((l) => /^###\s+Edit/i.test(l));
+  if (start === -1) return null;
+  const rest = [];
+  for (let j = start + 1; j < body.length; j++) {
+    const l = body[j];
+    if (/^#{2,3}\s/.test(l)) break;
+    // A top-level labelled bullet (`- **Acceptance**`) ends the list; an `**L59**` item does not.
+    if (/^- \*\*(?!L\d+\*\*|`?:\d+)/.test(l)) break;
+    rest.push(l.replace(/^(\s*- )\*\*L(\d+)\*\*/, "$1`:$2`"));
+  }
+  return { head: "", rest };
+}
+
+/**
  * Every `:NNN` line reference in the Edit anchor bullet, with the quoted
  * anchor text when it directly follows (`after \`:59\` \`import …\``). A
  * reference in prose (`the closing \`});\` (\`:263\`)`) yields the line alone;
  * the worker reads the text from the context slice the line selects.
+ *
+ * Only the bullet's first line and the first line of each sub-item are read.
+ * A wrapped continuation line is explanation: on Run 23 its "at `:574`" and
+ * "on `:60`" became edit sites, and `:574` is the authenticating middleware.
  */
 export function parseAnchors(b) {
   if (!b) return [];
   const out = [];
   const seen = new Set();
-  for (const line of [b.head, ...b.rest]) {
+  const itemLines = [b.head, ...b.rest.filter((l) => /^\s*(?:[-*]|\d+\.)\s/.test(l))];
+  for (const line of itemLines) {
     // An ordering constraint ("stays above `:574` `api.use(…`") names a line the edit must not
     // cross, not a site. Everything from the constraint word to the end of the sub-bullet is skipped.
     const sites = line.replace(/\b(above|below|before the|after the|ordering constraint|constraint|stays?)\b[^;]*$/i, (m, w, off) => (off > 0 ? "" : m));
     // `:59` `text` · `L59` `text` · line 59 · (`:59`) — the first two are the canonical pair form.
-    for (const m of sites.matchAll(/(?:`:(\d+)(?:-\d+)?`|`?\bL(\d+)(?:-\d+)?\b`?|\bline\s+(\d+)\b)(?:\s*`([^`]+)`)?/gi)) {
+    for (const m of sites.matchAll(/(?:`:(\d+)(?:-\d+)?`|`?\bL(\d+)(?:-\d+)?\b`?|\bline\s+(\d+)\b)(?:\**\s*`([^`]+)`)?/gi)) {
       const n = Number(m[1] ?? m[2] ?? m[3]);
       if (!n || seen.has(n)) continue;
       seen.add(n);
@@ -257,10 +288,28 @@ export function splitVerify(cmds, path) {
   const scoped = [];
   const deferred = [];
   for (const c of cmds) {
-    if (c.includes("{path}") || c.includes(path) || (base && c.includes(base))) scoped.push(c);
+    // `public-profile.\$userId.tsx` or a quoted path is still this file; unescaped, the check was silently deferred.
+    const plain = c.replace(/\\(?=\$)/g, "").replace(/['"]/g, "");
+    if (plain.includes("{path}") || plain.includes(path) || (base && plain.includes(base))) scoped.push(c);
     else deferred.push(c);
   }
   return { scoped, deferred };
+}
+
+/**
+ * The formatter pass the server runs on a written file before verify, derived
+ * from the verify commands' own check: `biome check X` → `biome check --write X`
+ * (safe fixes + format), `prettier --check X` → `prettier --write X`. 4 of 6
+ * retries on Run 23 were Biome line width — a model round trip for what the
+ * formatter does in a second.
+ */
+export function formatCommands(verifyCmds) {
+  const out = [];
+  for (const c of verifyCmds) {
+    if (/\bbiome\s+(check|format)\b/.test(c) && !/--write\b/.test(c)) out.push(c.replace(/\bbiome\s+(check|format)\b/, "biome $1 --write"));
+    else if (/\bprettier\b.*--check\b/.test(c)) out.push(c.replace(/--check\b/, "--write"));
+  }
+  return out;
 }
 
 /** Edit lists longer than this are split into chunk packets: Flash's output cap is spent on reasoning first. */
@@ -279,7 +328,7 @@ function anchorRanges(anchors, pad = 4) {
 }
 
 export function buildPackets(plan, opts) {
-  const { runId, intent, planPath, projectRoot } = opts;
+  const { runId, intent, planPath, projectRoot, multiModel = false } = opts;
   const errors = [];
   const warnings = [];
   const packets = [];
@@ -388,7 +437,13 @@ export function buildPackets(plan, opts) {
       const n = lineCount(path);
       fileLines = n;
       if (n === -1) { errors.push(`${u.id}: edit target ${path} does not exist`); continue; }
-      const anchors = parseAnchors(bullet(u.body, "Edit anchor"));
+      const anchors = parseAnchors(editSites(u.body));
+      if (anchors.length === 0 && multiModel) {
+        // A cheaper worker cannot rewrite a large file inside its output cap; stop here, where one
+        // narrow architect Edit fixes it, instead of paying for a whole-file packet that fails later.
+        errors.push(`${u.id}: edit of ${path} has no edit sites — give each as a sub-bullet \`after \`:N\` \`<line text>\`\` under \`- **Edit anchor**\``);
+        continue;
+      }
       if (anchors.length === 0) {
         // No line references: the worker gets the whole file and returns the whole file.
         warnings.push(`${u.id}: edit with no \`:line\` references in Edit anchor; whole-file mode (costlier output) — give anchors as \`:line\` \`text\``);
@@ -417,6 +472,7 @@ export function buildPackets(plan, opts) {
     const spans = verify ? backticked([verify.head, ...verify.rest].join(" ")) : [];
     const cmds = spans.filter(isCommand);
     const { scoped: verifyCmds, deferred } = splitVerify(cmds, path);
+    const format = formatCommands(verifyCmds);
     if (verifyCmds.length === 0) warnings.push(`${u.id}: no file-scoped Verify command; the server cannot check the worker's output${deferred.length ? " (package-wide commands are deferred)" : ""}`);
 
     let prevChunkId = null;
@@ -446,7 +502,7 @@ export function buildPackets(plan, opts) {
         acceptance: acceptanceOf(u.body),
         budget: mode === "edits" ? { ...BUDGET, maxOutputTokens: 8000 } : { ...BUDGET },
         retry_count: 0,
-        apply: { write: true, mode, verify: ci === anchorChunks.length - 1 ? verifyCmds : verifyCmds.filter((c) => !/vitest|jest|pytest|test\b/.test(c)), max_retries: MAX_RETRIES },
+        apply: { write: true, mode, ...(format.length ? { format } : {}), verify: ci === anchorChunks.length - 1 ? verifyCmds : verifyCmds.filter((c) => !/vitest|jest|pytest|test\b/.test(c)), max_retries: MAX_RETRIES },
         ...(deferred.length && ci === anchorChunks.length - 1 ? { verify_deferred: deferred } : {}),
       });
       prevChunkId = chunkId;
@@ -477,7 +533,7 @@ function acceptanceOf(body) {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const out = { plan: null, runId: null, intent: undefined, projectRoot: null, planPath: null, outFile: null, json: false };
+  const out = { plan: null, runId: null, intent: undefined, projectRoot: null, planPath: null, outFile: null, json: false, multiModel: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => (a.includes("=") ? a.slice(a.indexOf("=") + 1) : argv[++i]);
@@ -487,6 +543,7 @@ function parseArgs(argv) {
     else if (a.startsWith("--plan-path")) out.planPath = val();
     else if (a.startsWith("--out")) out.outFile = val();
     else if (a === "--json") out.json = true;
+    else if (a === "--multi-model") out.multiModel = true;
     else if (!a.startsWith("--") && !out.plan) out.plan = a;
   }
   return out;
@@ -495,7 +552,7 @@ function parseArgs(argv) {
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (!args.plan || !args.runId) {
-    process.stderr.write("usage: plan-to-packets.mjs <change_plan.md> --run-id <id> [--intent <i>] [--project-root <dir>] [--plan-path <rel>] [--out packets.json] [--json]\n");
+    process.stderr.write("usage: plan-to-packets.mjs <change_plan.md> --run-id <id> [--intent <i>] [--project-root <dir>] [--plan-path <rel>] [--out packets.json] [--json] [--multi-model]\n");
     return 2;
   }
   let text;
@@ -504,7 +561,7 @@ export function main(argv = process.argv.slice(2)) {
   const planPath = args.planPath ?? (projectRoot ? relative(projectRoot, resolve(args.plan)).split(sep).join("/") : args.plan);
   const plan = parsePlan(text);
   if (plan.units.length === 0) { process.stderr.write("plan-to-packets: no `## An — <path>` unit sections found\n"); return 1; }
-  const { packets, errors, warnings } = buildPackets(plan, { runId: args.runId, intent: args.intent, planPath, projectRoot });
+  const { packets, errors, warnings } = buildPackets(plan, { runId: args.runId, intent: args.intent, planPath, projectRoot, multiModel: args.multiModel });
   for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
   for (const e of errors) process.stderr.write(`error: ${e}\n`);
   if (errors.length) return 1;

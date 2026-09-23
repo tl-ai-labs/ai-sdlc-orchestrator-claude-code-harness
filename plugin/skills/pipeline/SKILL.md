@@ -205,8 +205,16 @@ When the app uses a validating `ConfigModule` (or Joi / Zod / envalid equivalent
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/plan-to-packets.mjs" "<output_dir>/change_plan.md" \
-  --run-id <run-id> --intent <intent> --project-root "$(pwd)"
+  --run-id <run-id> --intent <intent> --project-root "$(pwd)" [--multi-model]
 ```
+
+Pass `--multi-model` when the loaded policy names more than one model. Then an `edit` unit with no edit
+sites is an error (exit 1, narrow architect Edit) instead of a silent whole-file packet — on Run 23 all five
+edit units fell to whole-file mode because the sites sat under a `### Edits` heading, and the orchestrator
+spent turns hand-rewriting the plan. The script now reads that form too; the flag catches whatever it
+still cannot read. Every packet whose verify runs `biome check` / `prettier --check` on its file also
+carries `apply.format` (the `--write` form); the server runs it after the write and before verify, so a
+formatting-only miss is not a retry.
 
 It writes `<output_dir>/packets.json` from the plan's unit sections with no model call: one packet per
 `## An — <path>` unit in plan order, `new_file` → apply packet returning the file, `edit` → apply packet in
@@ -320,7 +328,7 @@ command once. Under a single-model policy nothing is dispatched and this paragra
 | `inputs[]` | Paths only — no `content`. Narrow with `section: "<heading>"` (a `change_plan.md` section such as `"A1"`) or `lines: [from, to]`. The server reads them; you never paste file text into a packet. **The standard set for a codegen / test packet is three:** the unit section (`change_plan.md` § `An — …`), the plan's `House style` section, and the unit's **Mirror** slice (`path` + `lines` from the section — the existing file whose shape the new one copies). Add the **Edit anchor** lines for an edit. Nothing else: the worker does not need the whole plan, the requirements, or the repo facts. |
 | `instruction` | Names the section and says *implement*, not *reproduce*: "Implement `<artifact_path>` from change_plan section `An`: satisfy every Exports signature and Behavior rule; copy the shape of the Mirror input for imports, errors and structure; follow House style. Return JSON {path, content}." Do not restate the section's content in the instruction — the section is the input. |
 | `outputSchema` | Omit it. The server supplies `{path, content}`. |
-| `apply` | `{ "write": true, "mode": "content" | "edits", "verify": [<commands>], "max_retries": 2 }`. `mode: "edits"` (edits to an existing file): the worker returns `{edits: [{line, anchor, position: "after" | "before" | "replace", text}]}` instead of the file and the server splices them in — an anchor that is not found, or matches more than one line without a `line`, is a retry with that reason; the file must exist. `plan-to-packets.mjs` picks the mode from the unit's Action. Verify commands come from `baseline.json` (the package's lint / typecheck / test commands), scoped to the file where the tool allows it: `{path}` is replaced by `artifact_path`. Typical: `["npx biome check {path}"]` for a source file, `["npx biome check {path}", "npx vitest run {path}"]` for a test file. Leave `verify` out only when no cheap check exists. |
+| `apply` | `{ "write": true, "mode": "content" | "edits", "format"?: [<commands>], "verify": [<commands>], "max_retries": 2 }`. `mode: "edits"` (edits to an existing file): the worker returns `{edits: [{line, anchor, position: "after" | "before" | "replace", text}]}` instead of the file and the server splices them in — an anchor that is not found, or matches more than one line without a `line`, is a retry with that reason; the file must exist. `plan-to-packets.mjs` picks the mode from the unit's Action. Verify commands come from `baseline.json` (the package's lint / typecheck / test commands), scoped to the file where the tool allows it: `{path}` is replaced by `artifact_path`. Typical: `["npx biome check {path}"]` for a source file, `["npx biome check {path}", "npx vitest run {path}"]` for a test file. Leave `verify` out only when no cheap check exists. |
 | `run_id` (tool argument, beside `packet`) | The run id, so the server records provenance for the write under `.sdlc/runs/<run_id>/` and `/mmo:revert` still works. Do not run `write-provenance.mjs --before/--after` yourself for an applied packet. |
 
 Read the receipt's `status`:

@@ -119,6 +119,25 @@ Each unit section, in this order:
   not per packet.
 - **Acceptance** — bullets a reviewer can check; for tests, the cases by name.
 
+**Same plan size under both policies.** A multi-model plan is the single-model plan plus the quoted
+anchor text and new-file import specifiers — nothing else. Measured on one brief (Runs 22–23):
+single-model 407 lines / 14 units / 27.5 kB; multi-model 766 lines / 17 units / 48.7 kB, and the extra
+Opus output (which both reviewers then re-read) cost more than the cheaper worker saved. So:
+- **The same file set.** Do not add a unit to make the worker's job easier — a separate helper module,
+  a skeleton component, a test that greps source text. Add a file only when the requirement needs it.
+- **No design-decisions or rationale section.** A decision is one line in the unit it governs
+  (Run 23's "Design decisions" was 59 lines).
+- **Summaries 1–10 are one line per item**; a section with nothing is "None." Do not restate units.
+- **Unit budget:** a new file ≈ 15–20 lines, an edit ≈ 10 lines plus one line per site; tests list
+  case names, not their assertions. Behavior rules cover what the worker cannot see in the mirror,
+  not every edge case you considered.
+- `plan-lint.mjs` prints a `long_plan` note past 500 non-blank lines; aim for ≈ 400.
+
+**Edit sites: one form only** — the sub-bullets of `- **Edit anchor**` shown above. No `### Edits`
+heading, no `**L59**` / `L59` labels. Put any explanation on the site's own line after `→`, never on a
+wrapped line below it: wrapped lines are ignored, because a line number there once became an edit
+site inside the authentication middleware.
+
 Hard rules, checked mechanically after you return (`plan-lint.mjs`; a failing plan is sent back
 to you once with the violation list):
 - No fenced block longer than 12 lines. No "Content:", "Full file", "Complete file" bodies.

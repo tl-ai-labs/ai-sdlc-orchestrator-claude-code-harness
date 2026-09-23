@@ -251,13 +251,18 @@ export function applyContent(
   projectRoot: string,
   rel: string,
   content: string,
-  opts: { runId?: string; packetId: string },
+  opts: { runId?: string; packetId: string; format?: string[]; timeoutSec?: number },
 ): WriteReceipt {
   const abs = resolve(projectRoot, rel);
   const existed = existsSync(abs);
   if (opts.runId) runProvenance("before", projectRoot, opts.runId, rel, opts.packetId);
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, content, "utf8");
+  // Format before provenance "after", so the recorded hash is the file as it stays on disk.
+  if (opts.format?.length) {
+    runFormat(opts.format, projectRoot, rel, opts.timeoutSec);
+    content = readFileSync(abs, "utf8");
+  }
   if (opts.runId) runProvenance("after", projectRoot, opts.runId, rel, opts.packetId);
   return {
     path: rel,
@@ -280,6 +285,19 @@ export interface VerifyResult {
   exit_code?: number | null;
   output_tail?: string;
   duration_ms: number;
+}
+
+/** Formatter commands on the written file; failures are left for verify to report. */
+export function runFormat(commands: string[], projectRoot: string, artifactPath: string, timeoutSec = DEFAULT_VERIFY_TIMEOUT_SEC): void {
+  for (const template of commands) {
+    spawnSync(template.split("{path}").join(artifactPath), {
+      cwd: projectRoot,
+      shell: true,
+      encoding: "utf8",
+      timeout: timeoutSec * 1000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+  }
 }
 
 export function runVerify(
@@ -345,10 +363,12 @@ export function normalizeApply(spec: unknown): ApplySpec | null {
   const s = spec as Record<string, unknown>;
   if (s.write !== true) return null;
   const verify = Array.isArray(s.verify) ? s.verify.filter((v): v is string => typeof v === "string") : undefined;
+  const format = Array.isArray(s.format) ? s.format.filter((v): v is string => typeof v === "string") : undefined;
   return {
     write: true,
     mode: s.mode === "edits" ? "edits" : "content",
     verify,
+    ...(format && format.length ? { format } : {}),
     max_retries: typeof s.max_retries === "number" ? Math.max(0, Math.floor(s.max_retries)) : DEFAULT_MAX_RETRIES,
     verify_timeout_sec:
       typeof s.verify_timeout_sec === "number" ? Math.max(1, s.verify_timeout_sec) : DEFAULT_VERIFY_TIMEOUT_SEC,
@@ -594,7 +614,7 @@ export async function runApplyLoop(deps: ApplyLoopDeps): Promise<ApplyOutcome> {
         summary.failure = contract.reason;
         return finish("refused", { refusal: `${contract.rel}: ${contract.reason}` });
       }
-      receipt = applyContent(projectRoot, contract.rel, content, { runId, packetId: current.id });
+      receipt = applyContent(projectRoot, contract.rel, content, { runId, packetId: current.id, format: apply.format, timeoutSec: apply.verify_timeout_sec });
       log("info", "apply.write", { packet_id: current.id, path: receipt.path, bytes: receipt.bytes, sha16: receipt.sha16 });
       verify = runVerify(apply.verify, projectRoot, contract.rel, apply.verify_timeout_sec);
       summary.verify_ok = verify.ok;
