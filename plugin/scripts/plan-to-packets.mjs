@@ -167,10 +167,11 @@ function activeContract(projectRoot, runId) {
  * architect wrote on Run 23 — a `### Edits` sub-heading whose items start with
  * `**L<n>**`. That form yielded no anchors, so all five edit units fell back to
  * whole-file packets (82 kB and 65 kB files against an 8k output cap) while the
- * script still exited 0. Both forms are read here as one bullet.
+ * script still exited 0. Both forms are read here as one bullet. Run 24's architect
+ * labelled the bullet `- **Edit**` instead; it is read the same way.
  */
 export function editSites(body) {
-  const b = bullet(body, "Edit anchor");
+  const b = bullet(body, "Edit anchor") ?? bullet(body, "Edits?");
   if (b) return b;
   const start = body.findIndex((l) => /^###\s+Edit/i.test(l));
   if (start === -1) return null;
@@ -205,11 +206,12 @@ export function parseAnchors(b) {
     // cross, not a site. Everything from the constraint word to the end of the sub-bullet is skipped.
     const sites = line.replace(/\b(above|below|before the|after the|ordering constraint|constraint|stays?)\b[^;]*$/i, (m, w, off) => (off > 0 ? "" : m));
     // `:59` `text` · `L59` `text` · line 59 · (`:59`) — the first two are the canonical pair form.
-    for (const m of sites.matchAll(/(?:`:(\d+)(?:-\d+)?`|`?\bL(\d+)(?:-\d+)?\b`?|\bline\s+(\d+)\b)(?:\**\s*`([^`]+)`)?/gi)) {
-      const n = Number(m[1] ?? m[2] ?? m[3]);
+    // `after :59 -> rule` (position word and line inside one backtick span, Run 24) is read too.
+    for (const m of sites.matchAll(/(?:`:(\d+)(?:-\d+)?`|`?\bL(\d+)(?:-\d+)?\b`?|\bline\s+(\d+)\b|\b(?:after|before|replace|insert|delete)\s+:(\d+)\b)(?:\**\s*`([^`]+)`)?/gi)) {
+      const n = Number(m[1] ?? m[2] ?? m[3] ?? m[4]);
       if (!n || seen.has(n)) continue;
       seen.add(n);
-      out.push({ line: n, anchor: m[4] ?? null });
+      out.push({ line: n, anchor: m[5] ?? null });
     }
   }
   return out.sort((x, y) => x.line - y.line);

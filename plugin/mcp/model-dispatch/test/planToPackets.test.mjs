@@ -370,3 +370,19 @@ test("formatCommands derives the write form of biome / prettier checks and nothi
     "npx prettier --write apps/y.ts",
   ]);
 });
+
+// Run 24: the architect wrote `- **Edit**` with `` `after :280 -> rule` `` items (position word and line in
+// one backtick span). No sites were read, so 5 edit units fell back to whole-file packets with a warning.
+test("editSites reads a `- **Edit**` bullet and parseAnchors reads `after :N -> rule` spans", () => {
+  const body = [
+    "- **File** `apps/api/src/index.ts` · **Action** `edit` · **Depends on** A1",
+    "- **Edit**",
+    "  - `after :50 -> import { publicProfileSchema } from \"./schemas\";`",
+    "  - `after :248 -> declare const publicProfileApi, directly below the publicProjectApi block`",
+    "  - `replace :16 -> title ?? t(\"publicProject:error.title\")`",
+    "  - `after :2110 -> insert the namespace above the publicProject key (see :2111)`",
+    "- **Verify** `pnpm exec biome check apps/api/src/index.ts`",
+  ];
+  assert.deepEqual(parseAnchors(editSites(body)).map((a) => a.line), [16, 50, 248, 2110]);
+  assert.equal(editSites(["- **Editor** x"]), null, "only an Edit / Edits / Edit anchor bullet counts");
+});

@@ -247,6 +247,12 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.8.4
+
+| Area | Before | From v0.8.4 |
+|---|---|---|
+| Edit sites in `plan-to-packets` | Read only a `- **Edit anchor**` bullet (or a `### Edits` heading) with `` `:N` `` / `L<n>` / "line N" references. A `- **Edit**` bullet with `` `after :280 -> rule` `` items found no sites, so edit units fell back to whole-file packets (Run 24: 5 of 5) | `- **Edit**` / `- **Edits**` bullets are read like `- **Edit anchor**`, and `after` / `before` / `replace` / `insert` / `delete` followed by `:N` is an edit site. Run 24's plan now derives 8 edit lists instead of 0. Rates, telemetry fields and the collector are unchanged. |
+
 ### v0.8.1
 
 | Area | Before | From v0.8.1 |
