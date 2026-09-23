@@ -35,7 +35,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const BUDGET = { maxInputTokens: 16000, maxOutputTokens: 6000 };
 export const MAX_RETRIES = 2;
-const UNIT_HEADING = /^## (A\d+)\s+[—-]+\s+(\S.*?)\s*$/;
+// Any capital letter: architects have used `B<n>` ids, and an A-only pattern dropped those units without a word (Run 20).
+const UNIT_HEADING = /^## ([A-Z]\d+)\s+[—-]+\s+(\S.*?)\s*$/;
+const UNIT_ID = /\b[A-Z]\d+\b/g;
 const HOUSE_STYLE = "House style";
 
 // ---------------------------------------------------------------------------
@@ -107,9 +109,54 @@ export function parseRef(ref) {
 function parseFileLine(head) {
   const path = (head.match(/^`([^`]+)`/) || [])[1];
   const action = (head.match(/\*\*Action\*\*\s*`([^`]+)`/) || [])[1];
-  const depRaw = (head.match(/\*\*Depends on\*\*\s*(.*)$/) || [])[1] ?? "";
-  const depends = [...depRaw.matchAll(/\bA\d+\b/g)].map((m) => m[0]);
+  const depRaw = head.match(/\*\*Depends on\*\*\s*(.*)$/)?.[1];
+  const depends = depRaw === undefined ? undefined : [...depRaw.matchAll(UNIT_ID)].map((m) => m[0]);
   return { path, action, depends };
+}
+
+/**
+ * File, Action and Depends on for one unit. The canonical form is one bullet
+ * (`- **File** \`p\` · **Action** \`x\` · **Depends on** A1`), but architects also
+ * write them as separate bullets or leave the path in the heading only — Runs 19
+ * and 21 each paid two re-delegations for that. Every form carries the same
+ * facts, so read whichever is there: the path falls back to the heading, the
+ * Action to its own bullet and then to whether the file exists.
+ */
+function unitHeader(u, exists) {
+  const file = bullet(u.body, "File");
+  const fromFile = file ? parseFileLine(file.head) : {};
+  const path = fromFile.path ?? u.path;
+  let action = fromFile.action ?? (bullet(u.body, "Action")?.head.match(/`([^`]+)`/) || [])[1];
+  let inferred = false;
+  if (!action && path) { action = exists(path) ? "edit" : "new_file"; inferred = true; }
+  let depends = fromFile.depends;
+  if (depends === undefined) {
+    const d = bullet(u.body, "Depends on");
+    depends = d ? [...[d.head, ...d.rest].join(" ").matchAll(UNIT_ID)].map((m) => m[0]) : [];
+  }
+  return { path, action, depends, hadFileBullet: Boolean(file), inferred };
+}
+
+/** Same glob dialect as write-contract-check.mjs (`**`, `*`, `?`); that module runs on import, so it is not shared. */
+function matchGlob(path, pattern) {
+  if (path === pattern) return true;
+  const re = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "\x00")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\x00/g, ".*");
+  return new RegExp(`^${re}$`).test(path);
+}
+
+/** The active strict write contract for this run, or null. A unit outside its allowlist would only be refused at write time. */
+function activeContract(projectRoot, runId) {
+  if (!projectRoot) return null;
+  try {
+    const c = JSON.parse(readFileSync(resolve(projectRoot, ".sdlc/local/write-contract.json"), "utf8"));
+    if (!c.active || !c.strict || c.run_id !== runId || !Array.isArray(c.allowlist)) return null;
+    return c;
+  } catch { return null; }
 }
 
 /**
@@ -253,13 +300,22 @@ export function buildPackets(plan, opts) {
     return !(rel.startsWith("..") || rel.startsWith(sep) || /^[A-Za-z]:/.test(rel));
   };
 
+  const contract = activeContract(projectRoot, runId);
+  const dropped = new Set();
+  const exists = (p) => { const n = lineCount(p); return n !== null && n !== -1; };
+
   for (const u of plan.units) {
-    const file = bullet(u.body, "File");
-    if (!file) { errors.push(`${u.id}: no \`- **File**\` bullet`); continue; }
-    const { path, action, depends } = parseFileLine(file.head);
-    if (!path || !action) { errors.push(`${u.id}: File bullet needs \`path\` · **Action** \`new_file|edit|tooling\``); continue; }
+    const { path, action, depends, hadFileBullet, inferred } = unitHeader(u, exists);
+    if (!path || !action) { errors.push(`${u.id}: no path in the heading or a \`- **File**\` bullet`); continue; }
     if (!["new_file", "edit", "tooling"].includes(action)) { errors.push(`${u.id}: unknown Action \`${action}\``); continue; }
-    if (path !== u.path) warnings.push(`${u.id}: heading path ${u.path} differs from File ${path}; using File`);
+    if (!hadFileBullet) warnings.push(`${u.id}: no \`- **File**\` bullet; path taken from the heading`);
+    if (inferred) warnings.push(`${u.id}: no Action; inferred \`${action}\` from whether ${path} exists`);
+    if (hadFileBullet && path !== u.path) warnings.push(`${u.id}: heading path ${u.path} differs from File ${path}; using File`);
+    if (contract && !contract.allowlist.some((g) => matchGlob(path, g))) {
+      warnings.push(`${u.id}: ${path} is outside the write contract allowlist; no packet (record it as a follow-up)`);
+      dropped.add(u.id);
+      continue;
+    }
     if (seen.has(path) && action !== "tooling") warnings.push(`${u.id}: ${path} already has a packet; two units edit one file`);
     seen.add(path);
     if (!inRepo(path)) { errors.push(`${u.id}: ${path} is outside the project`); continue; }
@@ -401,7 +457,7 @@ export function buildPackets(plan, opts) {
   const byUnit = new Map();
   for (const p of packets) byUnit.set(p.unit, p.id); // the last chunk of a unit is what dependents wait for
   for (const p of packets) {
-    p.depends_on = p.depends_on.map((d) => byUnit.get(d.slice(5)) ?? d);
+    p.depends_on = p.depends_on.filter((d) => !dropped.has(d.slice(5))).map((d) => byUnit.get(d.slice(5)) ?? d);
   }
   return { packets, errors, warnings };
 }

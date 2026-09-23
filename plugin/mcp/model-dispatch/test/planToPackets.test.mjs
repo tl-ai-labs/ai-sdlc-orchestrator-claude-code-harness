@@ -205,17 +205,47 @@ test("buildPackets: one packet per unit, apply form, edit lists with anchor cont
   rmSync(root, { recursive: true, force: true });
 });
 
-test("buildPackets: errors for a missing File bullet, an unknown Action, an edit to a missing file; an unusable mirror is only a warning", () => {
+test("buildPackets: errors for an unknown Action and an edit to a missing file; a missing File bullet and an unusable mirror are only warnings", () => {
   const root = repo();
   const bad = `## House style\n- x\n\n## A1 — a.ts\n\n- **Behavior** nothing\n\n## A2 — b.ts\n\n- **File** \`b.ts\` · **Action** \`rewrite\`\n\n## A3 — c.ts\n\n- **File** \`c.ts\` · **Action** \`edit\`\n- **Edit anchor** after \`:1\` \`x\`\n\n## A4 — d.ts\n\n- **File** \`d.ts\` · **Action** \`new_file\`\n- **Mirror** \`apps/x/../../../etc/passwd:1-2\` (mocks \`../../../apps/api/src/database\`)\n- **Verify** \`true\`\n`;
   const { packets, errors, warnings } = buildPackets(parsePlan(bad), { runId: "r", planPath: "p.md", projectRoot: root });
-  assert.equal(packets.length, 1, "A4 still gets a packet; only its mirror is dropped");
-  assert.match(errors[0], /A1: no `- \*\*File\*\*` bullet/);
-  assert.match(errors[1], /A2: unknown Action `rewrite`/);
-  assert.match(errors[2], /A3: edit target c.ts does not exist/);
-  assert.equal(errors.length, 3);
+  assert.deepEqual(packets.map((p) => p.artifact_path), ["a.ts", "d.ts"], "A1 takes its path from the heading; A4 keeps its packet, only its mirror is dropped");
+  assert.match(errors[0], /A2: unknown Action `rewrite`/);
+  assert.match(errors[1], /A3: edit target c.ts does not exist/);
+  assert.equal(errors.length, 2);
+  assert.ok(warnings.some((w) => /A1: no `- \*\*File\*\*` bullet; path taken from the heading/.test(w)), warnings.join("\n"));
+  assert.ok(warnings.some((w) => /A1: no Action; inferred `new_file`/.test(w)), warnings.join("\n"));
   assert.ok(warnings.some((w) => /A4: mirror .*etc\/passwd is outside the project; dropped/.test(w)), warnings.join("\n"));
   assert.ok(!warnings.some((w) => /apps\/api\/src\/database/.test(w)), "the vi.mock specifier is not read as a mirror at all");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("buildPackets: File / Action / Depends on as separate bullets, B-prefixed ids, and a path only in the heading all derive packets (Runs 19-21)", () => {
+  const root = repo();
+  const plan = `## House style\n- x\n\n## B1 — apps/api/src/user/new.ts\n\n- **File** \`apps/api/src/user/new.ts\`\n- **Action** \`new_file\`\n- **Depends on** —\n- **Verify** \`pnpm exec biome check {path}\`\n\n## B2 — apps/api/src/index.ts\n\n- **Depends on** B1\n- **Edit anchor** after \`:3\` \`x\`\n- **Verify** \`pnpm exec biome check {path}\`\n`;
+  const { packets, errors, warnings } = buildPackets(parsePlan(plan), { runId: "r", planPath: "p.md", projectRoot: root });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(packets.map((p) => [p.unit, p.artifact_path, p.subtype]), [
+    ["B1", "apps/api/src/user/new.ts", "new_file_add"],
+    ["B2", "apps/api/src/index.ts", "existing_file_edit"],
+  ]);
+  assert.deepEqual(packets[1].depends_on, [packets[0].id]);
+  assert.ok(warnings.some((w) => /B2: no Action; inferred `edit`/.test(w)), warnings.join("\n"));
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("buildPackets: a unit outside the active write contract's allowlist gets no packet and its dependents drop the edge", () => {
+  const root = repo();
+  mkdirSync(join(root, ".sdlc", "local"), { recursive: true });
+  writeFileSync(join(root, ".sdlc", "local", "write-contract.json"), JSON.stringify({ active: true, strict: true, run_id: "r", allowlist: ["apps/api/src/user/**"] }));
+  const plan = `## A1 — i18n/schema.json\n\n- **File** \`i18n/schema.json\` · **Action** \`tooling\` · **Depends on** —\n- **Behavior** regenerate\n\n## A2 — apps/api/src/user/new.ts\n\n- **File** \`apps/api/src/user/new.ts\` · **Action** \`new_file\` · **Depends on** A1\n- **Verify** \`pnpm exec biome check {path}\`\n`;
+  const { packets, errors, warnings } = buildPackets(parsePlan(plan), { runId: "r", planPath: "p.md", projectRoot: root });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(packets.map((p) => p.artifact_path), ["apps/api/src/user/new.ts"]);
+  assert.deepEqual(packets[0].depends_on, []);
+  assert.ok(warnings.some((w) => /A1: i18n\/schema.json is outside the write contract allowlist/.test(w)), warnings.join("\n"));
+  const other = buildPackets(parsePlan(plan), { runId: "another-run", planPath: "p.md", projectRoot: root });
+  assert.equal(other.packets.length, 2, "a contract for another run does not apply");
   rmSync(root, { recursive: true, force: true });
 });
 
