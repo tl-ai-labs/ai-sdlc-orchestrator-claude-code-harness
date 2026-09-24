@@ -32,7 +32,7 @@ import type { FileSlice, TaskPacket } from "../types.js";
 import { buildUserPrompt } from "../adapters/GeminiFlashAdapter.js";
 import type { Spec, SpecExport, SpecUnit } from "../spec/store.js";
 
-const sig = (e: SpecExport) => `${e.name}(${e.params.map((p) => `${p.name}: ${p.type}`).join(", ")}) -> ${e.returns} [${e.kind}]`;
+const sig = (e: SpecExport) => `${e.name}(${e.params.map((p) => `${p.name}: ${p.type}`).join(", ")}) -> ${e.returns}${e.kind ? ` [${e.kind}]` : ""}`;
 
 /** The block every unit of the run shares, identical byte for byte. */
 export function renderShared(spec: Spec): string {
@@ -105,7 +105,8 @@ export function unitPacket(unit: SpecUnit, instruction: string, passId: string, 
   return {
     id: unit.id,
     phase: unit.phase,
-    task_type: unit.kind,
+    // No task type: a file is routed by its stage alone, and the brief names no kind of file.
+    task_type: "",
     module: "spec",
     instruction,
     inputs: [],
@@ -117,11 +118,11 @@ export function unitPacket(unit: SpecUnit, instruction: string, passId: string, 
 }
 
 /** A fix as a packet: phase `debug` (the policies' own rule for fixes), the file's current text and any reference files as inputs. */
-export function repairPacket(id: string, kind: string, instruction: string, passId: string, inputs: FileSlice[], maxOutputTokens: number): TaskPacket {
+export function repairPacket(id: string, instruction: string, passId: string, inputs: FileSlice[], maxOutputTokens: number): TaskPacket {
   return {
     id,
     phase: "debug",
-    task_type: kind,
+    task_type: "",
     module: "spec",
     instruction,
     inputs,

@@ -162,9 +162,11 @@ Single page, two linked sections, served from the local server started in flow s
   `debug`), each with a dropdown of the base policy's declared model ids (and slot names, e.g.
   `gemini-flash`, shown with their current default option). Changing a row is a client-side diff
   against the base policy — unchanged rows stay visually neutral, changed rows are marked.
-  `codegen`'s per-`task_type` sub-rules (12 task types in `opus-plus-flash.yaml`) are shown
-  collapsed under the `codegen` row with their own overrides, since they can legitimately diverge
-  from the phase-level default.
+  `codegen` has no per-`task_type` sub-rules: since 24 Sep 2026 the shipped policies route every
+  stage by phase alone, so who types a file never depends on its language or type (the earlier
+  12-type list was written for NestJS/React and sent every other file to Opus). A custom policy
+  may still match on `task_type`, but the greenfield `--executor` refuses one whose rule for its
+  stages does, so the editor shows a phase row only.
 - **Live rate readout** — next to each row, the per-million input/output rate of the currently
   selected model, so cost impact is visible while editing (same numbers `run.md` step 4
   already reports, just live).

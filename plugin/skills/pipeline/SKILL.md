@@ -38,7 +38,7 @@ This skill is the source of truth for the orchestrator. When invoked under `/mmo
 A second greenfield flow, for every policy alike. The typed spec replaces design.md +
 packets.json, and the MCP tool `execute_stage` types, checks and writes every file by code:
 you never type or re-type a unit's file, and the files never pass through your conversation.
-The policy still decides who types each file (its rules, matched on the unit's phase and kind),
+The policy still decides who types each file (its rule for the stage — never the file's kind, name or language),
 so a solo policy and a multi-model policy run exactly this flow and differ only in the typist.
 Without `--executor`, and in brownfield, nothing below applies.
 
@@ -180,7 +180,9 @@ The orchestrator invokes the `architect` subagent passing `<output_dir>/requirem
 
 From `design.md`, emit `<output_dir>/packets.json` — a list of TaskPackets, one per file-sized unit of work.
 
-Suggested packet types and one packet per:
+Suggested packet types and one packet per. The task type describes the packet in reports and
+briefs only: the shipped policies route code by phase alone, whatever the file's language or type
+(since 24 Sep 2026; test/stageRouting.test.mjs).
 
 | task_type | What |
 |---|---|

@@ -13,9 +13,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join, posix } from "node:path";
 import { SPEC_HEADER_SCHEMA, SPEC_UNITS_SECTION_SCHEMA, validate, type SchemaError } from "./schema.js";
 
-export interface SpecExport { name: string; kind: string; params: { name: string; type: string }[]; returns: string }
+export interface SpecExport { name: string; kind?: string; params: { name: string; type: string }[]; returns: string }
 export interface SpecUnit {
-  id: string; path: string; phase: "codegen" | "tests" | "docs"; kind: string;
+  id: string; path: string; phase: "codegen" | "tests" | "docs"; kind?: string;
   exports: SpecExport[]; behaviour: string; depends_on: string[];
   style_from: { unit?: string; reason: string }; covers: string[];
   tests: { name: string; given: string; expect: string }[]; approx_lines: number;
@@ -170,7 +170,7 @@ export function renderDesign(spec: Spec): string {
   for (const t of spec.shared.data_model) lines.push(`- **${t.name}**: ${t.fields.map((f) => `${f.name} ${f.type}${f.constraints ? ` (${f.constraints})` : ""}`).join("; ")}`);
   lines.push("", "## API", "", "| Method | Path | Access | Request | Response | OK | Errors |", "|---|---|---|---|---|---|---|");
   for (const a of spec.shared.api) lines.push(`| ${a.method} | ${cell(a.path)} | ${cell(a.access)} | ${cell(a.request)} | ${cell(a.response)} | ${a.success_status} | ${a.error_statuses.join(", ")} |`);
-  lines.push("", "## Files", "", "| Id | Path | Phase | Kind | What it does | Uses |", "|---|---|---|---|---|---|");
-  for (const u of spec.units) lines.push(`| ${u.id} | ${cell(u.path)} | ${u.phase} | ${u.kind} | ${cell(u.behaviour)} | ${u.depends_on.join(", ")} |`);
+  lines.push("", "## Files", "", "| Id | Path | Phase | What it does | Uses |", "|---|---|---|---|---|");
+  for (const u of spec.units) lines.push(`| ${u.id} | ${cell(u.path)} | ${u.phase} | ${cell(u.behaviour)} | ${u.depends_on.join(", ")} |`);
   return lines.join("\n") + "\n";
 }

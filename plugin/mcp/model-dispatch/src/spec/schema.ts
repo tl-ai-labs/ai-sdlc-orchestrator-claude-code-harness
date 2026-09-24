@@ -24,7 +24,8 @@
  * written here rather than pulled from a library because the server declares
  * no JSON Schema dependency, and its error messages name the exact path.
  */
-import { SPEC_KINDS, SPEC_PHASES } from "./kinds.js";
+/** The pipeline phases a unit can belong to; each maps to one executor stage. */
+export const SPEC_PHASES: readonly string[] = Object.freeze(["codegen", "tests", "docs"]);
 
 type Schema = Record<string, any>;
 
@@ -103,17 +104,19 @@ export const SPEC_HEADER_SCHEMA: Schema = {
 export const SPEC_UNIT_SCHEMA: Schema = {
   type: "object",
   additionalProperties: false,
-  required: ["id", "path", "phase", "kind", "exports", "behaviour", "depends_on", "style_from", "covers", "tests", "approx_lines"],
+  required: ["id", "path", "phase", "exports", "behaviour", "depends_on", "style_from", "covers", "tests", "approx_lines"],
   properties: {
     id: UNIT_ID,
     path: { type: "string", pattern: "^[A-Za-z0-9_.][A-Za-z0-9_./-]*$", description: "Relative to the code directory; no leading slash, no '..'." },
     phase: { type: "string", enum: [...SPEC_PHASES] },
-    kind: { type: "string", enum: [...SPEC_KINDS] },
+    // Optional free text for the design table only (24 Sep): never a list to pick from, never refused, never
+    // routed on — who types a file depends on its stage and the policy alone, whatever its language.
+    kind: { ...line, description: "Optional: a few words on what kind of file this is, for the design table only." },
     exports: {
       type: "array",
-      items: { type: "object", additionalProperties: false, required: ["name", "kind", "params", "returns"], properties: {
+      items: { type: "object", additionalProperties: false, required: ["name", "params", "returns"], properties: {
         name: { type: "string", pattern: "^[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*$", description: "The name other files use: a top-level name, or Class.method for a member." },
-        kind: { type: "string", enum: ["function", "class", "constant", "type", "component", "hook", "router", "fixture", "config", "test"] },
+        kind: { ...line, description: "Optional: function, class, trait, ... — whatever the language calls it." },
         params: { type: "array", items: { type: "object", additionalProperties: false, required: ["name", "type"], properties: { name: line, type: line } } },
         returns: line,
       } },

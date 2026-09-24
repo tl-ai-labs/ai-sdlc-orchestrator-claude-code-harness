@@ -11,7 +11,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
-import { SPEC_KINDS } from "../dist/spec/kinds.js";
 import { SPEC_HEADER_SCHEMA, SPEC_UNIT_SCHEMA, SPEC_UNITS_SECTION_SCHEMA, UNIT_MAX_LINES, UNITS_PER_SECTION, validate } from "../dist/spec/schema.js";
 import { submitSpecSection, finalizeSpec, storedUnits, isSafeRelativePath, requiredIds, loadSpec } from "../dist/spec/store.js";
 import { renderShared, renderUnitInstruction, renderRepairInstruction, framedUnit, unitPacket } from "../dist/executor/brief.js";
@@ -41,18 +40,17 @@ const unit = (id, path, over = {}) => ({
 });
 const REQUIREMENTS = "# Requirements\nFR-1.1 create a to-do.\nFR-1.2 list to-dos.\nAC-1 a to-do can be created.\nNFR-1 fast.\n";
 
-test("the spec's kinds include every task type the shipped policies and the pipeline skill use", () => {
-  const policiesDir = join(PLUGIN, "config", "policies");
-  const used = new Set();
-  for (const f of readdirSync(policiesDir).filter((f) => f.endsWith(".yaml"))) {
-    for (const r of YAML.parse(readFileSync(join(policiesDir, f), "utf8")).rules ?? []) for (const t of [].concat(r.when?.task_type ?? [])) used.add(t);
-  }
-  const skill = readFileSync(join(PLUGIN, "skills", "pipeline", "SKILL.md"), "utf8");
-  const table = skill.slice(skill.indexOf("### Phase 4 — plan_task_packets"), skill.indexOf("### Brownfield-mode task types"));
-  for (const m of table.matchAll(/^\| `([a-z_]+)` \|/gm)) used.add(m[1]);
-  assert.ok(used.size > 10, "found the policies' and the skill's task types");
-  for (const t of used) assert.ok(SPEC_KINDS.includes(t), `SPEC_KINDS is missing '${t}'`);
-  assert.ok(SPEC_KINDS.includes("other"), "the policy's own fallback label is available");
+test("a unit needs no file-type label; a label it does carry is free text for the design table, never refused and never routed on", () => {
+  // 24 Sep: the schema forced each unit's kind onto a NestJS/React/Prisma list, and the architect's
+  // "config" (tsconfig, package.json) was refused; the label also decided whether Flash or Opus typed the
+  // file. A greenfield project can be in any language, so a unit is described by its path and behaviour;
+  // who types it depends on its stage and the policy alone (test/stageRouting.test.mjs).
+  const { kind, ...bare } = unit("U01", "backend/app/schemas.py");
+  assert.deepEqual(validate(SPEC_UNIT_SCHEMA, bare), [], "no kind needed");
+  for (const k of ["config", "go_handler", "rust_module", "anything at all"]) assert.deepEqual(validate(SPEC_UNIT_SCHEMA, { ...bare, kind: k }), [], k);
+  const exp = { name: "Router", params: [], returns: "Router" };
+  assert.deepEqual(validate(SPEC_UNIT_SCHEMA, { ...bare, exports: [exp] }), [], "an export needs no kind either");
+  assert.deepEqual(validate(SPEC_UNIT_SCHEMA, { ...bare, exports: [{ ...exp, kind: "trait" }] }), [], "and any export kind is accepted");
 });
 
 test("the schema accepts a well-formed header and unit and names each problem by path", () => {
@@ -60,7 +58,7 @@ test("the schema accepts a well-formed header and unit and names each problem by
   assert.deepEqual(validate(SPEC_UNIT_SCHEMA, unit("U01", "backend/app/schemas.py")), []);
   const bad = validate(SPEC_UNIT_SCHEMA, { ...unit("U1", "x.py"), kind: "config", extra: 1, behaviour: "two\nlines" });
   const paths = bad.map((e) => e.path).sort();
-  assert.deepEqual(paths, ["/behaviour", "/extra", "/id", "/kind"]);
+  assert.deepEqual(paths, ["/behaviour", "/extra", "/id"], "a free-text kind is not a problem");
   assert.match(bad.find((e) => e.path === "/behaviour").message, /must match/);
   assert.match(validate(SPEC_HEADER_SCHEMA, { stack: [] })[0].message, /missing required field 'commands'/);
 });
@@ -163,7 +161,7 @@ test("finalize refuses a spec that leaves a requirement uncovered, then writes s
   assert.equal(spec.spec_version, "1");
   assert.deepEqual(spec.units.map((u) => u.id), ["U01", "U02"]);
   const design = readFileSync(done.design_path, "utf8");
-  assert.match(design, /\| U02 \| backend\/tests\/test_todos\.py \| tests \| test_integration \|/);
+  assert.match(design, /\| U02 \| backend\/tests\/test_todos\.py \| tests \| [^|]+ \| U01 \|/);
   assert.match(design, /\| ids \| integer autoincrement \| simplest for SQLite \| uuid \|/);
 });
 
@@ -184,7 +182,7 @@ test("briefs: the shared block is identical for every unit, the unit block names
 
   const framed = framedUnit(spec.units[1], ins, "p1");
   assert.equal(framed, buildUserPrompt(unitPacket(spec.units[1], ins, "p1", 0), ""));
-  assert.ok(framed.startsWith("## Task — U02 (codegen / module_wiring)"));
+  assert.ok(framed.startsWith("## Task — U02 (codegen)\n"), "the brief names the stage, never a kind of file");
 
   const fix = renderRepairInstruction(spec, { path: "backend/app/main.py", unit: spec.units[1] }, ["blocker: wrong status — fix: return 201"]);
   assert.match(fix, /## The file to fix\n- path: backend\/app\/main\.py/);

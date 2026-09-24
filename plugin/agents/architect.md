@@ -45,8 +45,9 @@ What to put in it:
   project needs — application code, configuration, environment example and test-fixture files,
   package and tool configuration, test files, the README. Nothing missing; never two files in one
   unit. `phase`: `tests` for a test file, `docs` for documentation, otherwise `codegen`.
-  `kind`: the value from the list that best describes the file by its meaning; `other` when none
-  fits. `exports`: every name other files import from it, with parameters and return type.
+  No file-type label is needed: who types a file depends on its stage and the policy alone,
+  whatever the language. `exports`: every name other files import from it, with parameters and
+  return type.
   `behaviour`: one line. `depends_on`: the units whose exports it uses — each sent in an EARLIER
   call or earlier in the same call. `style_from`: an earlier unit whose style it copies and why, or
   no unit and the reason. `covers`: the FR-, NFR- and AC- ids it helps satisfy; every FR and AC id

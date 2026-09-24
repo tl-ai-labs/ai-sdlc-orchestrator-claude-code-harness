@@ -38,7 +38,7 @@ import type { SelectOverrides } from "../types.js";
 import { cacheWriteBuckets } from "../telemetry.js";
 import { isSafeRelativePath, type Spec, type SpecUnit } from "../spec/store.js";
 import { renderRepairInstruction, renderUnitInstruction, framedPacket, repairPacket, unitPacket } from "./brief.js";
-import { checkAnswer, checkPython, toolchainProblem, type CheckResult, type CheckTarget } from "./checks.js";
+import { checkAnswer, type CheckResult, type CheckTarget } from "./checks.js";
 import type { Answer, Contract, Door, Edit, Typist, TypistResult } from "./typists.js";
 
 export type Stage = "codegen" | "tests" | "docs" | "repair";
@@ -102,7 +102,6 @@ export interface StageReceipt {
   transport_waits: number;
   cost_usd: number;
   seconds: number;
-  checks: { parsed: number; non_empty: number; not_parsed: number };
 }
 
 /** Full-jitter exponential backoff: a random wait in [0, min(cap, base·2^k)). */
@@ -206,9 +205,12 @@ export function applyEdits(text: string, edits: Edit[]): { content?: string; rea
 interface Job {
   id: string;
   path: string;
-  /** The phase and kind the policy routes on. */
+  /**
+   * The stage the policy routes on — and nothing else. Who types a file never
+   * depends on its language, name or kind (24 Sep: a task-type list written for
+   * NestJS/React sent every other file to the default model).
+   */
   phase: Phase;
-  kind: string;
   contract: Contract;
   target: CheckTarget;
   packet(refusal?: string): TaskPacket;
@@ -218,7 +220,7 @@ interface Job {
 
 function unitJob(spec: Spec, unit: SpecUnit, passId: string): Job {
   return {
-    id: unit.id, path: unit.path, phase: unit.phase, kind: unit.kind, contract: "file", target: unit,
+    id: unit.id, path: unit.path, phase: unit.phase, contract: "file", target: unit,
     packet: (refusal) => unitPacket(unit, renderUnitInstruction(spec, unit, refusal), passId, 0),
     resolve: (a) => ({ content: a.content }),
   };
@@ -240,11 +242,10 @@ function repairJob(spec: Spec, item: RepairItem, codeRoot: string, passId: strin
         : { path: p, reason: "for reference only", content: "(not found under the code directory; not shown)" };
     }),
   ];
-  const kind = unit?.kind ?? "other";
   return {
-    id: `${unit?.id ?? "F"}-fix`, path: item.path, phase: "debug", kind, contract: "edit",
+    id: `${unit?.id ?? "F"}-fix`, path: item.path, phase: "debug", contract: "edit",
     target: { path: item.path },
-    packet: (refusal) => repairPacket(`${unit?.id ?? "F"}-fix`, kind, renderRepairInstruction(spec, { path: item.path, unit }, item.problems, refusal), passId, inputs, 0),
+    packet: (refusal) => repairPacket(`${unit?.id ?? "F"}-fix`, renderRepairInstruction(spec, { path: item.path, unit }, item.problems, refusal), passId, inputs, 0),
     resolve: (a) => {
       if (a.content !== undefined) return { content: a.content };
       if (current === null) return { reason: `${item.path} does not exist yet, so edits cannot apply; send the whole file as content` };
@@ -253,13 +254,31 @@ function repairJob(spec: Spec, item: RepairItem, codeRoot: string, passId: strin
   };
 }
 
+/**
+ * Why a policy cannot route this executor stage, or null when it can. The
+ * executor routes a job by its stage and retry count alone; a rule for the
+ * stage that also matches on task type, module or intent would be missed by
+ * every job, which would fall to another rule or the default without a word —
+ * the multi-model arm quietly typed by Opus (24 Sep). Such a policy is refused
+ * before anything is paid for.
+ */
+export function stageRuleProblem(policy: Policy, phase: string): string | null {
+  for (const [i, rule] of policy.rules.entries()) {
+    if ("default" in rule) continue;
+    const w = rule.when;
+    if (w.phase !== undefined && ![w.phase].flat().includes(phase)) continue;
+    const extra = (["task_type", "module", "intent"] as const).filter((k) => w[k] !== undefined);
+    if (extra.length) return `policy '${policy.name}' rule ${i} routes ${phase} on ${extra.join(", ")}; the executor routes by stage alone — who types a file never depends on its kind, name or language — so that rule could never match here. Remove ${extra.join(", ")} from it.`;
+  }
+  return null;
+}
+
 export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDeps): Promise<StageReceipt> {
   const started = Date.now();
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const random = deps.random ?? Math.random;
   const now = deps.now ?? Date.now;
-  const python = checkPython();
-  const check = deps.check ?? ((t: CheckTarget, a: { path: string; content: string }) => checkAnswer(t, a, python));
+  const check = deps.check ?? ((t: CheckTarget, a: { path: string; content: string }) => checkAnswer(t, a));
   const codeRoot = resolve(opts.codeDir);
 
   let jobs: Job[];
@@ -281,17 +300,18 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
     jobs = spec.units.filter((u) => u.phase === opts.stage).map((u) => unitJob(spec, u, opts.passId));
   }
 
-  const receipt: StageReceipt = { stage: opts.stage, units: jobs.length, written: 0, failed: [], ...(opts.stage === "repair" ? { not_routed: notRouted } : {}), by_door: {}, calls: 0, transport_waits: 0, cost_usd: 0, seconds: 0, checks: { parsed: 0, non_empty: 0, not_parsed: 0 } };
+  const receipt: StageReceipt = { stage: opts.stage, units: jobs.length, written: 0, failed: [], ...(opts.stage === "repair" ? { not_routed: notRouted } : {}), by_door: {}, calls: 0, transport_waits: 0, cost_usd: 0, seconds: 0 };
   let done = 0;
 
   const bill = (door: Door) => (receipt.by_door[door] ??= { units_written: 0, calls: 0, cost_usd: 0 });
-  const route = (job: Job, retry: number) => pickModel({ phase: job.phase, task_type: job.kind, module: "spec", retry_count: retry }, opts.policy, opts.overrides ?? {});
+  // No task type: the policy routes an executor job by its stage alone (stageRuleProblem refuses a policy that cannot).
+  const route = (job: Job, retry: number) => pickModel({ phase: job.phase, task_type: "", module: "spec", retry_count: retry }, opts.policy, opts.overrides ?? {});
 
   const event = (job: Job, typist: Typist, decision: ReturnType<typeof pickModel> | null, r: TypistResult, attempt: number, ok: boolean, why?: string, retryReason?: string): TelemetryEvent => ({
     ts: new Date().toISOString(),
     pass: opts.passId,
     phase: job.phase,
-    task_type: job.kind,
+    task_type: job.phase,
     task_id: job.id,
     module: "spec",
     model: typist.modelName,
@@ -429,8 +449,6 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
         writeFileSync(target, content!);
         receipt.written++;
         bill(typist.door).units_written++;
-        const kind = verdict!.checked === "parsed" ? "parsed" : verdict!.checked === "non-empty" ? "non_empty" : "not_parsed";
-        receipt.checks[kind]++;
         return;
       }
       refusal = why ?? "no answer";
@@ -443,10 +461,8 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
   // typist the stage can use is built — a typist that cannot run here (a CLI
   // flag missing, no Python for the agent door, no Vertex project) stops the
   // stage before a single job is sent.
-  if (!deps.check) {
-    const problem = toolchainProblem(jobs.map((j) => j.path), python);
-    if (problem) throw new Error(problem);
-  }
+  const stageProblem = stageRuleProblem(opts.policy, opts.stage === "repair" ? "debug" : opts.stage);
+  if (stageProblem) throw new Error(stageProblem);
   // A job whose file would land outside the code directory — lexically, or
   // through a symlinked folder — is failed before any typist is paid for it.
   jobs = jobs.filter((j) => {

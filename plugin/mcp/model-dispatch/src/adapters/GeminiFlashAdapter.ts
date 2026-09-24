@@ -363,7 +363,7 @@ export function buildUserPrompt(packet: TaskPacket, headerInline: string): strin
 
   return [
     headerInline ? `## Project header (inlined; cache miss)\n${headerInline}\n` : "",
-    `## Task — ${packet.id} (${packet.phase} / ${packet.task_type})`,
+    `## Task — ${packet.id} (${packet.phase}${packet.task_type ? ` / ${packet.task_type}` : ""})`, // an executor packet carries no task type
     `Module: ${packet.module}`,
     ``,
     `### Instruction`,
