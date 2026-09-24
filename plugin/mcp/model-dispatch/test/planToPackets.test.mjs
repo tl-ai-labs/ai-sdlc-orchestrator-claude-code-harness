@@ -415,3 +415,15 @@ test("buildPackets --multi-model: chunked edit packets keep check-imports on eve
   assert.ok(!packets[0].apply.verify.some((c) => c.includes("vitest")), "tests still run on the last chunk only");
   rmSync(root, { recursive: true, force: true });
 });
+
+test("buildPackets: a File bullet soft-wrapped before **Depends on** keeps its dependencies; a unit with none anywhere warns (Run 27b)", () => {
+  const root = repo();
+  const plan = `## House style\n- x\n\n## A1 — apps/api/src/user/new.ts\n\n- **File** \`apps/api/src/user/new.ts\` · **Action** \`new_file\` · **Depends on** none\n- **Verify** \`pnpm exec biome check {path}\`\n\n## A2 — apps/api/src/user/other.ts\n\n- **File** \`apps/api/src/user/other.ts\` · **Action** \`new_file\` ·\n  **Depends on** A1\n- **Imports**\n  - \`import { x } from "./new";\` (A3 is not a dependency)\n- **Verify** \`pnpm exec biome check {path}\`\n\n## A3 — apps/api/src/user/third.ts\n\n- **File** \`apps/api/src/user/third.ts\` · **Action** \`new_file\`\n- **Verify** \`pnpm exec biome check {path}\`\n`;
+  const { packets, errors, warnings } = buildPackets(parsePlan(plan), { runId: "r", planPath: "p.md", projectRoot: root });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(packets[1].depends_on, [packets[0].id]);
+  assert.deepEqual(packets[2].depends_on, []);
+  assert.ok(warnings.some((w) => /A3: no `\*\*Depends on\*\*` found/.test(w)), warnings.join("\n"));
+  assert.ok(!warnings.some((w) => /A[12]: no `\*\*Depends on/.test(w)), warnings.join("\n"));
+  rmSync(root, { recursive: true, force: true });
+});

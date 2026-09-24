@@ -137,17 +137,23 @@ function parseFileLine(head) {
  */
 function unitHeader(u, exists) {
   const file = bullet(u.body, "File");
-  const fromFile = file ? parseFileLine(file.head) : {};
+  // A long File bullet soft-wraps (`… · **Action** \`x\` ·` / `  **Depends on** A1`); Run 27b lost 10 of
+  // 15 dependency lists to that. Join the indented, non-bullet continuation lines before parsing.
+  const wrapped = [];
+  for (const l of file?.rest ?? []) { if (!/^\s+\S/.test(l) || /^\s*- /.test(l)) break; wrapped.push(l.trim()); }
+  const fromFile = file ? parseFileLine([file.head, ...wrapped].join(" ")) : {};
   const path = fromFile.path ?? u.path;
   let action = fromFile.action ?? (bullet(u.body, "Action")?.head.match(/`([^`]+)`/) || [])[1];
   let inferred = false;
   if (!action && path) { action = exists(path) ? "edit" : "new_file"; inferred = true; }
   let depends = fromFile.depends;
+  let noDepends = false;
   if (depends === undefined) {
     const d = bullet(u.body, "Depends on");
+    noDepends = !d;
     depends = d ? [...[d.head, ...d.rest].join(" ").matchAll(UNIT_ID)].map((m) => m[0]) : [];
   }
-  return { path, action, depends, hadFileBullet: Boolean(file), inferred };
+  return { path, action, depends, noDepends, hadFileBullet: Boolean(file), inferred };
 }
 
 /** Same glob dialect as write-contract-check.mjs (`**`, `*`, `?`); that module runs on import, so it is not shared. */
@@ -366,10 +372,11 @@ export function buildPackets(plan, opts) {
   const exists = (p) => { const n = lineCount(p); return n !== null && n !== -1; };
 
   for (const u of plan.units) {
-    const { path, action, depends, hadFileBullet, inferred } = unitHeader(u, exists);
+    const { path, action, depends, noDepends, hadFileBullet, inferred } = unitHeader(u, exists);
     if (!path || !action) { errors.push(`${u.id}: no path in the heading or a \`- **File**\` bullet`); continue; }
     if (!["new_file", "edit", "tooling"].includes(action)) { errors.push(`${u.id}: unknown Action \`${action}\``); continue; }
     if (!hadFileBullet) warnings.push(`${u.id}: no \`- **File**\` bullet; path taken from the heading`);
+    if (noDepends) warnings.push(`${u.id}: no \`**Depends on**\` found; assumed none — check the plan if this unit imports another`);
     if (inferred) warnings.push(`${u.id}: no Action; inferred \`${action}\` from whether ${path} exists`);
     if (hadFileBullet && path !== u.path) warnings.push(`${u.id}: heading path ${u.path} differs from File ${path}; using File`);
     if (contract && !contract.allowlist.some((g) => matchGlob(path, g))) {
