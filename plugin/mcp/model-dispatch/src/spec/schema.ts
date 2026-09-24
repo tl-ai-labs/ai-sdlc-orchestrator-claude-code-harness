@@ -131,6 +131,31 @@ export const SPEC_UNITS_SECTION_SCHEMA: Schema = {
   properties: { units: { type: "array", minItems: 1, items: SPEC_UNIT_SCHEMA } },
 };
 
+/**
+ * A schema's shape in one line, TypeScript-like: `{name: type, optional?: type}`, `type[]` for an
+ * array, `"A"|"B"` for an enum. It is what submit_spec_section's description shows the architect
+ * (24 Sep: once the spec sections moved into files, the tool's input no longer carried these
+ * schemas, both receivables architects' first header was refused on shape, and one spent 30 edits
+ * settling it). Rendered from the schema itself, so what the architect reads can never drift from
+ * what `validate` enforces.
+ */
+const ONE_LINE_PATTERNS = new Set(["^[^\\n\\r]+$", "^[^\\n\\r]*$"]);
+export function shapeOf(schema: Schema): string {
+  if (schema.enum) return schema.enum.map((v: unknown) => JSON.stringify(v)).join("|");
+  if (schema.type === "array") {
+    const item = shapeOf(schema.items);
+    // An enum or a patterned string is bracketed, so `[]` reads as applying to the whole item.
+    return (/[|]| matching /.test(item) && !item.startsWith("{") ? `(${item})` : item) + "[]";
+  }
+  // A pattern is shown unless it only says "one line", which the description states once for all.
+  if (schema.type === "string" && schema.pattern && !ONE_LINE_PATTERNS.has(schema.pattern)) return `string matching ${schema.pattern}`;
+  if (schema.type === "object") {
+    const req = new Set<string>(schema.required ?? []);
+    return "{" + Object.entries(schema.properties ?? {}).map(([k, sub]) => `${k}${req.has(k) ? "" : "?"}: ${shapeOf(sub as Schema)}`).join(", ") + "}";
+  }
+  return String(schema.type);
+}
+
 /** One problem found by `validate`, with the JSON path it applies to. */
 export interface SchemaError {
   path: string;

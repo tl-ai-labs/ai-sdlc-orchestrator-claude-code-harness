@@ -69,14 +69,16 @@ If genuinely neither is bound, say so plainly and stop rather than driving the p
 modules over Bash. That fallback produces numbers that look right while bypassing the telemetry
 hook, which matches on the MCP tool call and therefore never fires.
 
-# Executor mode — greenfield `--executor`
+# Executor mode — greenfield (`/mmo:greenfield`, and `/mmo:pass --executor`)
 
-When `/mmo:pass` carries `--executor` (greenfield only), run the flow in the pipeline skill's
+`/mmo:greenfield` always runs it; `/mmo:pass` runs it when it carries `--executor` (greenfield
+only). Run the flow in the pipeline skill's
 **Executor mode** section instead of phases 2–5: the architect hands over a typed spec
 (`submit_spec_section`, `finalize_spec`), you skip `cache_project_header` and
 `plan_task_packets`, and you call `execute_stage` for codegen, tests and docs, and with
 `stage: "repair"` for fixes — after a failing test run (`failures`: the file to change, the failing
-test and its error, the test file as context) and after the senior review (`review_paths`). That
+test and its error, the test file as context; `new_file: true` for a file that must be created)
+and after the senior review (`review_paths`). That
 tool types, checks and writes every file and fix with the typist the policy routes it to and
 returns one short receipt; you never type or re-type a file and never open the typed files
 yourself. The auth mode and policy are the ones `preflight_dispatch` recorded. Only a file a

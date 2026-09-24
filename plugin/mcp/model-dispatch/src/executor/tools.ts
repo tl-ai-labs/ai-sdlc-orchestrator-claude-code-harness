@@ -24,6 +24,7 @@ import { getModel } from "../policy.js";
 import { appendEvent } from "../telemetry.js";
 import { log } from "../log.js";
 import { finalizeSpec, loadSpec, readSectionFile, storedUnits, submitSpecSection } from "../spec/store.js";
+import { SPEC_HEADER_SCHEMA, SPEC_UNIT_SCHEMA, shapeOf } from "../spec/schema.js";
 import { renderShared } from "./brief.js";
 import { boundReceipt, executeStage, type RepairItem, type Stage } from "./run.js";
 import { AgyTypist, FlashCompletionTypist, LeanOpusTypist, type Typist } from "./typists.js";
@@ -70,7 +71,7 @@ export const EXECUTOR_TOOLS = [
   {
     name: "submit_spec_section",
     description:
-      `Hand over ONE section of the typed build spec as a FILE you wrote with the Write tool under spec_dir: first the header (section: "header", file: spec.sections/header.json holding {stack, commands, decisions, shared}), then the units in batches (section: "units", file: spec.sections/units-001.json, units-002.json, ... each holding a JSON array of units), each unit after the units it depends on. Each section is checked on arrival; a refused section stores nothing. If the file is not valid JSON the reply names the line, column and text: fix that spot with Edit and submit the same file again, never rewrite the whole file. Other problems are listed by path; fix them in the file the same way.`,
+      `Hand over ONE section of the typed build spec as a FILE you wrote with the Write tool under spec_dir: first the header (section: "header", file: spec.sections/header.json holding {stack, commands, decisions, shared}), then the units in batches (section: "units", file: spec.sections/units-001.json, units-002.json, ... each holding a JSON array of units), each unit after the units it depends on. Each section is checked on arrival; a refused section stores nothing. If the file is not valid JSON the reply names the line, column and text: fix that spot with Edit and submit the same file again, never rewrite the whole file. Other problems are listed by path; fix them in the file the same way. The exact shapes (every string is one line; ? marks an optional field): the header file holds ${shapeOf(SPEC_HEADER_SCHEMA)}; each units file holds a JSON array of units, each ${shapeOf(SPEC_UNIT_SCHEMA)}.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -113,6 +114,7 @@ export const EXECUTOR_TOOLS = [
               path: { type: "string", description: "The file to change, relative to code_dir." },
               problem: { type: "string", description: "What fails: the test name and its error, verbatim." },
               context_paths: { type: "array", items: { type: "string" }, description: "Files to show beside it, e.g. the failing test file (relative to code_dir)." },
+              new_file: { type: "boolean", description: "true when the fix needs a file that does not exist yet: path is then where to create it, relative to code_dir. A review finding that needs a new file comes back in not_routed; send it again here with new_file." },
             },
             required: ["path", "problem"],
           },
@@ -159,6 +161,14 @@ export function reviewRepairs(reviewPaths: string[]): { items: RepairItem[]; not
     }
   }
   return { items, not_routed: notRouted };
+}
+
+/** The fixes a test run names: one per entry, new_file carried through (a fix that creates a file). */
+export function failureRepairs(failures: any[]): RepairItem[] {
+  return failures.map((f: any) => ({
+    path: String(f.path), problems: [String(f.problem)], context_paths: (f.context_paths ?? []).map(String),
+    ...(f.new_file === true ? { new_file: true } : {}),
+  }));
 }
 
 /** The stages execute_stage types. */
@@ -237,7 +247,7 @@ export async function handleExecutorTool(name: string, a: any, ctx: { run?: () =
     notRouted = fromReview.not_routed;
     repairs = [
       ...fromReview.items,
-      ...(a.failures ?? []).map((f: any) => ({ path: String(f.path), problems: [String(f.problem)], context_paths: (f.context_paths ?? []).map(String) })),
+      ...failureRepairs(a.failures ?? []),
     ];
     if (!repairs.length) return compact(boundReceipt({ stage: "repair", units: 0, written: 0, failed: [], not_routed: notRouted, note: "nothing to fix" }));
   }

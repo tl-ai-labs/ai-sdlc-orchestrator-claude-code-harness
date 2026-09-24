@@ -33,14 +33,15 @@ This skill is the source of truth for the orchestrator. When invoked under `/mmo
 
 ---
 
-## Executor mode — greenfield `/mmo:pass ... --executor`
+## Executor mode — greenfield: `/mmo:greenfield`, and `/mmo:pass ... --executor`
 
 A second greenfield flow, for every policy alike. The typed spec replaces design.md +
 packets.json, and the MCP tool `execute_stage` types, checks and writes every file by code:
 you never type or re-type a unit's file, and the files never pass through your conversation.
 The policy still decides who types each file (its rule for the stage — never the file's kind, name or language),
 so a solo policy and a multi-model policy run exactly this flow and differ only in the typist.
-Without `--executor`, and in brownfield, nothing below applies.
+`/mmo:greenfield` always runs it; `/mmo:pass` runs it when it carries `--executor`. In `/mmo:pass`
+without `--executor`, and in brownfield, nothing below applies.
 
 ```
 -1. preflight_dispatch                     (unchanged; it also records the run's auth mode and policy,
@@ -91,6 +92,9 @@ Rules for executor mode:
   - After the senior review, call `execute_stage` with `stage: "repair"` and `review_paths` (the
     review.json files it wrote): every finding that names a file is fixed. Then run the tests
     once more, with one repair round if they fail.
+  - A fix that needs a file that does not exist yet — a review finding comes back in `not_routed`
+    saying so — is sent again in `failures` with `new_file: true` and the path to create, relative
+    to `code_dir`. The receipt lists it under `created`. Never write it yourself.
 - **Failures:** a file the receipt lists as failed (every attempt refused) is yours to write or
   fix, in this session, from its spec entry and the receipt's reason. This is the rare case, and
   it is the same in every policy. The same holds for tests still failing after the repair rounds.

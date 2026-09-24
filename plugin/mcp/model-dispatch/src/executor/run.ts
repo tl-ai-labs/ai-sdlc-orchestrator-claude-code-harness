@@ -44,7 +44,15 @@ import type { Answer, Contract, Door, Edit, Typist, TypistResult } from "./typis
 export type Stage = "codegen" | "tests" | "docs" | "repair";
 
 /** One file to fix: its path under the code directory, what must change, and files to show beside it for reference. */
-export interface RepairItem { path: string; problems: string[]; context_paths?: string[] }
+/**
+ * One file to fix. `new_file` asks for a file that does not exist yet (24 Sep, receivables: the
+ * senior review asked for start-up code to move into a new file, the repair stage could only change
+ * a file that exists or that the spec lists, and the finding stayed open). A missing file is never
+ * guessed from a finding's path — the reviewer writes paths from the project root, so a new name can
+ * mean two places — so the caller, which knows the code directory, asks for it explicitly, with a
+ * path relative to the code directory (placeNewFile).
+ */
+export interface RepairItem { path: string; problems: string[]; context_paths?: string[]; new_file?: boolean }
 
 export interface StageOptions {
   stage: Stage;
@@ -94,6 +102,8 @@ export interface StageReceipt {
   stopped?: string;
   /** Jobs not started because the stage stopped. */
   not_typed?: number;
+  /** Files a repair round created (asked for with new_file); every other written file already existed. */
+  created?: string[];
   /** Fixes whose file could not be placed (placeFixPath): reported, never guessed. */
   not_routed?: { file: string; reason: string }[];
   not_routed_not_listed?: number;
@@ -174,7 +184,24 @@ export function placeFixPath(file: string, codeRoot: string, unitPaths: Set<stri
     const isFile = existsSync(full) && statSync(full).isFile();
     if ((isFile || unitPaths.has(c)) && insideCodeDir(root, c)) return { path: c };
   }
-  return { reason: "names no file under the code directory and no file of the spec" };
+  return { reason: NOT_PLACED };
+}
+
+/** Why a fix was not placed, and how to ask for a file that does not exist yet. */
+export const NOT_PLACED = "names no file under the code directory and no file of the spec; to create a file that does not exist yet, send it in failures with new_file: true and its path relative to the code directory";
+
+/**
+ * Where a fix that creates a file goes: the path exactly as given, relative to the code directory,
+ * held to the same checks as every file the executor writes — a safe relative path (no leading
+ * slash, no '..') that stays inside the code directory even through a symlinked folder
+ * (insideCodeDir). Never an absolute path, never moved or guessed.
+ */
+export function placeNewFile(file: string, codeRoot: string): { path: string } | { reason: string } {
+  const norm = file.replace(/\\/g, "/");
+  if (isAbsolute(file) || norm.startsWith("/")) return { reason: "a new file's path must be relative to the code directory" };
+  const rel = posix.normalize(norm);
+  if (!isSafeRelativePath(rel) || !insideCodeDir(resolve(codeRoot), rel)) return { reason: "a new file's path must stay inside the code directory" };
+  return { path: rel };
 }
 /**
  * How long a lean Opus typist's cache stays warm after its last call: the
@@ -289,7 +316,10 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
     const unitPaths = new Set(spec.units.map((u) => u.path));
     const byPath = new Map<string, RepairItem>();
     for (const r of opts.repairs ?? []) {
-      const placed = placeFixPath(r.path, codeRoot, unitPaths);
+      // An existing file (or one the spec lists) is placed as always; only a fix that asks for a
+      // new file (new_file) may name a file that does not exist yet, at exactly the path it gives.
+      let placed = placeFixPath(r.path, codeRoot, unitPaths);
+      if ("reason" in placed && r.new_file) placed = placeNewFile(r.path, codeRoot);
       if ("reason" in placed) { notRouted.push({ file: r.path, reason: placed.reason }); continue; }
       const m = byPath.get(placed.path);
       if (m) { m.problems.push(...r.problems); m.context_paths = [...new Set([...(m.context_paths ?? []), ...(r.context_paths ?? [])])]; }
@@ -446,8 +476,10 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
         const rel = relative(codeRoot, target);
         if (rel.startsWith("..") || rel === "") { refusal = `unsafe path ${job.path}`; continue; }
         mkdirSync(dirname(target), { recursive: true });
+        const existed = existsSync(target);
         writeFileSync(target, content!);
         receipt.written++;
+        if (opts.stage === "repair" && !existed) (receipt.created ??= []).push(job.path);
         bill(typist.door).units_written++;
         return;
       }

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.7.5-blue)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-0.7.6-blue)](.claude-plugin/marketplace.json)
 
 ![How the plugin works — you paste two prompts, an orchestrator routes premium work to Claude Opus and mechanical work to Gemini Flash, and your project gets both generated code and a full audit trail](docs/assets/hero.svg)
 
@@ -45,7 +45,28 @@ The highlighted path is where cost drops — mechanical work routed off Opus int
 
 ### Phase timeline
 
-A greenfield run walks 11 states in order. Brownfield inserts two more (`discovery`, `change_plan`) around the same core. Each state is color-coded by which tier does the work.
+A greenfield run — `/mmo:greenfield`, and `/mmo:pass --executor` — runs the typed-spec executor: the architect hands over a typed spec, and `execute_stage` types, checks and writes every file and every fix with the typist the policy names, so no file passes through the orchestrator's conversation. Each state is color-coded by which tier does the work.
+
+```mermaid
+flowchart LR
+    E0([preflight_dispatch]):::local
+    E1[requirements_analysis]:::opus
+    E2[architecture_design<br/><i>typed spec</i>]:::opus
+    E3[execute_stage<br/>codegen · tests]:::gem
+    E4[test_run<br/>+ repair]:::local
+    E5[execute_stage<br/>docs]:::gem
+    E6[senior_code_review<br/>+ repair]:::opus
+    E7[security_review]:::opus
+    E8[generate_final_report]:::opus
+
+    E0 --> E1 --> E2 --> E3 --> E4 --> E5 --> E6 --> E7 --> E8
+
+    classDef opus  fill:#FEF3C7,stroke:#B45309,color:#78350F
+    classDef gem   fill:#E0F2FE,stroke:#0369A1,color:#0C4A6E
+    classDef local fill:#F3F4F6,stroke:#6B7280,color:#1F2937
+```
+
+`/mmo:pass` without `--executor` walks the older 11 states below, and brownfield inserts two more (`discovery`, `change_plan`) around the same core.
 
 ```mermaid
 flowchart LR
@@ -103,10 +124,10 @@ Same rule applies to greenfield and brownfield. The default `opus-plus-flash` po
 
 | Phase | Tier | Model in the default policy |
 |---|---|---|
-| `requirements_analysis` · `architecture_design` · `plan_task_packets` | premium | Claude Opus |
+| `requirements_analysis` · `architecture_design` · `plan_task_packets` (not in the executor flow) | premium | Claude Opus |
 | `senior_code_review` · `security_review` | premium | Claude Opus |
 | `discovery` · `change_plan` (brownfield only) | premium | Claude Opus |
-| `execute_packets` (codegen) · `tests` · `docs` | mechanical | Gemini Flash |
+| codegen · `tests` · `docs` (`execute_stage` in the executor flow, `execute_packets` otherwise) | mechanical | Gemini Flash |
 | `debug` (retry_count ≥ 2) | premium | Claude Opus (auto-escalation) |
 | `test_run` | local | Bash on your machine, no model call |
 

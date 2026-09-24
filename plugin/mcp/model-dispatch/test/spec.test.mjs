@@ -213,3 +213,32 @@ test("briefs: the shared block is identical for every unit, the unit block names
   assert.match(fix, /Return ONLY a JSON object \{"path": "backend\/app\/main\.py", "edits": \[\{"search": /);
   assert.match(renderRepairInstruction(spec, { path: ".env.test" }, ["missing"]), /a supporting file the specification does not list/);
 });
+
+/*
+ * The architect sees the exact shape of both section files (24 Sep, receivables). Since the
+ * sections moved into files (250a4df) the submit tool's input no longer carried the header and
+ * unit schemas, so both architects' first header.json was refused on shape (for example
+ * "/header/stack must be an array") and one made 30 edits to settle it; the two runs' architects
+ * differed by $2.83. The shapes are now in the tool's description, rendered from the schemas
+ * themselves by code, so the description can never drift from what the check enforces.
+ */
+test("shapeOf renders required and optional fields, arrays, enums, integers and nesting", async () => {
+  const { shapeOf } = await import("../dist/spec/schema.js");
+  assert.equal(
+    shapeOf({ type: "object", required: ["a"], properties: {
+      a: { type: "string" }, b: { type: "array", items: { type: "integer" } }, c: { type: "string", enum: ["X", "Y"] },
+      d: { type: "object", required: [], properties: { e: { type: "string" } } },
+    } }),
+    '{a: string, b?: integer[], c?: "X"|"Y", d?: {e?: string}}',
+  );
+});
+
+test("submit_spec_section's description carries the exact shape of the header file and of a unit, as the schemas define them", async () => {
+  const { shapeOf, SPEC_HEADER_SCHEMA, SPEC_UNIT_SCHEMA } = await import("../dist/spec/schema.js");
+  const { EXECUTOR_TOOLS } = await import("../dist/executor/tools.js");
+  const d = EXECUTOR_TOOLS.find((t) => t.name === "submit_spec_section").description;
+  assert.ok(d.includes(shapeOf(SPEC_HEADER_SCHEMA)), "the header's shape");
+  assert.ok(d.includes(shapeOf(SPEC_UNIT_SCHEMA)), "a unit's shape");
+  assert.match(d, /stack: string\[\]/, "the refusal seen on 24 Sep: stack is an array of one-line strings");
+  for (const k of SPEC_UNIT_SCHEMA.required) assert.match(d, new RegExp(`[{ ]${k}: `), `required unit field ${k}`);
+});

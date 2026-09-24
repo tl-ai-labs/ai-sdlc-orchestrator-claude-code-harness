@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { executeStage, backoffMs, applyEdits, placeFixPath, boundReceipt, RECEIPT_MAX_BYTES, LEAN_OPUS_CACHE_TTL_MS } from "../dist/executor/run.js";
 import { checkAnswer } from "../dist/executor/checks.js";
-import { EXECUTOR_TOOLS, handleExecutorTool, reviewRepairs, STAGE_CONCURRENCY, TRANSPORT } from "../dist/executor/tools.js";
+import { EXECUTOR_TOOLS, handleExecutorTool, reviewRepairs, failureRepairs, STAGE_CONCURRENCY, TRANSPORT } from "../dist/executor/tools.js";
 import { loadPolicyFromPath } from "../dist/policy.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -337,7 +337,9 @@ test("a fix whose path leaves the code directory is reported, and nothing is rea
   const dir = mkdtempSync(join(tmpdir(), "exec-"));
   const opus = fake("lean-opus", "opus");
   const r = await executeStage(SPEC, OPTS(SOLO, dir, { stage: "repair", repairs: [{ path: "../etc/passwd", problems: ["x"] }] }), { typistFor: () => opus, fallback: opus, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
-  assert.deepEqual(r.not_routed, [{ file: "../etc/passwd", reason: "names no file under the code directory and no file of the spec" }]);
+  assert.equal(r.not_routed.length, 1);
+  assert.equal(r.not_routed[0].file, "../etc/passwd");
+  assert.match(r.not_routed[0].reason, /^names no file under the code directory and no file of the spec/);
   assert.equal(r.units, 0);
   assert.equal(opus.calls.length, 0);
 });
@@ -498,4 +500,72 @@ test("a door that refuses the login or permission (401/403) stops the stage — 
   const s2 = await executeStage(SPEC, OPTS(SOLO, mkdtempSync(join(tmpdir(), "exec-")), { concurrency: 1 }), { typistFor: () => bad, fallback: bad, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
   assert.match(s2.stopped, /lean-opus door refused .* HTTP 401/);
   assert.equal(bad.calls.length, 1);
+});
+
+/*
+ * A fix may create a file (24 Sep, receivables new-solo): the senior review asked for the
+ * bootstrap to move into a new file, the repair stage refused it (a fix could only change a file
+ * that exists or that the spec lists), and the finding stayed open. A missing file is still never
+ * guessed from a finding's path — the reviewer writes paths from the project root, so a new name
+ * could mean two places — the orchestrator, which knows the code directory, asks for it
+ * explicitly with new_file and a path relative to the code directory. The file is held to the
+ * same checks as every file the executor writes.
+ */
+test("a fix may create a new file: asked for with new_file and a path relative to the code directory, it is typed whole and written", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "exec-"));
+  const flash = fake("flash-completion", "flash-completion", () => ({ answer: { path: "app/setup.py", content: "def setup():\n    return 1\n" } }));
+  const r = await executeStage(SPEC, OPTS(ORCH, dir, { stage: "repair", repairs: [
+    { path: "app/setup.py", new_file: true, problems: ["major: the start-up code is written twice — fix: move it into app/setup.py"] },
+  ] }), { typistFor: () => flash, fallback: flash, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: (u, a) => checkAnswer(u, a) });
+  assert.equal(r.written, 1);
+  assert.deepEqual(r.created, ["app/setup.py"]);
+  assert.deepEqual(r.not_routed, []);
+  assert.equal(readFileSync(join(dir, "app/setup.py"), "utf8"), "def setup():\n    return 1\n");
+  assert.match(flash.calls[0].framed, /### app\/setup\.py  — current text: the file does not exist yet/);
+});
+
+test("a new file is held to the same safety as every file: a path that leaves the code directory, even through a symlink, is reported and nothing is sent", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "exec-"));
+  const outside = mkdtempSync(join(tmpdir(), "outside-"));
+  symlinkSync(outside, join(dir, "link"));
+  const opus = fake("lean-opus", "opus");
+  const r = await executeStage(SPEC, OPTS(SOLO, dir, { stage: "repair", repairs: [
+    { path: "../escape.py", new_file: true, problems: ["x"] },
+    { path: "/etc/escape.py", new_file: true, problems: ["x"] },
+    { path: "link/escape.py", new_file: true, problems: ["x"] },
+  ] }), { typistFor: () => opus, fallback: opus, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
+  assert.deepEqual(r.not_routed.map((x) => x.file), ["../escape.py", "/etc/escape.py", "link/escape.py"]);
+  assert.equal(r.units, 0);
+  assert.equal(opus.calls.length, 0);
+  assert.deepEqual(readdirSync(outside), [], "nothing was written outside");
+});
+
+test("without new_file a missing file is still never guessed, and the reply says how to ask for a new one", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "exec-"));
+  const opus = fake("lean-opus", "opus");
+  const r = await executeStage(SPEC, OPTS(SOLO, dir, { stage: "repair", repairs: [{ path: "app/setup.py", problems: ["x"] }] }), { typistFor: () => opus, fallback: opus, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
+  assert.equal(r.units, 0);
+  assert.match(r.not_routed[0].reason, /new_file: true/);
+  assert.equal(existsSync(join(dir, "app/setup.py")), false);
+});
+
+test("new_file on a file that already exists is an ordinary fix of that file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "exec-"));
+  mkdirSync(join(dir, "app"), { recursive: true });
+  writeFileSync(join(dir, "app/models.py"), "def thing():\n    return 0\n");
+  const flash = fake("flash-completion", "flash-completion", () => ({ answer: { path: "app/models.py", edits: [{ search: "return 0", replace: "return 1" }] } }));
+  const r = await executeStage(SPEC, OPTS(ORCH, dir, { stage: "repair", repairs: [{ path: "app/models.py", new_file: true, problems: ["x"] }] }), { typistFor: () => flash, fallback: flash, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
+  assert.equal(r.written, 1);
+  assert.deepEqual(r.created ?? [], []);
+  assert.equal(readFileSync(join(dir, "app/models.py"), "utf8"), "def thing():\n    return 1\n");
+});
+
+test("execute_stage carries new_file from a failure through to the repair job", () => {
+  const items = failureRepairs([{ path: "app/setup.py", problem: "p", new_file: true }, { path: "app/models.py", problem: "q", context_paths: ["t.py"] }]);
+  assert.deepEqual(items, [
+    { path: "app/setup.py", problems: ["p"], context_paths: [], new_file: true },
+    { path: "app/models.py", problems: ["q"], context_paths: ["t.py"] },
+  ]);
+  const schema = EXECUTOR_TOOLS.find((t) => t.name === "execute_stage").inputSchema.properties.failures.items.properties;
+  assert.equal(schema.new_file.type, "boolean");
 });

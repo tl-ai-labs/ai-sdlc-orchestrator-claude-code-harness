@@ -247,6 +247,17 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.7.6
+
+| Area | Before | From v0.7.6 |
+|---|---|---|
+| The architect's package versions (executor) | Pinned from the model's memory — the architect had no shell. Both 0.7.5 receivables arms pinned releases a year or more old; a fresh install printed 13 deprecation notices (the brief's warning-free install criterion failed), and the security review found high advisories it could only accept. 0.7.3's typing helpers had looked each package up and installed with zero warnings | The architect has a shell for registry lookups and, when the brief's criteria forbid install warnings, a trial install in a scratch folder outside the code directory. It pins the registry's current release, settles what the trial install prints in the spec, and marks a version it could not check `(not checked: <reason>)` in `stack`. Its instructions name no language, package manager or registry (`tools/test/architect-versions.test.mjs`). A few more architect turns, the same in every policy |
+| The spec's format (executor) | Once sections moved into files (v0.7.5) the tool's input no longer carried the header and unit schemas: both receivables architects' first header was refused on shape, and one needed 30 edits to settle it — $2.83 of the two runs' difference was this, not the policy | `submit_spec_section`'s description carries both shapes, rendered from the schemas by code (`shapeOf`), so the description cannot drift from the check |
+| A fix that needs a new file (executor) | Refused: a repair could change only a file that exists or that the spec lists, so a review finding asking for a new file stayed open (receivables new-solo, 24 Sep) | A test-run failure may carry `new_file: true` and a path relative to the code directory; the file is typed whole and written under the same checks as every file. A review finding that needs a new file comes back in `not_routed` with that instruction; the receipt lists `created` |
+| `/mmo:greenfield` (interactive) | Took the older flow — the orchestrator wrote every packet and received every file — so none of the executor's saving reached an interactive run | Runs executor mode, the flow the headless comparisons measured; `/mmo:pass` keeps `--executor` as its opt-in (`tools/test/greenfield-executor.test.mjs`) |
+
+No dispatched event is priced differently: a run's bill changes only through what the run does (fewer refused spec sections, a few registry lookups, a fix that can now create its file).
+
 ### v0.7.5
 
 | Area | Before | From v0.7.5 |

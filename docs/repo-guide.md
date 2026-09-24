@@ -1,6 +1,6 @@
 # Repo guide
 
-This repository holds `mmo` (Multi-Model Orchestrator) v0.7.5 — a Claude Code plugin that runs a
+This repository holds `mmo` (Multi-Model Orchestrator) v0.7.6 — a Claude Code plugin that runs a
 full software-delivery pipeline against a brief (requirements → design → code → senior review →
 tests → security review), routes each phase to the model that fits it, and records what each phase
 cost — plus the harness, tests and documentation that ship it.
@@ -61,7 +61,7 @@ path, one API call per unit of work, nothing here is installed and nothing here 
 | `plugin/mcp/model-dispatch/src/server.ts` | Reading or changing the MCP server. Claude Code launches the compiled `dist/server.js`; the source is here. One adapter per model surface sits in `src/adapters/`. |
 | `plugin/policy-console/policy-server.mjs` | Serving the policy console on `127.0.0.1`. Normally started for you by `plugin/scripts/setup-policy.mjs`. |
 | `plugin/mcp/model-dispatch/worker/gemini_worker.py` | Debugging the agent path. The MCP server spawns it; you do not start it by hand. |
-| `plugin/mcp/model-dispatch/src/executor/` | The typed-spec executor (greenfield `--executor`): `brief.ts` renders briefs and fix briefs, `typists.ts` holds the three typists (their environments, request shapes and failure classification), `checks.ts` the checks on every answer, `run.ts` the stage runner (the ladder, repairs, warm-up), `tools.ts` the MCP tools. `worker/typist_worker.py` is the agent-door typist. The typed spec itself is in `src/spec/`. |
+| `plugin/mcp/model-dispatch/src/executor/` | The typed-spec executor (greenfield: `/mmo:greenfield`, and `/mmo:pass --executor`): `brief.ts` renders briefs and fix briefs, `typists.ts` holds the three typists (their environments, request shapes and failure classification), `checks.ts` the checks on every answer, `run.ts` the stage runner (the ladder, repairs, warm-up), `tools.ts` the MCP tools. `worker/typist_worker.py` is the agent-door typist. The typed spec itself is in `src/spec/`. |
 | `plugin/mcp/model-dispatch/src/runCard.ts` | The run card pre-flight records (plugin version and commit, Claude Code version, prompt-cache overrides found). |
 
 ## Inside `plugin/`
