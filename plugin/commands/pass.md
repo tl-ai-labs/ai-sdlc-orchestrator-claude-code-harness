@@ -1,6 +1,6 @@
 ---
 description: "Run the AI-SDLC workflow end-to-end. Reads a project brief and drives requirements, design, codegen, tests, docs, and reviews under the loaded policy. Premium-judgment phases stay on the subagent's own tier; mechanical phases dispatch to the policy's mechanical model. Configurable via --auth, --policy, --study, --run-id."
-argument-hint: "--auth=vendor|estimated [--policy=<name>] [--study=<study-id>] [--run-id=<run-id>] <path-to-brief.md>"
+argument-hint: "--auth=vendor|estimated [--policy=<name>] [--study=<study-id>] [--run-id=<run-id>] [--executor] <path-to-brief.md>"
 ---
 
 Invoke the `orchestrator` subagent to execute one full SDLC run.
@@ -12,6 +12,7 @@ Invoke the `orchestrator` subagent to execute one full SDLC run.
 - `--policy=<name>` — routing policy name. When absent, resolves to the current project's `default_policy` field from `.sdlc/project.json` (written by the setup-time policy console — see [SETUP.md](../../SETUP.md) §5b), or `opus-plus-flash` if no project default is set.
 - `--study=<study-id>` — case-study identifier. Defaults to `workforce-ops`. Set this to a project-specific id when running against a brief other than the shipped `examples/workforce-ops/brief.md`, so telemetry and packets stay grouped by project.
 - `--run-id=<run-id>` — run identifier within the study. Defaults to `pass1`.
+- `--executor` — greenfield only: run the typed-spec executor flow (the pipeline skill's **Executor mode**). The architect hands over a typed spec, and the `execute_stage` tool types, checks and writes every file by code, each with the typist the policy routes it to, and types review and test fixes the same way (the policy's `debug` rule, exact edits); the orchestrator never re-types a file. The same flow for every policy, so a solo policy and a multi-model policy differ only in who types. Ignored in brownfield.
 - The remaining positional argument is the path to the brief file. Any markdown brief on disk works — see `docs/brief-template.md` for the section layout the requirements phase expects.
 
 **Output paths:**

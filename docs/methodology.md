@@ -247,6 +247,25 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.7.5
+
+| Area | Before | From v0.7.5 |
+|---|---|---|
+| Greenfield `--executor` (new, opt-in) | — | The typed-spec executor: the architect hands a typed spec over in sections (`submit_spec_section`, `finalize_spec`), and `execute_stage` types, checks and writes every file by code, each with the typist the policy routes it to; review and test fixes are typed the same way (a repair round, routed as phase `debug` attempt by attempt, answered as exact edits). Every typist call is one dispatched telemetry event with its own tokens and dollars at the list price, carrying `door` (`lean-opus`, `flash-completion`, `agy`): a `lean-opus` call is priced from its own `claude -p` receipt like any claude-cli worker, a Gemini call as its door prices it, and an agent-door call that failed or ran out of time is priced from the session usage its worker records. A `lean-opus` call killed at its time limit leaves no receipt, so it is recorded at $0 with its error saying its usage is unknown. Those events sum into `total_cost_usd` like every dispatched event, and the collector adds the orchestrator session as before; the typists run in scratch directories with no transcript, so the collector never sees them twice. Runs without the flag are unchanged by this row. |
+| The orchestrator helper's prompt cache (every run) | Claude Code's helper default: five minutes, so a cache expired during any wait longer than that and the whole conversation was written again | `experimental.cacheTtl: 1h` on `plugin/agents/orchestrator.md`. Each new cache write is billed at 2× input instead of 1.25×; a wait of up to an hour no longer re-writes the conversation. The transcript records the lifetime of every write, and the collector already prices each at its own rate. |
+| Background launches of the pipeline's own helpers (every run) | Allowed | Refused by a PreToolUse hook (`scripts/foreground-helpers.mjs`) with a reason; the model launches the helper again in the foreground. Only this plugin's agents are affected. |
+| Completion-door (`flash-completion`) thinking level | The adapter never read the leaf's `reasoning.tier`, so every call ran at Google's default thinking; a tier set in a policy had no effect on this door | The tier is sent as Gemini's `thinkingConfig.thinkingLevel`, exactly as written (`minimal`, `low`, `medium`, `high`), the same value the agent door already sends. A leaf with no tier sends none, so the shipped policies (none sets a tier) are unchanged. Thinking tokens are billed at the output rate, so a lower tier lowers a call's output dollars. |
+| A completion-door call refused with HTTP 429 (every run) | Billed the prompt as input, estimated from its length | Billed $0: Google refuses the request before the model runs and counts no tokens for it — in the step-2 bake-off its own token counter matched, to the token, receipts that counted nothing for four refused calls. Any other failure keeps the stated bound (the prompt billed as input). Each failed attempt now records the vendor's HTTP status (`error_status`), a network error code (`error_code`) and any retry delay Google asked for (`retry_after_ms`). |
+| The pipeline helpers' effort (every run) | Inherited from the launching session, so a launch flag or setting could change it | Pinned `effort: high` in the orchestrator, architect, senior-reviewer, security-reviewer and discovery agent files — what every recorded turn of the 0.7.3 runs teamboard-a, -b and -c used (inherited) — so the effort no longer depends on how a run was launched. |
+| Run card (every run) | — | `preflight_dispatch` returns `run_card`: the plugin version and git commit, whether its tree had uncommitted changes, Claude Code's version, a digest of the settings files, and every setting that overrides the pinned prompt-cache lifetimes (`FORCE_PROMPT_CACHING_5M`, `DISABLE_PROMPT_CACHING*`, `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`, `subagentPromptCacheTtl`), named and never valued. An override logs `run.cache_override`; it never halts a run. |
+
+Figures that move on the same tokens:
+
+| Case | Before | From v0.7.5 |
+|---|---|---|
+| A completion-door call to Gemini 3.8 Flash (global, $0.75 per M input) with a 10,000-token prompt, refused with HTTP 429 | $0.0075 | $0 |
+| Any completion-door call that succeeded, and any Claude cost | Unchanged | Unchanged |
+
 ### v0.7.4
 
 | Area | Before | From v0.7.4 |

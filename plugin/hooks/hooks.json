@@ -10,6 +10,16 @@
             "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/write-contract-check.mjs"
           }
         ]
+      },
+      {
+        "_comment": "Keeps the pipeline's own helpers (mmo:orchestrator, architect, reviewers, discovery) in the foreground: a background launch of one of them is refused with a reason and re-launched in the foreground. Every other agent launch is allowed untouched.",
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/foreground-helpers.mjs"
+          }
+        ]
       }
     ],
     "PostToolUse": [

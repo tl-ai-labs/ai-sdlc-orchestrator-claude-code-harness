@@ -16,7 +16,9 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { loadPolicy, loadPolicyFromPath, getModel } from "./policy.js";
 import {
@@ -39,6 +41,9 @@ import {
 import type { TaskPacket, TelemetryEvent, Policy, SelectOverrides } from "./types.js";
 import { resolveProjectRoot } from "./project-root.js";
 import { log, setLevel, configureSinks, type Level } from "./log.js";
+// Typed-spec executor tools (greenfield --executor): listed below, handled in executor/tools.ts.
+import { EXECUTOR_TOOLS, EXECUTOR_TOOL_NAMES, handleExecutorTool, type RunState } from "./executor/tools.js";
+import { runCard } from "./runCard.js";
 
 /**
  * Cheap up-front schema validation for TaskPacket inputs to execute_with_model.
@@ -89,6 +94,13 @@ const SERVER_VERSION = "0.1.0";
 // Runtime state: loaded policies cached by name, adapters cached by model id.
 const adapterCache = new Map<string, ReturnType<typeof createAdapter>>();
 let activePolicy: Policy | null = null;
+/**
+ * The run as pre-flight saw it: the auth mode and the policy arguments.
+ * execute_stage reads these instead of taking them per call, so the model
+ * states the run's auth mode once (Phase -1) and every stage — in both arms —
+ * uses that same value.
+ */
+let runState: RunState | undefined;
 let activePolicyKey = "";
 
 /** Slot choices, spelled `slot=option[,slot=option...]`. Property of the install. */
@@ -164,7 +176,13 @@ function adapterFor(policy: Policy, modelId: string) {
  * constructs `builtin-anthropic`, so an unset ANTHROPIC_API_KEY is inert.
  * Classification lives in preflight.ts.
  */
-function preflightDispatch(policy: Policy, authMode: AuthMode) {
+/** The plugin's directory (dist/ → model-dispatch/ → mcp/ → plugin/) and its version, for the run card. */
+const PLUGIN_DIR = fileURLToPath(new URL("../../../", import.meta.url));
+function pluginVersion(): string {
+  try { return JSON.parse(readFileSync(join(PLUGIN_DIR, ".claude-plugin", "plugin.json"), "utf8")).version ?? "unknown"; } catch { return "unknown"; }
+}
+
+function preflightDispatch(policy: Policy, authMode: AuthMode, projectRoot?: string) {
   // Losing options of `select:` slots are excluded: their prerequisites
   // (Python venv, worker script) are not this run's problem.
   const notSelected = unreachableModelIds(policy, selectOverrides());
@@ -221,6 +239,14 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
   for (const id of notSelected) {
     log("info", "preflight.model", { model_id: id, ok: true, classification: "not_selected" });
   }
+  // The run card: the code and cache rules this run used, so compared runs can
+  // be shown to have run the same way. A cache override is a warning, never a
+  // halt: a user may set one on purpose; a comparison's launcher refuses it.
+  const card = runCard({ pluginDir: PLUGIN_DIR, pluginVersion: pluginVersion(), env: process.env, projectRoot });
+  for (const o of card.cache_overrides) {
+    log("warn", "run.cache_override", { setting: o, note: "overrides the plugin's pinned prompt-cache lifetimes; this run's cache costs are not comparable with a run without it" });
+  }
+  log("info", "run.card", card as unknown as Record<string, unknown>);
   log("info", "preflight.result", {
     ok: assessment.ok,
     halt_reason: assessment.halt_reason,
@@ -246,6 +272,7 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
     // Price notes that do not stop the run (a policy block that differs from
     // the price list; the list is billed).
     price_warnings: assessment.price_warnings,
+    run_card: card,
   };
 }
 
@@ -382,10 +409,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    ...EXECUTOR_TOOLS,
   ],
 }));
 
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
+server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
   const { name, arguments: args } = req.params;
   const a0 = args as any;
 
@@ -402,6 +430,20 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   log("debug", "tool.call.start", { tool: name, arg_keys: Object.keys(a0 ?? {}).join(",") });
 
   try {
+    // The executor's tools get the run state pre-flight recorded (the auth mode,
+    // and the policy loaded from pre-flight's own arguments), the run's slot
+    // choices — the same ones execute_with_model honours, so the Gemini door is
+    // the run's choice — and the request's progress channel (MCP progress
+    // messages keep a long stage call alive).
+    if (EXECUTOR_TOOL_NAMES.has(name as any)) {
+      const token = (req.params as any)._meta?.progressToken;
+      return await handleExecutorTool(name, a0, {
+        run: () => runState,
+        policy: (run) => ensurePolicy(run.policyName, run.projectRoot, run.policyPath),
+        overrides: selectOverrides(),
+        progress: { token, send: (params) => extra.sendNotification({ method: "notifications/progress", params } as any) },
+      });
+    }
     switch (name) {
       case "execute_with_model": {
         const a = args as any;
@@ -603,7 +645,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // Parse before the policy loads so a missing mode fails on the mode.
         const authMode = parseAuthMode(a.auth_mode);
         const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
-        const out = preflightDispatch(policy, authMode);
+        const out = preflightDispatch(policy, authMode, a.project_root);
+        runState = { authMode, policyName: a.policy_name, projectRoot: a.project_root, policyPath: a.policy_path };
         return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
       }
       case "load_policy": {

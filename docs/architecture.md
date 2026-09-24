@@ -39,7 +39,7 @@ The hook matcher is a regex because the plugin route namespaces MCP tools with t
 
 ## 2. MCP server
 
-The bundled server exposes five tools over stdio.
+The bundled server exposes eight tools over stdio: the five below, and the three of the typed-spec executor (§2a).
 
 | Tool | Purpose |
 |---|---|
@@ -48,6 +48,16 @@ The bundled server exposes five tools over stdio.
 | `log_telemetry` | Append a TelemetryEvent the orchestrator emitted itself (direct-tier). Server stamps `ts` and nulls `latency_ms`. |
 | `preflight_dispatch` | Construct every adapter this run's auth mode will use, and price every model it can reach for today. Halts on an adapter that fails or a model with no price. No API call. |
 | `load_policy` | Return the policy that would be active, each model with its `effective_price` for today: the list's rates, or the model's `pricing:` block only under `pricing_override: true`. The orchestrator prices its estimated events from it. No API call. |
+
+### 2a. The typed-spec executor (greenfield `--executor`)
+
+| Tool | Purpose |
+|---|---|
+| `submit_spec_section` | The architect hands the typed build spec over one section at a time: the header (stack, commands, decisions, shared data model and API), then units in batches. Each section is checked on arrival (strict schema; unique ids and paths; `depends_on` / `style_from` point to earlier units); a refused section stores nothing and lists every problem by path. |
+| `finalize_spec` | Assembles `spec.json`, checks every FR- and AC- requirement is covered by a unit, and renders `design.md` from the spec by code. |
+| `execute_stage` | Types every unit of one stage (codegen, tests, docs), or every fix of a repair round (`stage: "repair"`: the files named in a failing test run, and every finding of the senior reviewer's review.json that names a file). Each job goes to the typist the policy routes it to, attempt by attempt (`retry_count` 0, 1) — `lean-opus` (a `claude -p` with no tools, low effort, the shared spec as its cached system-prompt tail), `flash-completion` (Gemini through the completion door) or `agy` (Gemini through the Antigravity SDK, configured as a typist: `worker/typist_worker.py`) — then one lean Opus attempt, the same ladder for every policy; a fix is routed as phase `debug` and answered with exact edits to the file's current text (each search must match once, or nothing changes). The answer is checked (right path, the content parses, the declared exports exist — `Class.method` as a member — and every import of the project's own code resolves to a file the spec writes) and written by code. Vendor and network failures, read from the vendor's structured fields, wait with jittered backoff capped at one 60 s rate-limit window; anything else is an attempt. A cold lean Opus typist sends one job alone before fanning out. The auth mode and policy come from the run state `preflight_dispatch` recorded, never from the call. One telemetry event per typist call; one receipt (≤ 2 kB) back to the orchestrator; MCP progress messages while it runs. |
+
+Code: [src/spec/](../plugin/mcp/model-dispatch/src/spec/) (schema, hand-over, rendering) and [src/executor/](../plugin/mcp/model-dispatch/src/executor/) (briefs, typists, checks, the stage runner, the tool handlers). The same flow runs for every policy; a solo policy and a multi-model policy differ only in which typist types each file.
 
 Two files run before anything else:
 
@@ -92,7 +102,7 @@ One interface, four implementations, plus a factory.
 | [ModelAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/ModelAdapter.ts) | interface | — |
 | [BuiltinAnthropicAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/BuiltinAnthropicAdapter.ts) | `BuiltinAnthropicAdapter` | Anthropic direct SDK. Under `vendor`, dispatched here; under `estimated`, never constructed. |
 | [ClaudeCliAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/ClaudeCliAdapter.ts) | `ClaudeCliAdapter` | Claude through a local `claude -p` subprocess on the subscription's OAuth session. Priced per model from its result's token ledger ([claudeCliLedger.ts](../plugin/mcp/model-dispatch/src/adapters/claudeCliLedger.ts)); the CLI's own `total_cost_usd` is kept only as a check. |
-| [GeminiFlashAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/GeminiFlashAdapter.ts) | `GeminiFlashAdapter` | Gemini as a model, via `@google/genai`. Delegates transport to §5. |
+| [GeminiFlashAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/GeminiFlashAdapter.ts) | `GeminiFlashAdapter` | Gemini as a model, via `@google/genai`. Delegates transport to §5. Sends the leaf's `reasoning.tier` as `thinkingConfig.thinkingLevel` (none when the leaf sets no tier). |
 | [AntigravityWorkerAdapter.ts](../plugin/mcp/model-dispatch/src/adapters/AntigravityWorkerAdapter.ts) | `AntigravityWorkerAdapter` | Gemini as an agent. Launches the Python worker. See §6. |
 | [index.ts](../plugin/mcp/model-dispatch/src/adapters/index.ts) | `createAdapter(model)` | Factory keyed on `model.adapter`. |
 | [pricing.ts](../plugin/mcp/model-dispatch/src/pricing.ts) | — | `computeCostUsd(tokens, pricing)` on disjoint cached/fresh counts. |

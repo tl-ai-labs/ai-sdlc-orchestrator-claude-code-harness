@@ -176,8 +176,8 @@ row, not a separate section). Offered tiers are per model, and — this took thr
 get right — the field written depends on which real vendor parameter the model actually has:
 
 - **Gemini** (`flash-completion`, `flash-agsdk-worker`): `off`/`minimal`/`low`/`medium`/`high`,
-  written as `reasoning.tier` — the field `AntigravityWorkerAdapter` (the one adapter that reads
-  reasoning at all) consumes. Sourced from the installed `@google/genai`/`google-genai`
+  written as `reasoning.tier` — the field `AntigravityWorkerAdapter` consumes, and (from v0.7.5)
+  `GeminiFlashAdapter` too. Sourced from the installed `@google/genai`/`google-genai`
   `ThinkingLevel` enum.
 - **Opus** (`builtin-anthropic`): `off`/`low`/`medium`/`high`/`xhigh`/`max`, written as
   `reasoning.effort` — a genuinely different real request parameter,
@@ -350,12 +350,12 @@ policy in the next (user story 9) — no separate index file to keep in sync.
   for Opus-routed phases and `reasoning.tier` for Gemini-routed ones — two different real fields
   for two different real vendor parameters, not one vocabulary standardized across models.
 
-  **Net effect: only `flash-agsdk-worker` has a working thinking override today.**
-  `flash-completion` and `opus` both have real, documented graded ranges the console now offers —
-  neither is wired to an adapter yet. Wiring `flash-completion` to the vendor's `thinkingLevel`
-  config, and bumping `@anthropic-ai/sdk` to send `output_config.effort` for `opus`, are backend
-  work, tracked as a known gap in
-  [plugin/policy-console/README.md](../../plugin/policy-console/README.md#known-gap-thinking-capacity-isnt-wired-to-any-adapter-yet)
+  **Net effect (updated v0.7.5): `flash-agsdk-worker` and `flash-completion` act on the tier.**
+  `GeminiFlashAdapter` now sends `reasoning.tier` as `thinkingConfig.thinkingLevel`, as written
+  (the OQ-6 finding above describes the code before v0.7.5). `opus` still has a real, documented
+  graded range the console offers that no adapter sends yet: bumping `@anthropic-ai/sdk` to send
+  `output_config.effort` is backend work, tracked as a known gap in
+  [plugin/policy-console/README.md](../../plugin/policy-console/README.md#known-gap-thinking-capacity-isnt-wired-to-every-adapter-yet)
   rather than fixed here — no policy from this console drives a real run yet, so it isn't blocking.
 
 ## 12. Timeline Considerations

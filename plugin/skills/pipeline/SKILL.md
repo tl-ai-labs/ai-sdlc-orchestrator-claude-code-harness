@@ -33,6 +33,71 @@ This skill is the source of truth for the orchestrator. When invoked under `/mmo
 
 ---
 
+## Executor mode — greenfield `/mmo:pass ... --executor`
+
+A second greenfield flow, for every policy alike. The typed spec replaces design.md +
+packets.json, and the MCP tool `execute_stage` types, checks and writes every file by code:
+you never type or re-type a unit's file, and the files never pass through your conversation.
+The policy still decides who types each file (its rules, matched on the unit's phase and kind),
+so a solo policy and a multi-model policy run exactly this flow and differ only in the typist.
+Without `--executor`, and in brownfield, nothing below applies.
+
+```
+-1. preflight_dispatch                     (unchanged; it also records the run's auth mode and policy,
+                                           which every execute_stage call then uses)
+0. read_brief
+1. requirements_analysis                  → requirements.md          (unchanged)
+   ── GATE 1 ─────────────────────────────────────
+2. architecture_design (subagent: architect, executor mode)
+                                          → submit_spec_section × N, finalize_spec
+                                          → spec.json + design.md (rendered from the spec)
+   ── GATE 2 ─────────────────────────────────────
+3. execute_stage codegen                  → one receipt
+4. execute_stage tests                    → one receipt
+5. test_run                               → the spec's test commands, run by you with Bash
+   execute_stage repair (failures)        → one receipt; run the tests again
+6. execute_stage docs                     → one receipt (only when the spec has docs units)
+7. senior_code_review                     (the reviewer reads the files from disk)
+   execute_stage repair (review_paths)    → one receipt; run the tests once more
+8. security_review                        (unchanged)
+   ── GATE 3 ─────────────────────────────────────
+9. generate_final_report                  (unchanged)
+   ── GATE 4 ─────────────────────────────────────
+```
+
+Rules for executor mode:
+
+- **Skip** `cache_project_header` and `plan_task_packets`: the spec's units are the work list, and
+  `execute_stage` builds each brief by code, shared part first.
+- **Architecture:** invoke the `architect` subagent with `requirements.md`, the output directory
+  and the words "executor mode". It hands the spec over through `submit_spec_section` (header,
+  then units in batches) and closes with `finalize_spec`, which writes `<output_dir>/spec.json`
+  and `<output_dir>/design.md`. Gate 2 shows that design.md. If `finalize_spec` reports missing
+  requirement coverage, send the architect back to add the units that cover it.
+- **Execution:** call `execute_stage` once per stage, in the order above, with
+  `spec_path: <output_dir>/spec.json`, `stage`, `code_dir`, `pass_id` and `telemetry_path`. The
+  auth mode and the policy are the ones `preflight_dispatch` recorded; the call takes neither. It
+  is long — it reports progress per file — and returns one receipt. It appends one telemetry
+  event per typist call itself: do not `log_telemetry` for files it typed or fixed.
+- **Fixes go through the executor, routed by the policy.** Every fix is typed by the typist the
+  run's policy names for the `debug` phase — the same rule that routes fixes without the flag —
+  and written by code as exact edits to the file's current text:
+  - After a test run with failures, call `execute_stage` with `stage: "repair"` and `failures`:
+    one entry per file to change, with `path` (the file whose code is wrong; when unsure, the
+    source file the failing test exercises), `problem` (the failing test's name and its error,
+    verbatim) and `context_paths` (the failing test file, and any file the fix must agree with).
+    Then run the tests again. Repeat while the number of failing tests goes down, at most three
+    repair rounds.
+  - After the senior review, call `execute_stage` with `stage: "repair"` and `review_paths` (the
+    review.json files it wrote): every finding that names a file is fixed. Then run the tests
+    once more, with one repair round if they fail.
+- **Failures:** a file the receipt lists as failed (every attempt refused) is yours to write or
+  fix, in this session, from its spec entry and the receipt's reason. This is the rare case, and
+  it is the same in every policy. The same holds for tests still failing after the repair rounds.
+- The receipts are all you read about the typed files; do not open the files to check them —
+  the senior reviewer does that, and reading them into your conversation is the cost this mode
+  exists to remove.
+
 ## Phase -1 — preflight_dispatch (MANDATORY, before anything else)
 
 Call `preflight_dispatch` with the run's `auth_mode` and the same `policy_name` / `project_root` /

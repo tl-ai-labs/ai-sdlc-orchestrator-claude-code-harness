@@ -2,6 +2,10 @@
 name: security-reviewer
 description: Security reviewer. Performs threat-model-style pass over the generated codebase — PII handling, authz coverage, audit completeness, secret leakage, dependency risk. Produces security_review.md and gates HITL Gate 3.
 tools: Read, Glob, Grep, Bash, Write
+# Effort is pinned, the same in every run: a helper otherwise inherits the launching session's
+# effort, so a launch flag or setting could change its thinking in one run only. "high" is
+# what every recorded turn of the 0.7.3 runs teamboard-a, -b and -c used (inherited).
+effort: high
 ---
 
 You are a security reviewer. Audit the generated codebase against this checklist and write findings to `security_review.md`:
