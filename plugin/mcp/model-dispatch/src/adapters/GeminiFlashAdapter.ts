@@ -187,12 +187,18 @@ export class GeminiFlashAdapter implements ModelAdapter {
         });
       } catch (err: any) {
         const failure = describeVendorFailure(err);
-        // A 429 is refused before the model runs and bills nothing: in the
-        // step-2 bake-off Google's own token counter (Cloud Monitoring
-        // token_count) matched, to the token, receipts that counted nothing for
-        // four refused calls. Any other failure keeps the stated bound: the
-        // prompt billed as input, since the call may have reached the model.
-        const failTokens = failure.error_status === 429
+        // A call Google answered with an error status bills nothing. Vertex AI:
+        // "You're charged only for requests that return a 200 response code.
+        // Requests returning any other response codes, such as 4xx and 5xx
+        // codes, aren't charged for the input or output." (VERTEX_PRICING_URL);
+        // the Gemini API: "If your request fails with a 400 or 500 error, you
+        // won't be charged for the tokens used." (its billing page); both read
+        // 2026-09-24. In the step-2 bake-off Google's own token counter matched,
+        // to the token, receipts that counted nothing for four 429s. A
+        // connection that failed with no response keeps the stated bound — the
+        // prompt billed as input — since the request may have been answered.
+        const answeredWithError = failure.error_status !== undefined && failure.error_status !== 200;
+        const failTokens = answeredWithError
           ? { input: 0, input_cached: 0, output: 0 }
           : { input: estimateTokens(userPrompt), input_cached: 0, output: 0 };
         attempts.push({

@@ -1,6 +1,6 @@
 /**
  * A failed completion-door call is described by the vendor's own fields, and a
- * rate-limited call costs nothing.
+ * call Google answered with an error costs nothing.
  *
  * Google's error carries its HTTP status (`ApiError.status`) and, when it asks
  * for a pause, a `google.rpc.RetryInfo` entry in the JSON error body; a
@@ -8,11 +8,17 @@
  * records all three on the attempt, so callers decide from fields rather than
  * from the error's wording.
  *
- * A 429 is billed $0: Google refuses the request before the model runs, and in
- * the step-2 bake-off (task folder, probes/s2-typist-bakeoff) Google's own
- * token counter (Cloud Monitoring token_count) matched the sum of receipts that
- * counted no tokens for the four refused calls — to the token. Other failures
- * keep the adapter's stated bound: the prompt billed as input.
+ * A call Google answered with an error status is billed $0. Google's own words:
+ * Vertex AI "You're charged only for requests that return a 200 response code.
+ * Requests returning any other response codes, such as 4xx and 5xx codes,
+ * aren't charged for the input or output." (cloud.google.com/vertex-ai/
+ * generative-ai/pricing); the Gemini API "If your request fails with a 400 or
+ * 500 error, you won't be charged for the tokens used." (ai.google.dev/
+ * gemini-api/docs/billing), both read 2026-09-24. Measured too: in the step-2
+ * bake-off Google's own token counter matched, to the token, receipts that
+ * counted nothing for four refused (429) calls. A connection that failed with
+ * no response keeps the stated bound: the prompt billed as input, since the
+ * request may have been answered.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -53,7 +59,7 @@ test("a delay the vendor asks for is read from its RetryInfo entry", async () =>
   const a = r.attempts.at(-1);
   assert.equal(a.error_status, 503);
   assert.equal(a.retry_after_ms, 7000);
-  assert.ok(a.cost_usd > 0, "a failure other than a 429 keeps the stated bound: the prompt billed as input");
+  assert.equal(a.cost_usd, 0, "any error status Google returned is not charged");
 });
 
 test("a connection that failed in transit is recorded with its code", async () => {
@@ -61,4 +67,5 @@ test("a connection that failed in transit is recorded with its code", async () =
   const a = (await failWith(err)).attempts.at(-1);
   assert.equal(a.error_code, "ECONNRESET");
   assert.equal(a.error_status, undefined);
+  assert.ok(a.cost_usd > 0, "no response came back, so the request may have been answered: the prompt is billed as input");
 });
