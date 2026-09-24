@@ -247,6 +247,19 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.8.7
+
+| Area | Before | From v0.8.7 |
+|---|---|---|
+| Brownfield reviewers | The senior and security reviewers opened touched files one `Read` at a time, re-ran tests, typecheck, route generators and `pnpm audit`, and read library source to prove findings (Run 28: 49 + 30 tool uses). Every tool use re-reads the whole context, which is most of an Opus run's cost | Same two phases, same checklists. Each reviewer loads the whole change in one Bash call, keeps to a tool-call budget (senior about 12, at most 20; security about 10, at most 15), does not re-run commands the orchestrator already ran (it passes a one-line-per-suite summary), and runs the dependency check only when a manifest or lockfile changed. |
+| Collector without `manifest.json` | A single-model run handled in-session never calls the server, so no manifest was written and `collect-orchestrator-usage.mjs` exited 1 (Run 29) | The collector rebuilds the window from `telemetry.jsonl` and writes a manifest carrying the run id, policy and booked figures. Rates and telemetry fields are unchanged. |
+
+### v0.8.6
+
+| Area | Before | From v0.8.6 |
+|---|---|---|
+| Wrapped `- **File**` bullet in `plan-to-packets` | Only the bullet's first physical line was parsed, so a bullet soft-wrapped before `**Depends on**` gave `depends_on: []` with exit 0 (Run 27b: 10 of 15 units) | Indented continuation lines are joined before parsing, and a unit with no `Depends on` anywhere gets a warning. Rates, telemetry fields and the collector are unchanged. |
+
 ### v0.8.5
 
 | Area | Before | From v0.8.5 |
