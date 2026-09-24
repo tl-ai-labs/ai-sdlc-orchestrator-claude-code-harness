@@ -23,7 +23,7 @@ import type { ModelConfig, Policy, SelectOverrides, TelemetryEvent } from "../ty
 import { getModel } from "../policy.js";
 import { appendEvent } from "../telemetry.js";
 import { log } from "../log.js";
-import { SPEC_HEADER_SCHEMA, SPEC_UNIT_SCHEMA, UNIT_MAX_LINES, UNITS_PER_SECTION } from "../spec/schema.js";
+import { SPEC_HEADER_SCHEMA, SPEC_UNIT_SCHEMA } from "../spec/schema.js";
 import { finalizeSpec, loadSpec, submitSpecSection } from "../spec/store.js";
 import { renderShared } from "./brief.js";
 import { boundReceipt, executeStage, type RepairItem, type Stage } from "./run.js";
@@ -71,7 +71,7 @@ export const EXECUTOR_TOOLS = [
   {
     name: "submit_spec_section",
     description:
-      `Hand over ONE section of the typed build spec. Send the header first (section: "header", with header: {stack, commands, decisions, shared}), then the units in batches of at most ${UNITS_PER_SECTION} (section: "units", with units: [...]), each unit after the units it depends on and none longer than ${UNIT_MAX_LINES} lines. Each section is checked on arrival; a refused section stores nothing and the reply lists every problem by path, so fix and re-send that section only.`,
+      `Hand over ONE section of the typed build spec. Send the header first (section: "header", with header: {stack, commands, decisions, shared}), then the units in batches, each written in one reply (section: "units", with units: [...]), each unit after the units it depends on. Each section is checked on arrival; a refused section stores nothing and the reply lists every problem by path, so fix and re-send that section only.`,
     inputSchema: {
       type: "object",
       properties: {

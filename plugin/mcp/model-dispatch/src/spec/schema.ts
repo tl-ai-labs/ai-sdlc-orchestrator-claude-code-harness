@@ -12,9 +12,8 @@
  * Structure does the checking, never word scans or character counts: exports
  * are typed (name / kind / params / returns), every text field is ONE line, a
  * decision holds ONE chosen value with the rejected options kept apart, and
- * references must resolve. Only two sizes are bounded, each by a stated
- * derivation (below): how many units one section may carry, and how long one
- * unit's file may be. No field has a character limit: in step 3 a 160-character
+ * references must resolve. No size is bounded (see the note below the imports).
+ * No field has a character limit: in step 3 a 160-character
  * cap on `choice` refused four real decisions (168-182 characters) and cost a
  * whole re-send, and a longer line costs only its own tokens.
  *
@@ -29,31 +28,14 @@ export const SPEC_PHASES: readonly string[] = Object.freeze(["codegen", "tests",
 
 type Schema = Record<string, any>;
 
-/**
- * The longest file one unit may be. A unit is typed in one call by whichever
- * typist the policy picks, so its file must fit the smallest output cap of any
- * typist the plugin ships: the Gemini leaves' max_output_tokens_absolute,
- * 8,192 tokens. Step 2 measured at most 11.7 output tokens per line (Flash at
- * low thinking, thinking included; lean Opus is capped at 64,000 and AGY
- * spent at most 10.4), and 1.3 is the stated margin for the architect's line
- * count being an estimate: floor(8,192 / (11.7 × 1.3)) = 538. A test re-checks
- * this against every shipped policy's caps.
+/*
+ * No size is bounded by a number taken from our own runs (24 Sep). The file-length cap was
+ * 8,192 tokens / (11.7 tokens per line × 1.3) = 538 lines, with the tokens per line measured on
+ * Python only; the units-per-call cap was the architect's speed on one brief, sized to a
+ * five-minute cache. Now a typist answer cut off at its output limit goes to the typist with the
+ * larger limit (executor/run.ts), and the architect keeps a one-hour cache like the orchestrator
+ * (agents/architect.md), so neither bound is needed.
  */
-export const UNIT_MAX_LINES = Math.floor(8192 / (11.7 * 1.3));
-/**
- * Units per `submit_spec_section` call. The architect is a plugin helper on
- * Claude Code's five-minute prompt cache, so each section must be written
- * within five minutes, or the next call re-writes the architect's whole
- * context. Step 3 measured 110 output tokens per second (152,317 output tokens,
- * thinking included, over 1,390 s of API time) and 525 output tokens per unit
- * entry (the 67 units took about 35,200 of the final reply's 45,772 tokens);
- * 0.5 is the stated margin for both varying between runs:
- * floor(300 s × 0.5 × 110 / 525) = 31. A five-minute cache with sections
- * sized to it is cheaper than a one-hour cache for the architect: the hour's
- * writes cost 2× input instead of 1.25× on every write (about $0.34 a run),
- * where a lapse costs a re-write of about $0.56 only when it happens.
- */
-export const UNITS_PER_SECTION = Math.floor((300 * 0.5 * 110) / 525);
 
 /** One line of text: not empty, no line break. */
 const line: Schema = { type: "string", minLength: 1, pattern: "^[^\\n\\r]+$" };
@@ -104,7 +86,7 @@ export const SPEC_HEADER_SCHEMA: Schema = {
 export const SPEC_UNIT_SCHEMA: Schema = {
   type: "object",
   additionalProperties: false,
-  required: ["id", "path", "phase", "exports", "behaviour", "depends_on", "style_from", "covers", "tests", "approx_lines"],
+  required: ["id", "path", "phase", "import_line", "exports", "behaviour", "depends_on", "style_from", "covers", "tests", "approx_lines"],
   properties: {
     id: UNIT_ID,
     path: { type: "string", pattern: "^[A-Za-z0-9_.][A-Za-z0-9_./-]*$", description: "Relative to the code directory; no leading slash, no '..'." },
@@ -112,6 +94,11 @@ export const SPEC_UNIT_SCHEMA: Schema = {
     // Optional free text for the design table only (24 Sep): never a list to pick from, never refused, never
     // routed on — who types a file depends on its stage and the policy alone, whatever its language.
     kind: { ...line, description: "Optional: a few words on what kind of file this is, for the design table only." },
+    // How other files import this one (24 Sep smoke: "exports app" meant two different things to two typists,
+    // and three repair rounds followed). Written by the architect in the project's own language; code only
+    // carries it — into this file's brief, every dependent's brief, the shared index and design.md — and never
+    // parses it, so no language rule is involved.
+    import_line: { type: "string", pattern: "^[^\\n\\r]*$", description: "The exact line another file of this project writes to import this file, in the project's own language, as written by a file at the project root (a file elsewhere adjusts only the relative path). Empty when no other file imports this file." },
     exports: {
       type: "array",
       items: { type: "object", additionalProperties: false, required: ["name", "params", "returns"], properties: {
@@ -133,7 +120,7 @@ export const SPEC_UNIT_SCHEMA: Schema = {
       type: "array",
       items: { type: "object", additionalProperties: false, required: ["name", "given", "expect"], properties: { name: line, given: line, expect: line } },
     },
-    approx_lines: { type: "integer", minimum: 1, maximum: UNIT_MAX_LINES, description: `The file's estimated length; at most ${UNIT_MAX_LINES} lines — split a larger file into several units.` },
+    approx_lines: { type: "integer", minimum: 1, description: "The file's estimated length in lines; an estimate for the brief and the design table, not a bound." },
   },
 };
 
@@ -141,7 +128,7 @@ export const SPEC_UNITS_SECTION_SCHEMA: Schema = {
   type: "object",
   additionalProperties: false,
   required: ["units"],
-  properties: { units: { type: "array", minItems: 1, maxItems: UNITS_PER_SECTION, items: SPEC_UNIT_SCHEMA } },
+  properties: { units: { type: "array", minItems: 1, items: SPEC_UNIT_SCHEMA } },
 };
 
 /** One problem found by `validate`, with the JSON path it applies to. */

@@ -11,7 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
-import { SPEC_HEADER_SCHEMA, SPEC_UNIT_SCHEMA, SPEC_UNITS_SECTION_SCHEMA, UNIT_MAX_LINES, UNITS_PER_SECTION, validate } from "../dist/spec/schema.js";
+import { SPEC_HEADER_SCHEMA, SPEC_UNIT_SCHEMA, SPEC_UNITS_SECTION_SCHEMA, validate } from "../dist/spec/schema.js";
 import { submitSpecSection, finalizeSpec, storedUnits, isSafeRelativePath, requiredIds, loadSpec } from "../dist/spec/store.js";
 import { renderShared, renderUnitInstruction, renderRepairInstruction, framedUnit, unitPacket } from "../dist/executor/brief.js";
 import { loadPolicyFromPath } from "../dist/policy.js";
@@ -33,7 +33,7 @@ const HEADER = {
   },
 };
 const unit = (id, path, over = {}) => ({
-  id, path, phase: "codegen", kind: "dto",
+  id, path, phase: "codegen", kind: "dto", import_line: "",
   exports: [{ name: "Todo", kind: "class", params: [], returns: "Todo" }],
   behaviour: "Pydantic models for a to-do.", depends_on: [], style_from: { reason: "first file of its kind" },
   covers: ["FR-1.1"], tests: [{ name: "valid", given: "a title", expect: "a Todo" }], approx_lines: 20, ...over,
@@ -63,30 +63,25 @@ test("the schema accepts a well-formed header and unit and names each problem by
   assert.match(validate(SPEC_HEADER_SCHEMA, { stack: [] })[0].message, /missing required field 'commands'/);
 });
 
-test("the plan refuses on structure, not on characters; only a unit's size and a section's size are bounded, each by a stated derivation", () => {
+test("the plan refuses on structure, never on characters or sizes: no bound is fitted to our own runs", () => {
   // No character caps: a long one-line choice is fine (a 160-character cap refused four real step-3 decisions).
   assert.deepEqual(validate(SPEC_HEADER_SCHEMA, { ...HEADER, decisions: [{ topic: "t", choice: "c".repeat(182), reason: "r" }] }), []);
   assert.match(validate(SPEC_HEADER_SCHEMA, { ...HEADER, decisions: [{ topic: "t", choice: "a\nb", reason: "r" }] })[0].message, /must match/);
   // Dotted export names are members (Class.method); anything else is not a name.
   assert.deepEqual(validate(SPEC_UNIT_SCHEMA, unit("U01", "a.py", { exports: [{ name: "NoteStore.add", kind: "function", params: [], returns: "Note" }] })), []);
   assert.equal(validate(SPEC_UNIT_SCHEMA, unit("U01", "a.py", { exports: [{ name: "GET /notes", kind: "function", params: [], returns: "x" }] }))[0].path, "/exports/0/name");
-  // A unit's file must fit the smallest output cap of any shipped typist: floor(8,192 / (11.7 × 1.3)) = 538.
-  assert.equal(UNIT_MAX_LINES, 538);
-  assert.deepEqual(validate(SPEC_UNIT_SCHEMA, unit("U01", "a.py", { approx_lines: 538 })), []);
-  assert.match(validate(SPEC_UNIT_SCHEMA, unit("U01", "a.py", { approx_lines: 539 }))[0].message, /≤ 538/);
-  const caps = readdirSync(join(PLUGIN, "config", "policies")).filter((f) => f.endsWith(".yaml"))
-    .flatMap((f) => loadPolicyFromPath(join(PLUGIN, "config", "policies", f)).models.map((m) => m.max_output_tokens_absolute).filter(Boolean));
-  assert.ok(caps.length > 0);
-  assert.ok(UNIT_MAX_LINES * 11.7 * 1.3 <= Math.min(...caps), `a ${UNIT_MAX_LINES}-line file must fit every shipped cap (smallest ${Math.min(...caps)}); re-derive UNIT_MAX_LINES if a policy lowers one`);
-  // A section must be written inside the architect's five-minute cache: floor(300 × 0.5 × 110 / 525) = 31.
-  assert.equal(UNITS_PER_SECTION, 31);
+  // 24 Sep: no size bound fitted to our own runs. The file-length cap (538 lines = 8,192 tokens / 11.7 tokens
+  // per line, measured on Python) and the 31-units-per-call cap (the architect's speed on one brief, to fit a
+  // five-minute cache) are gone: approx_lines is an estimate only; a typist answer cut off at its output limit
+  // goes to the typist with the larger limit (executor); the architect keeps a one-hour cache like the
+  // orchestrator, so a call's size no longer races the cache.
+  for (const n of [539, 5000]) assert.deepEqual(validate(SPEC_UNIT_SCHEMA, unit("U01", "a.py", { approx_lines: n })), [], `${n} lines`);
   const many = (n) => Array.from({ length: n }, (_, i) => unit(`U${String(i + 1).padStart(2, "0")}`, `f${i}.py`));
-  assert.deepEqual(validate(SPEC_UNITS_SECTION_SCHEMA, { units: many(31) }), []);
-  assert.match(validate(SPEC_UNITS_SECTION_SCHEMA, { units: many(32) })[0].message, /at most 31 items/);
-  // The architect's prompt states both bounds; it must state the ones the schema enforces.
+  assert.deepEqual(validate(SPEC_UNITS_SECTION_SCHEMA, { units: many(40) }), [], "no units-per-call cap");
   const architect = readFileSync(join(PLUGIN, "agents", "architect.md"), "utf8");
-  assert.ok(architect.includes(`at most ${UNITS_PER_SECTION} per call`), "architect.md names the section bound");
-  assert.ok(architect.includes(`at most ${UNIT_MAX_LINES} lines`), "architect.md names the unit-size bound");
+  const front = architect.split("\n---")[0];
+  assert.match(front, /\n\s*cacheTtl: 1h\b/, "the architect keeps a one-hour cache, like the orchestrator");
+  assert.ok(!/at most \d+ (per call|lines)/.test(architect), "the architect's prompt states no fitted bound");
 });
 
 test("paths the executor may write are relative, normalised and stay inside the code directory", () => {
@@ -161,8 +156,35 @@ test("finalize refuses a spec that leaves a requirement uncovered, then writes s
   assert.equal(spec.spec_version, "1");
   assert.deepEqual(spec.units.map((u) => u.id), ["U01", "U02"]);
   const design = readFileSync(done.design_path, "utf8");
-  assert.match(design, /\| U02 \| backend\/tests\/test_todos\.py \| tests \| [^|]+ \| U01 \|/);
+  assert.match(design, /\| U02 \| backend\/tests\/test_todos\.py \| tests \| [^|]+ \| [^|]+ \| U01 \|/);
   assert.match(design, /\| ids \| integer autoincrement \| simplest for SQLite \| uuid \|/);
+});
+
+test("every unit states how other files import it, in the project's own language; the line reaches the file's own brief, every dependent's brief, the shared index and design.md", () => {
+  // 24 Sep smoke: the spec said src/app.js "exports app", which a JavaScript project can mean two ways
+  // (module.exports = app, or module.exports = { app }). Flash typed app.js one way and the test file the
+  // other, the senior reviewer "fixed" it back, and server.js broke: three repair rounds. Files typed apart
+  // must share one exact import line. The architect writes it in the project's language; code never parses
+  // it, only carries it, so no language rule is involved.
+  const { import_line, ...noLine } = unit("U01", "a.py");
+  assert.ok(validate(SPEC_UNIT_SCHEMA, noLine).some((e) => /import_line/.test(e.path + " " + e.message)), "required");
+  assert.deepEqual(validate(SPEC_UNIT_SCHEMA, { ...noLine, import_line: "" }), [], "empty when nothing imports the file");
+  assert.ok(validate(SPEC_UNIT_SCHEMA, { ...noLine, import_line: "a\nb" }).some((e) => e.path === "/import_line"), "one line");
+  const lib = unit("U01", "src/app.js", { import_line: "const { app } = require('./src/app');", exports: [{ name: "app", params: [], returns: "Express" }] });
+  const user = unit("U02", "server.js", { depends_on: ["U01"], style_from: { unit: "U01", reason: "same stack" } });
+  const spec = { spec_version: "1", ...HEADER, units: [lib, user] };
+  assert.match(renderShared(spec), /- src\/app\.js: app — imported as: const \{ app \} = require\('\.\/src\/app'\);/);
+  assert.match(renderUnitInstruction(spec, user), /- src\/app\.js — [^\n]+\n  exports: [^\n]+\n  imported as: const \{ app \} = require\('\.\/src\/app'\); \(adjust only the relative path\)/);
+  assert.match(renderUnitInstruction(spec, lib), /- other files import it as: const \{ app \} = require\('\.\/src\/app'\); — export exactly what this line expects/);
+  assert.ok(!/imported as|import it as/.test(renderUnitInstruction(spec, user).split("## The file to write")[1]), "a file nothing imports carries no import line of its own");
+  const dir = mkdtempSync(join(tmpdir(), "spec-imp-"));
+  submitSpecSection(dir, { section: "header", header: HEADER });
+  submitSpecSection(dir, { section: "units", units: [{ ...lib, covers: ["FR-1.1", "FR-1.2", "AC-1"] }, user] });
+  const req = join(dir, "requirements.md");
+  writeFileSync(req, REQUIREMENTS);
+  const done = finalizeSpec(dir, req);
+  assert.equal(done.ok, true, JSON.stringify(done));
+  assert.match(readFileSync(done.design_path, "utf8"), /\| U01 \| src\/app\.js \| codegen \| [^|]+ \| const \{ app \} = require\('\.\/src\/app'\); \|/, "the reviewers read the same contract");
 });
 
 test("briefs: the shared block is identical for every unit, the unit block names its dependencies, and the frame is the completion door's own", () => {

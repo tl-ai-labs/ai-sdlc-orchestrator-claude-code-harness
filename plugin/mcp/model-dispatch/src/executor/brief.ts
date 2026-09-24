@@ -46,7 +46,7 @@ export function renderShared(spec: Spec): string {
     "", "## Data model", ...spec.shared.data_model.map((t) => `- ${t.name}: ${t.fields.map((f) => `${f.name} ${f.type}${f.constraints ? ` (${f.constraints})` : ""}`).join("; ")}`),
     "", "## API", ...spec.shared.api.map((a) => `- ${a.method} ${a.path} — access: ${a.access}; request: ${a.request}; response: ${a.response}; ${a.success_status}; errors: ${a.error_statuses.join(", ") || "none"}`),
     "", "## Every file of the project, with what it exports (import only these modules and names)",
-    ...spec.units.map((u) => `- ${u.path}: ${u.exports.map((e) => e.name).join(", ") || "no exports"}`),
+    ...spec.units.map((u) => `- ${u.path}: ${u.exports.map((e) => e.name).join(", ") || "no exports"}${u.import_line ? ` — imported as: ${u.import_line}` : ""}`),
   ].join("\n");
 }
 
@@ -62,10 +62,11 @@ function entryLines(spec: Spec, unit: SpecUnit, heading: string): string[] {
     : `no earlier file to follow (${unit.style_from.reason})`;
   return [
     "## Files this one uses (written by others from this same specification)",
-    ...(deps.length ? deps.map((d) => `- ${d.path} — ${d.behaviour}\n  exports: ${d.exports.map(sig).join("; ") || "none"}`) : ["- none"]),
+    ...(deps.length ? deps.map((d) => `- ${d.path} — ${d.behaviour}\n  exports: ${d.exports.map(sig).join("; ") || "none"}${d.import_line ? `\n  imported as: ${d.import_line} (adjust only the relative path)` : ""}`) : ["- none"]),
     "", heading,
     `- path: ${unit.path}`, `- what it does: ${unit.behaviour}`,
     `- exports: ${unit.exports.map(sig).join("; ") || "none"}`,
+    ...(unit.import_line ? [`- other files import it as: ${unit.import_line} — export exactly what this line expects`] : []),
     `- style: ${style}`, `- requirements it helps satisfy: ${unit.covers.join(", ") || "none"}`,
     `- ${unit.phase === "tests" ? "test cases it must contain" : "cases it must satisfy"}:`, ...unit.tests.map((t) => `  - ${t.name}: given ${t.given} → ${t.expect}`),
     `- expected length: about ${unit.approx_lines} lines`,

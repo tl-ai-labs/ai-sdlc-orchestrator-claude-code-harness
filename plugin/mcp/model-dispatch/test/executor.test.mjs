@@ -25,7 +25,7 @@ const ORCH = loadPolicyFromPath(join(POLICIES, "opus-plus-flash-v38.yaml"));
 
 // A unit carries no file-type label (24 Sep): who types it depends on its stage and the policy alone.
 const unit = (id, path, phase = "codegen") => ({
-  id, path, phase, exports: [{ name: "thing", params: [], returns: "int" }],
+  id, path, phase, import_line: "", exports: [{ name: "thing", params: [], returns: "int" }],
   behaviour: "does a thing", depends_on: [], style_from: { reason: "first" }, covers: [], tests: [], approx_lines: 5,
 });
 const SPEC = {
@@ -48,7 +48,7 @@ function fake(door, modelId, script = () => ({})) {
     async type(req) {
       calls.push(req);
       const s = script(req, calls.length);
-      return { answer: s.answer === undefined ? GOOD(req.unit) : s.answer, error: s.error, error_status: s.error_status, transport: !!s.transport, retry_after_ms: s.retry_after_ms, tokens, cost_usd: s.cost ?? 0.01, latency_ms: 1 };
+      return { answer: s.answer === undefined ? GOOD(req.unit) : s.answer, error: s.error, error_status: s.error_status, transport: !!s.transport, retry_after_ms: s.retry_after_ms, cut_off: s.cut_off, tokens, cost_usd: s.cost ?? 0.01, latency_ms: 1 };
     },
   };
 }
@@ -184,6 +184,28 @@ test("a policy that routes an executor stage by task type is refused before any 
     /routes by stage.*task_type/s,
   );
   assert.equal(flash.calls.length, 0);
+});
+
+test("an answer cut off at a typist's output limit is never retried at the same limit: the file goes to the typist with a larger one, and fails only when none has one", async () => {
+  // 24 Sep: this replaces the spec's 538-line cap (8,192 tokens / 11.7 tokens per line, measured on Python).
+  // The vendor says when an answer stopped at the output limit; asking the same typist again cannot help.
+  const dir = mkdtempSync(join(tmpdir(), "exec-"));
+  const cut = { answer: null, error: "stopped at the output limit", cut_off: true };
+  const flash = fake("flash-completion", "flash-completion", () => cut);
+  const opus = fake("lean-opus", "opus");
+  const events = [];
+  const one = { ...SPEC, units: [SPEC.units[0]] };
+  const r = await executeStage(one, OPTS(ORCH, dir), { typistFor: (id) => (id === "opus" ? opus : flash), fallback: opus, shared: "S", sharedFile: "/dev/null", emit: (e) => events.push(e), check: okCheck });
+  assert.equal(flash.calls.length, 1, "no second attempt at the same limit");
+  assert.equal(opus.calls.length, 1);
+  assert.match(opus.calls[0].packet.instruction, /previous answer was refused\n[^\n]*cut off at the flash-completion typist's output limit/);
+  assert.equal(r.written, 1);
+  // Solo: every attempt is the same typist, so a cut-off answer fails the file at once, with the reason.
+  const dir2 = mkdtempSync(join(tmpdir(), "exec-"));
+  const opusCut = fake("lean-opus", "opus", () => cut);
+  const r2 = await executeStage(one, OPTS(SOLO, dir2), { typistFor: () => opusCut, fallback: opusCut, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
+  assert.equal(opusCut.calls.length, 1);
+  assert.match(r2.failed[0].reason, /cut off at the lean-opus typist's output limit/);
 });
 
 test("never more units in flight than the stated limit, and the receipt stays short", async () => {

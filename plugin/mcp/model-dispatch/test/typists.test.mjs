@@ -149,10 +149,10 @@ test("vendor and network failures are told apart from bad answers by the vendor'
   assert.equal(opus({ is_error: true, subtype: "error_max_turns", api_error_status: null, result: "Overloaded" }).transport, false);
 
   // The completion door: the HTTP status, network code and RetryInfo delay the adapter recorded on the attempt.
-  assert.deepEqual(flashOutcome({ error_status: 429, retry_after_ms: 12000 }), { transport: true, retry_after_ms: 12000 });
-  assert.deepEqual(flashOutcome({ error_code: "ECONNRESET" }), { transport: true, retry_after_ms: undefined });
-  assert.deepEqual(flashOutcome({ error_status: 400 }), { transport: false, retry_after_ms: undefined });
-  assert.deepEqual(flashOutcome(undefined), { transport: false, retry_after_ms: undefined });
+  assert.deepEqual(flashOutcome({ error_status: 429, retry_after_ms: 12000 }), { transport: true, retry_after_ms: 12000, cut_off: false });
+  assert.deepEqual(flashOutcome({ error_code: "ECONNRESET" }), { transport: true, retry_after_ms: undefined, cut_off: false });
+  assert.deepEqual(flashOutcome({ error_status: 400 }), { transport: false, retry_after_ms: undefined, cut_off: false });
+  assert.deepEqual(flashOutcome(undefined), { transport: false, retry_after_ms: undefined, cut_off: false });
 
   // The agent door: the SDK retries transient API errors itself and its errors carry no HTTP status, so any error it
   // raises is an attempt (fail closed), whatever its message says.
@@ -212,4 +212,14 @@ test("an agent worker whose receipt is damaged is a failed attempt, never a thro
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
     Object.assign(process.env, saved);
   }
+});
+
+test("each door says when an answer stopped at its output limit, from the vendor's own stop reason", () => {
+  // 24 Sep: the executor sends a cut-off file to the typist with a larger limit instead of retrying the same
+  // one (this replaces the spec's line cap). Only the vendor's stop reason decides, never a length guess.
+  assert.equal(flashOutcome({ stop_reason: "MAX_TOKENS" }).cut_off, true, "Gemini finishReason MAX_TOKENS");
+  assert.equal(flashOutcome({ stop_reason: "STOP" }).cut_off, false);
+  assert.equal(flashOutcome(undefined).cut_off, false);
+  assert.equal(leanOpusOutcome({ stop_reason: "max_tokens" }).cut_off, true, "Anthropic stop_reason max_tokens");
+  assert.equal(leanOpusOutcome({ stop_reason: "end_turn" }).cut_off, false);
 });

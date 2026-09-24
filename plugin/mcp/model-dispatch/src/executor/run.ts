@@ -451,6 +451,15 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
         bill(typist.door).units_written++;
         return;
       }
+      if (r.cut_off) {
+        // The answer stopped at this typist's output limit (the vendor's own stop reason). The same typist
+        // cannot return the whole file at the same limit, so every later attempt by it is skipped and the
+        // file goes to the next typist in the plan; with none left it fails with this reason (24 Sep;
+        // replaces the spec's line cap, which was a tokens-per-line figure measured on Python).
+        refusal = `the answer was cut off at the ${typist.door} typist's output limit, so it cannot return this whole file in one answer`;
+        while (i + 1 < plan.length && plan[i + 1].typist.door === typist.door && plan[i + 1].typist.modelId === typist.modelId) i++;
+        continue;
+      }
       refusal = why ?? "no answer";
     }
     receipt.failed.push({ id: job.id, path: job.path, reason: (refusal ?? "no answer").slice(0, 160) });

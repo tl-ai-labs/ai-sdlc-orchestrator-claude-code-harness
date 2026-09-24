@@ -69,6 +69,12 @@ export interface TypistResult {
   error?: string;
   /** The failure was the vendor's or the network's ("not now"), read from structured fields; not an attempt. */
   transport: boolean;
+  /**
+   * The answer stopped at this typist's output limit (the vendor's own stop reason: Gemini
+   * finishReason MAX_TOKENS, Anthropic stop_reason max_tokens). The executor then sends the file to a
+   * typist with a larger limit instead of retrying this one (24 Sep; replaces the spec's line cap).
+   */
+  cut_off?: boolean;
   /** A retry delay the vendor asked for, when it gave one. */
   retry_after_ms?: number;
   /** The vendor's HTTP status for a refused call, when it reported one (the executor stops a stage on 401/403). */
@@ -118,13 +124,13 @@ export function isTransient(status?: number | null, code?: string): boolean {
 }
 
 /** A `claude -p` result that reports an error: its api_error_status decides; no status (a turn limit, a refusal) is an attempt. */
-export function leanOpusOutcome(o: { is_error?: boolean; subtype?: string; api_error_status?: number | null }): { transport: boolean } {
-  return { transport: !!o.is_error && isTransient(o.api_error_status) };
+export function leanOpusOutcome(o: { is_error?: boolean; subtype?: string; api_error_status?: number | null; stop_reason?: string | null }): { transport: boolean; cut_off: boolean } {
+  return { transport: !!o.is_error && isTransient(o.api_error_status), cut_off: o.stop_reason === "max_tokens" };
 }
 
 /** The completion door's last attempt: the status, network code and requested delay the adapter recorded. */
-export function flashOutcome(a: Pick<AttemptRecord, "error_status" | "error_code" | "retry_after_ms"> | undefined): { transport: boolean; retry_after_ms?: number } {
-  return { transport: isTransient(a?.error_status, a?.error_code), retry_after_ms: a?.retry_after_ms };
+export function flashOutcome(a: (Pick<AttemptRecord, "error_status" | "error_code" | "retry_after_ms"> & { stop_reason?: string | null }) | undefined): { transport: boolean; retry_after_ms?: number; cut_off: boolean } {
+  return { transport: isTransient(a?.error_status, a?.error_code), retry_after_ms: a?.retry_after_ms, cut_off: a?.stop_reason === "MAX_TOKENS" };
 }
 
 /**
@@ -312,10 +318,10 @@ export class LeanOpusTypist implements Typist {
     const tokens: TypistTokens = { input: ledger.tokens.input, input_cached: ledger.tokens.input_cached, output: ledger.tokens.output, input_cache_write: ledger.tokens.input_cache_write, input_cache_write_1h: ledger.tokens.input_cache_write_1h, output_reasoning: o.usage?.output_tokens_details?.thinking_tokens };
     if (o.is_error) {
       const text = `${o.subtype ?? "error"}${o.api_error_status ? ` (HTTP ${o.api_error_status})` : ""}: ${String(o.result ?? r.err)}`;
-      return { answer: null, error: text.slice(0, 300), transport: leanOpusOutcome(o).transport, ...(typeof o.api_error_status === "number" ? { error_status: o.api_error_status } : {}), tokens, cost_usd: ledger.cost_usd, price_basis: ledger.price_basis, latency_ms: latency };
+      return { answer: null, error: text.slice(0, 300), transport: leanOpusOutcome(o).transport, ...(leanOpusOutcome(o).cut_off ? { cut_off: true } : {}), ...(typeof o.api_error_status === "number" ? { error_status: o.api_error_status } : {}), tokens, cost_usd: ledger.cost_usd, price_basis: ledger.price_basis, latency_ms: latency };
     }
     const answer = parseAnswer(o.result, req.contract);
-    return { answer, error: answer ? undefined : `the reply was not one JSON object in the ${req.contract === "file" ? "{path, content}" : "{path, edits} or {path, content}"} contract`, transport: false, tokens, cost_usd: ledger.cost_usd, price_basis: ledger.price_basis, latency_ms: latency };
+    return { answer, error: answer ? undefined : `the reply was not one JSON object in the ${req.contract === "file" ? "{path, content}" : "{path, edits} or {path, content}"} contract`, transport: false, ...(!answer && leanOpusOutcome(o).cut_off ? { cut_off: true } : {}), tokens, cost_usd: ledger.cost_usd, price_basis: ledger.price_basis, latency_ms: latency };
   }
 }
 
@@ -345,7 +351,7 @@ export class FlashCompletionTypist implements Typist {
     if (!r.success) {
       const text = String(r.error ?? last?.error ?? r.terminal_reason ?? "the completion door failed");
       const o = flashOutcome(last);
-      return { answer: null, error: text.slice(0, 300), transport: o.transport, retry_after_ms: o.retry_after_ms, ...(last?.error_status !== undefined ? { error_status: last.error_status } : {}), tokens, cost_usd: r.cost_usd ?? 0, price_basis: last?.price_basis, latency_ms: Date.now() - started };
+      return { answer: null, error: text.slice(0, 300), transport: o.transport, retry_after_ms: o.retry_after_ms, ...(o.cut_off ? { cut_off: true } : {}), ...(last?.error_status !== undefined ? { error_status: last.error_status } : {}), tokens, cost_usd: r.cost_usd ?? 0, price_basis: last?.price_basis, latency_ms: Date.now() - started };
     }
     const answer = parseAnswer(r.result, req.contract);
     return { answer, error: answer ? undefined : `the reply was not an object in the ${req.contract === "file" ? "{path, content}" : "{path, edits} or {path, content}"} contract`, transport: false, tokens, cost_usd: r.cost_usd ?? 0, price_basis: last?.price_basis, latency_ms: Date.now() - started };
