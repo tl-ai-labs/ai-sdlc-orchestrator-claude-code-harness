@@ -247,6 +247,13 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.8.5
+
+| Area | Before | From v0.8.5 |
+|---|---|---|
+| Repo scout under `opus-plus-flash-v38` | Flash scouted candidate files for the architect; its anchors were mostly wrong four rows running, so the architect re-read every slice | The preset has no `repo_scout` rule, so the scout is skipped and the architect reads the repo itself, as under opus-only. Other multi-model presets keep the scout. |
+| Cross-unit imports | The worker guessed a sibling unit's module path; the error surfaced only at the deferred typecheck and was debugged by the premium model (Run 25: three of four debug rounds) | The multi-model plan carries an `- **Imports**` bullet with each statement as written; each worker packet also receives the sections of the units it depends on; and under `--multi-model` every JS/TS packet's verify starts with `check-imports.mjs`, so an unresolvable import or a missing default/named export fails on the mechanical tier and the worker retries with the files that do exist. Rates, telemetry fields and the collector are unchanged. |
+
 ### v0.8.4
 
 | Area | Before | From v0.8.4 |

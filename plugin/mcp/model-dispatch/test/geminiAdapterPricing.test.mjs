@@ -221,12 +221,13 @@ test("T10 GeminiFlashAdapter: from 2027-01-01 the shipped 3.7 and 3.8 leaves bil
 
 test("opus-plus-flash-v38 is opus-plus-flash-v37 with the mechanical tier on Gemini 3.8 Flash", () => {
   // The 3.8 policy is a copy of the 3.7 one. This keeps the two from drifting:
-  // same Opus leaf, same routing rules, same doors and default door, same cap,
-  // and every Gemini leaf names gemini-3.8-flash.
+  // same Opus leaf, same routing rules (except v38 has no repo scout since
+  // 0.8.5), same doors and default door, same cap, and every Gemini leaf
+  // names gemini-3.8-flash.
   const v37 = loadPolicy({ policyName: "opus-plus-flash-v37" });
   const v38 = loadPolicy({ policyName: "opus-plus-flash-v38" });
   assert.equal(v38.name, "opus-plus-flash-v38");
-  assert.deepEqual(v38.rules, v37.rules);
+  assert.deepEqual(v38.rules, v37.rules.filter((r) => r.when?.task_type !== "repo_scout"));
   assert.equal(v38.hard_cost_cap_usd, v37.hard_cost_cap_usd);
   assert.deepEqual(v38.models.map((m) => [m.id, m.adapter]), v37.models.map((m) => [m.id, m.adapter]));
   const strip = ({ reason, ...slot }) => slot;

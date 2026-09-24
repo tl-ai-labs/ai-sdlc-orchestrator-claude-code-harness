@@ -29,7 +29,14 @@
  *          [--out packets.json] [--json] [--multi-model]
  *
  * --multi-model (the policy has a mechanical tier): an edit unit with no edit
- * sites is an error, not a whole-file fallback.
+ * sites is an error, not a whole-file fallback, and every JS/TS packet verifies
+ * with check-imports.mjs first, so a worker that guesses a sibling unit's
+ * import path retries on its own tier instead of failing the deferred
+ * typecheck (Run 25: three of four debug rounds).
+ *
+ * Every worker packet also carries the plan sections of the units it depends
+ * on: the worker cannot open a sibling's file, and that section names its
+ * path and Exports — what the import has to match.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -42,6 +49,9 @@ export const MAX_RETRIES = 2;
 const UNIT_HEADING = /^## ([A-Z]\d+)\s+[—-]+\s+(\S.*?)\s*$/;
 const UNIT_ID = /\b[A-Z]\d+\b/g;
 const HOUSE_STYLE = "House style";
+const CODE_FILE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+const MAX_DEP_SECTIONS = 4;
+const CHECK_IMPORTS = resolve(dirname(fileURLToPath(import.meta.url)), "check-imports.mjs");
 
 // ---------------------------------------------------------------------------
 // Parsing
@@ -411,6 +421,10 @@ export function buildPackets(plan, opts) {
       { path: planPath, section: u.heading, reason: "unit spec" },
     ];
     if (plan.houseStyle) inputs.push({ path: planPath, section: HOUSE_STYLE, reason: "house style" });
+    for (const d of depends.slice(0, MAX_DEP_SECTIONS)) {
+      const dep = plan.units.find((x) => x.id === d);
+      if (dep && dep.id !== u.id) inputs.push({ path: planPath, section: dep.heading, reason: "dependency spec (its path and Exports)" });
+    }
 
     const errorsBefore = errors.length;
     const mirror = bullet(u.body, "Mirror");
@@ -473,9 +487,12 @@ export function buildPackets(plan, opts) {
     const verify = bullet(u.body, "Verify");
     const spans = verify ? backticked([verify.head, ...verify.rest].join(" ")) : [];
     const cmds = spans.filter(isCommand);
-    const { scoped: verifyCmds, deferred } = splitVerify(cmds, path);
-    const format = formatCommands(verifyCmds);
-    if (verifyCmds.length === 0) warnings.push(`${u.id}: no file-scoped Verify command; the server cannot check the worker's output${deferred.length ? " (package-wide commands are deferred)" : ""}`);
+    const { scoped, deferred } = splitVerify(cmds, path);
+    const format = formatCommands(scoped);
+    if (scoped.length === 0) warnings.push(`${u.id}: no file-scoped Verify command; the server cannot check the worker's output${deferred.length ? " (package-wide commands are deferred)" : ""}`);
+
+    // `{path}` is single-quoted: the server substitutes it into a shell, and route files carry `$userId`.
+    const verifyCmds = multiModel && CODE_FILE.test(path) ? [`node ${JSON.stringify(CHECK_IMPORTS)} '{path}'`, ...scoped] : scoped;
 
     let prevChunkId = null;
     anchorChunks.forEach((chunk, ci) => {
@@ -504,7 +521,7 @@ export function buildPackets(plan, opts) {
         acceptance: acceptanceOf(u.body),
         budget: mode === "edits" ? { ...BUDGET, maxOutputTokens: 8000 } : { ...BUDGET },
         retry_count: 0,
-        apply: { write: true, mode, ...(format.length ? { format } : {}), verify: ci === anchorChunks.length - 1 ? verifyCmds : verifyCmds.filter((c) => !/vitest|jest|pytest|test\b/.test(c)), max_retries: MAX_RETRIES },
+        apply: { write: true, mode, ...(format.length ? { format } : {}), verify: ci === anchorChunks.length - 1 ? verifyCmds : verifyCmds.filter((c) => c.includes(CHECK_IMPORTS) || !/vitest|jest|pytest|test\b/.test(c)), max_retries: MAX_RETRIES },
         ...(deferred.length && ci === anchorChunks.length - 1 ? { verify_deferred: deferred } : {}),
       });
       prevChunkId = chunkId;

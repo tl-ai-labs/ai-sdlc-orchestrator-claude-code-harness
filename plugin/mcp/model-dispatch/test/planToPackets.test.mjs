@@ -386,3 +386,32 @@ test("editSites reads a `- **Edit**` bullet and parseAnchors reads `after :N -> 
   assert.deepEqual(parseAnchors(editSites(body)).map((a) => a.line), [16, 50, 248, 2110]);
   assert.equal(editSites(["- **Editor** x"]), null, "only an Edit / Edits / Edit anchor bullet counts");
 });
+
+test("buildPackets: a worker packet carries the sections of the units it depends on; --multi-model puts check-imports first in a JS/TS verify", () => {
+  const root = repo();
+  const plan = parsePlan(PLAN);
+  const single = buildPackets(plan, { runId: "r1", planPath: "p.md", projectRoot: root });
+  const a3 = single.packets.find((p) => p.unit === "A3");
+  assert.deepEqual(a3.inputs.filter((i) => i.reason.startsWith("dependency")), [
+    { path: "p.md", section: "A1 — apps/api/src/user/controllers/get-public-profile.ts", reason: "dependency spec (its path and Exports)" },
+  ]);
+  assert.ok(!single.packets.some((p) => p.apply?.verify.some((c) => c.includes("check-imports"))), "single-model packets are unchanged");
+
+  const multi = buildPackets(plan, { runId: "r1", planPath: "p.md", projectRoot: root, multiModel: true });
+  for (const p of multi.packets.filter((x) => x.apply)) {
+    const js = /\.(ts|tsx|js|mjs)$/.test(p.artifact_path);
+    assert.equal(/check-imports\.mjs" '\{path\}'$/.test(p.apply.verify[0] ?? ""), js, `${p.id}: check-imports first only for JS/TS`);
+  }
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("buildPackets --multi-model: chunked edit packets keep check-imports on every chunk", () => {
+  const root = repo();
+  const sites = [1, 2, 3, 4, 5, 6, 7].map((n) => `  - after \`:${n}\``).join("\n");
+  const plan = parsePlan(`## House style\n- x\n\n## A1 — apps/api/src/index.ts\n\n- **File** \`apps/api/src/index.ts\` · **Action** \`edit\` · **Depends on** —\n- **Edit anchor**\n${sites}\n- **Verify** \`pnpm exec biome check apps/api/src/index.ts\` · \`pnpm exec vitest run apps/api/src/index.ts\`\n`);
+  const { packets } = buildPackets(plan, { runId: "r1", planPath: "p.md", projectRoot: root, multiModel: true });
+  assert.equal(packets.length, 2);
+  for (const p of packets) assert.match(p.apply.verify[0], /check-imports\.mjs/);
+  assert.ok(!packets[0].apply.verify.some((c) => c.includes("vitest")), "tests still run on the last chunk only");
+  rmSync(root, { recursive: true, force: true });
+});

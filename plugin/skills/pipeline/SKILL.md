@@ -129,7 +129,8 @@ mechanical tier; the architect reads what the scout found.
    allowlist and test/kit adjacency, and keeps ≤ 40 files / ≤ 250 kB; a large file is offered as hit
    windows (`windows: [[from, to], …]`), not whole.
 2. Skip the scout when the loaded policy has no rule matching `phase: discovery, task_type: repo_scout`
-   (`load_policy` → `rules[].when`). A single-model policy has none; the architect works as before.
+   (`load_policy` → `rules[].when`). A single-model policy has none, and neither does
+   `opus-plus-flash-v38` since 0.8.5; the architect reads the repo itself.
    **Skip means skip the whole step** — do not run `scout-candidates.mjs`, do not read the candidates
    yourself, do not write a `scout.json`. The scout exists to move *search* off the premium model; done
    inline by that model it is the cost it was meant to remove (measured $0.16 plus its turns on a
@@ -238,7 +239,12 @@ edit the same file; and a package-wide verify command (`typecheck`, the full sui
 as `verify_deferred`, not in `apply.verify`. **Run every `verify_deferred` command once, after the
 last packet of the phase**, and treat a failure as a debug packet against the file whose error it
 reports — a per-packet package check fails on other packets' unfinished work (measured: a
-route-tree edit was retried twice for another packet's import errors).
+route-tree edit was retried twice for another packet's import errors). Under `--multi-model` every JS/TS packet's
+`apply.verify` also starts with `check-imports.mjs '{path}'`: an import that does not resolve, or a
+default/named import the target does not export, fails the packet on the mechanical tier and the
+worker retries with the list of files that do exist — so a guessed sibling path is fixed there, not
+in a debug round at the deferred typecheck. Declare every import edge in **Depends on**: the batch
+writes dependencies first, and an import of a file not yet written fails the check.
 
 ### Brownfield-mode task types (v1)
 
@@ -325,7 +331,7 @@ command once. Under a single-model policy nothing is dispatched and this paragra
 
 | Field | Value |
 |---|---|
-| `inputs[]` | Paths only — no `content`. Narrow with `section: "<heading>"` (a `change_plan.md` section such as `"A1"`) or `lines: [from, to]`. The server reads them; you never paste file text into a packet. **The standard set for a codegen / test packet is three:** the unit section (`change_plan.md` § `An — …`), the plan's `House style` section, and the unit's **Mirror** slice (`path` + `lines` from the section — the existing file whose shape the new one copies). Add the **Edit anchor** lines for an edit. Nothing else: the worker does not need the whole plan, the requirements, or the repo facts. |
+| `inputs[]` | Paths only — no `content`. Narrow with `section: "<heading>"` (a `change_plan.md` section such as `"A1"`) or `lines: [from, to]`. The server reads them; you never paste file text into a packet. **The standard set for a codegen / test packet is three:** the unit section (`change_plan.md` § `An — …`), the plan's `House style` section, and the unit's **Mirror** slice (`path` + `lines` from the section — the existing file whose shape the new one copies). Add the **Edit anchor** lines for an edit, and the section of each unit it **Depends on** (≤ 4; their path and Exports are what its imports must match — `plan-to-packets.mjs` adds them). Nothing else: the worker does not need the whole plan, the requirements, or the repo facts. |
 | `instruction` | Names the section and says *implement*, not *reproduce*: "Implement `<artifact_path>` from change_plan section `An`: satisfy every Exports signature and Behavior rule; copy the shape of the Mirror input for imports, errors and structure; follow House style. Return JSON {path, content}." Do not restate the section's content in the instruction — the section is the input. |
 | `outputSchema` | Omit it. The server supplies `{path, content}`. |
 | `apply` | `{ "write": true, "mode": "content" | "edits", "format"?: [<commands>], "verify": [<commands>], "max_retries": 2 }`. `mode: "edits"` (edits to an existing file): the worker returns `{edits: [{line, anchor, position: "after" | "before" | "replace", text}]}` instead of the file and the server splices them in — an anchor that is not found, or matches more than one line without a `line`, is a retry with that reason; the file must exist. `plan-to-packets.mjs` picks the mode from the unit's Action. Verify commands come from `baseline.json` (the package's lint / typecheck / test commands), scoped to the file where the tool allows it: `{path}` is replaced by `artifact_path`. Typical: `["npx biome check {path}"]` for a source file, `["npx biome check {path}", "npx vitest run {path}"]` for a test file. Leave `verify` out only when no cheap check exists. |

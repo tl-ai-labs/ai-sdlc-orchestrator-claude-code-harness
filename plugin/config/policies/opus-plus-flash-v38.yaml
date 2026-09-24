@@ -104,12 +104,11 @@ rules:
     use: opus
     reason: "Risk-bearing, low volume"
 
-  # The repo scout runs on the mechanical tier: it reads the candidate files and returns
-  # mirrors, anchors and facts for the architect (pipeline skill, Phase 2). Under a
-  # single-model policy there is no such rule, and the orchestrator skips the scout.
-  - when: { phase: discovery, task_type: repo_scout }
-    use: gemini-flash
-    reason: "Mechanical: locate mirrors and edit anchors among candidate files for the architect"
+  # No repo_scout rule, so the orchestrator skips the scout (pipeline skill, Phase 2) and the
+  # architect reads the repo itself, as under opus-only. Removed in 0.8.5: on four rows running
+  # the scout's anchors were mostly wrong (index.ts:38 for :59, :123 for :243, existing files
+  # under not_found), the architect re-read every slice anyway, and the Opus-side cost of
+  # preparing and checking it exceeded the reads it saved. Other multi-model presets keep it.
   # Brownfield-mode phases — both premium.
   - when: { phase: discovery }
     use: opus

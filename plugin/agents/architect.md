@@ -42,6 +42,10 @@ Additional inputs available:
   **Do not re-read a scout slice to re-check it.** `plan-to-packets.mjs` checks every Mirror and Edit
   anchor against the repo after you return and names the ones that are wrong. Re-verifying 11 scout
   anchors by hand doubled the architect's reads on a multi-model run (65 tool uses vs 32 single-model).
+  **No `scout.json` is the normal case** — every single-model policy, and multi-model policies that
+  have no scout rule (`opus-plus-flash-v38` since 0.8.5: the scout's anchors were wrong four rows
+  running, so the architect re-read everything anyway). Find what you need yourself, as below; the
+  delegation's `policy_kind` still decides which plan form you write.
 
 How you read the repo, under either policy:
 - **Find a file by listing, never by guessing a path to Read.** `git ls-files '<dir>/*'` or
@@ -84,6 +88,14 @@ same tests green, senior verdict no worse.
 Each unit section, in this order:
 
 - **File** · **Action** (`new_file` / `edit` / `tooling`) · **Depends on** (unit ids).
+- **Imports** (multi-model only; one sub-bullet per import of another unit's file or of an existing
+  file the Mirror does not import) — the statement exactly as the file must write it, e.g.
+  ``import { useGetPublicProfile } from "@/hooks/queries/user/use-get-public-profile"`` or, in a
+  test, ``vi.mock("../../../apps/api/src/database")``. Default vs named must match the other unit's
+  **Exports**. Every **Depends on** edge that is an import has a line here. The worker cannot open a
+  sibling's file, and guessed specifiers were three of the four debug rounds on Run 25 (the premium
+  model debugged each one). The worker also receives each dependency's section, and the server
+  checks every import resolves before it accepts the file.
 - **Exports** — signatures only: `export function name(arg: T): R`, `export type X = {...}` with
   fields, `export const NAME = <one-line literal>`. A type or a signature is at most a few lines.
 - **Behavior** — numbered rules the implementation must satisfy, in evaluation order. Rules, not
@@ -108,10 +120,9 @@ Each unit section, in this order:
   architect's output on a single-model run (18.6k vs 9.4k tokens).
 - **What the multi-model form adds, and nothing else:** the verbatim line text on each **Edit
   anchor** (the worker cannot open the file; `apply.mode: "edits"` matches on that text) and the
-  exact import specifier a new file uses when it is not in its mirror. Under a single-model policy
-  (the delegation says `policy_kind: single-model`, or no `scout.json` exists and the orchestrator
-  says it writes the files itself) the **Edit anchor** is the line numbers with no quoted text: the
-  orchestrator reads the file it edits.
+  **Imports** bullet. Under a single-model policy (the delegation says `policy_kind: single-model`)
+  the **Edit anchor** is the line numbers with no quoted text and there is no **Imports** bullet:
+  the orchestrator reads the files it edits and imports.
 - **Verify** — commands only, each in its own backticks, starting with the runner (`pnpm exec
   biome check <path>`, `pnpm --filter <pkg> exec vitest run <file>`). No prose in backticks
   in this bullet: every backticked span here becomes a shell command. A package-wide check
@@ -120,7 +131,7 @@ Each unit section, in this order:
 - **Acceptance** — bullets a reviewer can check; for tests, the cases by name.
 
 **Same plan size under both policies.** A multi-model plan is the single-model plan plus the quoted
-anchor text and new-file import specifiers — nothing else. Measured on one brief (Runs 22–23):
+anchor text and the **Imports** lines — nothing else. Measured on one brief (Runs 22–23):
 single-model 407 lines / 14 units / 27.5 kB; multi-model 766 lines / 17 units / 48.7 kB, and the extra
 Opus output (which both reviewers then re-read) cost more than the cheaper worker saved. So:
 - **The same file set.** Do not add a unit to make the worker's job easier — a separate helper module,
