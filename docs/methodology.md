@@ -247,6 +247,22 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.7.4
+
+| Area | Before | From v0.7.4 |
+|---|---|---|
+| Agent-door (Antigravity SDK) input tokens | Every sidecar read as Gemini's API convention: fresh input = `prompt_token_count` − `cached_content_token_count`, floored at zero | Read by the SDK version recorded in the sidecar ([`AGY_USAGE_SEMANTICS`](../plugin/mcp/model-dispatch/src/delegation/workerProcess.ts)): 0.1.9 counts cached input inside `prompt_token_count` (unchanged reading); 0.1.16 counts it on top, so fresh input = `prompt_token_count`. Each listed version was checked against Google's own token counter (Cloud Monitoring `aiplatform.googleapis.com/publisher/online_serving/token_count`) for a real job. A version not listed is billed on the larger reading and logs `agsdk.usage_semantics_unverified`. |
+| Worker SDK install | `google-antigravity>=0.1.7`, so a new install took whatever was newest | Pinned `google-antigravity==0.1.16`; raise it only after the same check adds the new version to `AGY_USAGE_SEMANTICS`. |
+
+Figures that move on the same tokens:
+
+| Case | Before | From v0.7.4 |
+|---|---|---|
+| An agent-door job on SDK 0.1.16 with 39,439 fresh and 128,714 cached input tokens and 4,240 output tokens (Gemini 3.8 Flash, global) | $0.025554 — the fresh input billed as zero | $0.055133 |
+| Any agent-door job on SDK 0.1.9 | Unchanged | Unchanged |
+
+Delegated agent-door costs recorded by v0.7.3 or earlier with SDK 0.1.16 are low by the fresh input they dropped; re-pricing a sidecar with v0.7.4's `mapSidecarTokens` gives the corrected figure. Completion-door (MCP) dispatches, Claude costs and the orchestrator figure are unchanged.
+
 ### v0.7.3
 
 | Area | Before | From v0.7.3 |

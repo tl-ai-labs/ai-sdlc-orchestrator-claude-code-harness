@@ -1,6 +1,6 @@
 # Repo guide
 
-This repository holds `mmo` (Multi-Model Orchestrator) v0.7.3 — a Claude Code plugin that runs a
+This repository holds `mmo` (Multi-Model Orchestrator) v0.7.4 — a Claude Code plugin that runs a
 full software-delivery pipeline against a brief (requirements → design → code → senior review →
 tests → security review), routes each phase to the model that fits it, and records what each phase
 cost — plus the harness, tests and documentation that ship it.
@@ -45,7 +45,7 @@ into the other two.
 
 `plugin/mcp/model-dispatch/worker/gemini_worker.py` is a fourth, optional piece: the agent behind
 the `antigravity-worker` adapter. It needs Python 3.10 or newer and the `google-antigravity`
-package (floor `>=0.1.7`, not a pin), both recorded in `worker/requirements.txt`. Its virtualenv is
+package, pinned to `==0.1.16`, both recorded in `worker/requirements.txt`. The pin is exact because the SDK has changed what its usage totals mean between releases (0.1.9 counts cached input inside `prompt_token_count`, 0.1.16 counts it on top), and the plugin bills each sidecar by the reading its recorded version is known to use — see `AGY_USAGE_SEMANTICS` in `src/delegation/workerProcess.ts`. Raise the pin only after checking a new version's token counts against Google's own counter and adding it there. Its virtualenv is
 built on demand by `plugin/scripts/verify-setup.mjs --enable-agent` and is git-ignored.
 
 You need it only for the agent path, where the cheap tier — the mechanical phases the policy routes

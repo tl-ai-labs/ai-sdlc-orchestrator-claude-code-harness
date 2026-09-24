@@ -209,11 +209,54 @@ export function workerTaskMarkdown(
 }
 
 /**
- * Map worker-sidecar tokens onto the orchestrator's disjoint convention.
+ * How each Antigravity SDK version reports input in its usage totals. The SDK
+ * changed this between releases, and the two readings disagree by the whole
+ * cached amount:
+ *  - "inclusive": `prompt_token_count` is ALL input and
+ *    `cached_content_token_count` is part of it (the Gemini API convention).
+ *  - "disjoint": `prompt_token_count` is the FRESH input only and
+ *    `cached_content_token_count` comes on top of it.
+ * Only versions checked against Google's own token counter are listed (Cloud
+ * Monitoring, aiplatform.googleapis.com/publisher/online_serving/token_count,
+ * for a real job whose per-call records were summed too): 0.1.9 counted
+ * prompt_token_count exactly; 0.1.16 counted prompt + cached exactly. Add a
+ * version here only after the same check.
+ */
+export const AGY_USAGE_SEMANTICS: Readonly<Record<string, "inclusive" | "disjoint">> = Object.freeze({
+  "0.1.9": "inclusive",
+  "0.1.16": "disjoint",
+});
+
+export type AgyUsageSemantics = "inclusive" | "disjoint" | "unverified";
+
+/**
+ * The reading that applies to one sidecar, from the SDK version the worker
+ * recorded in it. A version nobody has checked is "unverified"; so is a
+ * sidecar whose numbers contradict its version's reading (cached larger than
+ * prompt cannot be inclusive).
+ */
+export function sidecarUsageSemantics(sidecar: any): AgyUsageSemantics {
+  const known = AGY_USAGE_SEMANTICS[String(sidecar?.sdk_version ?? "")];
+  if (!known) return "unverified";
+  const usage = (sidecar && sidecar.usage) || {};
+  if (known === "inclusive" && Number(usage.cached_content_token_count ?? 0) > Number(usage.prompt_token_count ?? 0)) return "unverified";
+  return known;
+}
+
+/**
+ * Map worker-sidecar tokens onto the orchestrator's disjoint convention
+ * (`input` fresh, `input_cached` cached, never overlapping — computeCostUsd
+ * bills them at different rates).
  * TWO TRAPS:
  *  1. Sidecar keys are snake_case (Python SDK), not camelCase.
- *  2. `prompt_token_count` INCLUDES the cached portion — subtract before
- *     handing to computeCostUsd, which needs disjoint counts.
+ *  2. What `prompt_token_count` means depends on the SDK version (see
+ *     AGY_USAGE_SEMANTICS): subtract the cached count only where the version
+ *     is known to include it. Subtracting where it is not (0.1.16) floors fresh
+ *     input to zero and bills the dearest tokens as free; not subtracting where
+ *     it is (0.1.9) bills cached tokens twice.
+ * An unverified version takes the disjoint reading, the larger of the two
+ * bills, so an unchecked SDK can over-report a cost but never under-report it;
+ * the adapter logs a warning so the version gets checked.
  * Thoughts fold into `output` for costing and duplicate to `output_reasoning`
  * for reporting only (computeCostUsd never reads that field).
  */
@@ -228,8 +271,9 @@ export function mapSidecarTokens(sidecar: any): {
   const cached = Number(usage.cached_content_token_count ?? 0);
   const candidates = Number(usage.candidates_token_count ?? 0);
   const thoughts = Number(usage.thoughts_token_count ?? 0);
+  const fresh = sidecarUsageSemantics(sidecar) === "inclusive" ? Math.max(0, prompt - cached) : prompt;
   return {
-    input: Math.max(0, prompt - cached),
+    input: fresh,
     input_cached: cached,
     output: candidates + thoughts,
     output_reasoning: thoughts,

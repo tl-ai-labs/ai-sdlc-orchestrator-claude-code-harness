@@ -33,6 +33,7 @@ import {
   evidenceStem,
   mapSidecarTokens,
   resolveWorkerPython,
+  sidecarUsageSemantics,
   workerTaskMarkdown,
   workerThinkingLevel,
 } from "../delegation/workerProcess.js";
@@ -222,6 +223,17 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     const tokens = mapSidecarTokens(sidecar);
     const cost = computeCostUsd(tokens, price.billed);
     const latency = Date.now() - started;
+
+    // An SDK version whose usage reading has not been checked against Google's
+    // own token counter is billed on the larger reading (never under-reported);
+    // say so, so the version gets checked and added to AGY_USAGE_SEMANTICS.
+    if (sidecar && sidecarUsageSemantics(sidecar) === "unverified") {
+      log("warn", "agsdk.usage_semantics_unverified", {
+        packet_id: packet.id,
+        sdk_version: sidecar.sdk_version ?? null,
+        billed_as: "disjoint (fresh = prompt_token_count, cached on top)",
+      });
+    }
 
     if (sidecar) {
       log("info", "agsdk.sidecar", {

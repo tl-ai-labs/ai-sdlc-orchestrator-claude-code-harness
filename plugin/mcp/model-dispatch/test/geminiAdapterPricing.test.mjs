@@ -50,7 +50,11 @@ const BEFORE_V38_GA = () => new Date("2026-09-01T12:00:00Z");
 
 const USAGE = { promptTokenCount: 123457, cachedContentTokenCount: 45678, candidatesTokenCount: 2345, thoughtsTokenCount: 6789 };
 const TOKENS = { input: 123457 - 45678, input_cached: 45678, output: 2345 + 6789 };
+// The sidecar names its SDK version because what prompt_token_count means depends
+// on it (AGY_USAGE_SEMANTICS); 0.1.9 counts cached input inside prompt, which is
+// the split TOKENS above expects. These tests are about the price, not the reading.
 const SIDECAR = {
+  sdk_version: "0.1.9",
   usage: { prompt_token_count: 123457, cached_content_token_count: 45678, candidates_token_count: 2345, thoughts_token_count: 6789 },
   tool_call_count: 0,
 };
