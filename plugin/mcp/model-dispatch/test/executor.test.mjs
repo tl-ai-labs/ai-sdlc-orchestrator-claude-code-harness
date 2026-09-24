@@ -7,12 +7,12 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync, symlinkSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { executeStage, backoffMs, applyEdits, LEAN_OPUS_CACHE_TTL_MS } from "../dist/executor/run.js";
+import { executeStage, backoffMs, applyEdits, placeFixPath, boundReceipt, RECEIPT_MAX_BYTES, LEAN_OPUS_CACHE_TTL_MS } from "../dist/executor/run.js";
 import { checkAnswer, checkPython, toolchainProblem } from "../dist/executor/checks.js";
 import { EXECUTOR_TOOLS, handleExecutorTool, reviewRepairs, STAGE_CONCURRENCY, TRANSPORT } from "../dist/executor/tools.js";
 import { loadPolicyFromPath } from "../dist/policy.js";
@@ -46,7 +46,7 @@ function fake(door, modelId, script = () => ({})) {
     async type(req) {
       calls.push(req);
       const s = script(req, calls.length);
-      return { answer: s.answer === undefined ? GOOD(req.unit) : s.answer, error: s.error, transport: !!s.transport, retry_after_ms: s.retry_after_ms, tokens, cost_usd: s.cost ?? 0.01, latency_ms: 1 };
+      return { answer: s.answer === undefined ? GOOD(req.unit) : s.answer, error: s.error, error_status: s.error_status, transport: !!s.transport, retry_after_ms: s.retry_after_ms, tokens, cost_usd: s.cost ?? 0.01, latency_ms: 1 };
     },
   };
 }
@@ -90,14 +90,14 @@ test("orchestrator: the policy's own rules send each unit to its typist; the sha
 
 test("the ladder: two routed attempts with the refusal fed back, then one lean Opus attempt; each attempt is billed", async () => {
   const dir = mkdtempSync(join(tmpdir(), "exec-"));
-  const flash = fake("flash-completion", "flash-completion", () => ({ answer: { path: "app/models.py", content: "x = 1\n" } }));
+  const flash = fake("flash-completion", "flash-completion", () => ({ answer: { path: "app/models.py", content: "def thing(:\n" } }));
   const opus = fake("lean-opus", "opus");
   const events = [];
   const one = { ...SPEC, units: [SPEC.units[0]] };
   const r = await executeStage(one, OPTS(ORCH, dir), { typistFor: (id) => (id === "opus" ? opus : flash), fallback: opus, shared: "S", sharedFile: "/dev/null", emit: (e) => events.push(e), check: (u, a) => checkAnswer(u, a, "python3") });
   assert.equal(flash.calls.length, 2);
   assert.ok(!flash.calls[0].packet.instruction.includes("previous answer was refused"));
-  assert.match(flash.calls[1].packet.instruction, /## Your previous answer was refused\nthese declared exports are not defined: thing/);
+  assert.match(flash.calls[1].packet.instruction, /## Your previous answer was refused\nthe Python does not parse/);
   assert.equal(opus.calls.length, 1, "the lean Opus attempt");
   assert.match(opus.calls[0].packet.instruction, /previous answer was refused/);
   assert.equal(r.written, 1);
@@ -138,9 +138,7 @@ test("an answer for another path, or an unsafe one, is refused", () => {
   assert.equal(checkAnswer({ ...u, path: "../x.py" }, { path: "../x.py", content: "def thing(): pass\n" }, "python3").ok, false);
   assert.equal(checkAnswer(u, { path: u.path, content: "   \n" }, "python3").reason, "the file is empty");
   assert.match(checkAnswer(u, { path: u.path, content: "def thing(:\n" }, "python3").reason, /does not parse/);
-  const ts = { ...u, path: "src/a.ts", exports: [{ name: "run", kind: "function", params: [], returns: "void" }] };
-  assert.equal(checkAnswer(ts, { path: "src/a.ts", content: "export function run(): void {}\n" }, "python3").ok, true);
-  assert.match(checkAnswer(ts, { path: "src/a.ts", content: "function run(): void {}\n" }, "python3").reason, /not defined: run/);
+  assert.match(checkAnswer({ path: "src/a.ts" }, { path: "src/a.ts", content: "export function run( {\n" }, "python3").reason, /does not parse/);
 });
 
 test("the checker's interpreter is MMO_CHECK_PYTHON or python3, never read out of the architect's free text", () => {
@@ -175,32 +173,32 @@ test("a JSON file is judged by the parser of the tool that reads it: TypeScript'
   assert.match(checkAnswer({ path: "package.json", exports: [] }, { path: "package.json", content: '{\n  // npm reads strict JSON\n  "name": "x"\n}\n' }, "python3").reason, /the JSON does not parse/);
 });
 
-test("dotted exports are checked as members: a method of a class, a key of an exported object", () => {
-  const py = { path: "app/store.py", exports: [{ name: "NoteStore", kind: "class", params: [], returns: "" }, { name: "NoteStore.add", kind: "function", params: [], returns: "Note" }] };
-  assert.equal(checkAnswer(py, { path: py.path, content: "class NoteStore:\n    def add(self, n):\n        return n\n" }, "python3").ok, true);
-  assert.match(checkAnswer(py, { path: py.path, content: "class NoteStore:\n    pass\n\ndef add(n):\n    return n\n" }, "python3").reason, /not defined: NoteStore\.add/);
-  const ts = { path: "src/api.ts", exports: [{ name: "Api.list", kind: "function", params: [], returns: "" }, { name: "routes.home", kind: "constant", params: [], returns: "" }] };
-  assert.equal(checkAnswer(ts, { path: ts.path, content: "export class Api { list() { return []; } }\nexport const routes = { home: '/' };\n" }, "python3").ok, true);
-  assert.match(checkAnswer(ts, { path: ts.path, content: "export class Api {}\nexport const routes = { home: '/' };\n" }, "python3").reason, /Api\.list/);
-});
-
-test("imports of the project's own code must resolve to a file the spec writes, with names it declares", () => {
-  const u = (id, path, names) => ({ ...unit(id, path, "other"), exports: names.map((n) => ({ name: n, kind: "function", params: [], returns: "" })) });
-  const spec = { ...SPEC, commands: [{ name: "tests", run: "pytest -q", cwd: "backend" }], units: [
-    u("U01", "backend/app/models.py", ["Note"]), u("U02", "backend/app/routes/notes.py", ["router"]), u("U03", "backend/app/routes/__init__.py", []),
-    u("U10", "frontend/src/api.ts", ["listNotes"]), u("U11", "frontend/src/App.tsx", ["App"]),
-  ] };
-  const chk = (path, content) => checkAnswer({ path, exports: [] }, { path, content }, "python3", spec);
-  // Python: the standard library and third-party packages are not the spec's to judge.
-  assert.equal(chk("backend/app/main.py", "import os, logging\nfrom fastapi import FastAPI\nfrom app.models import Note\nfrom app.routes.notes import router\n").ok, true);
-  assert.equal(chk("backend/app/routes/notes.py", "from ..models import Note\nfrom . import notes\n").ok, true, "relative imports resolve by path");
-  assert.match(chk("backend/app/main.py", "from app.logging import get_logger\n").reason, /imports app\.logging, which no unit of the spec writes/);
-  assert.match(chk("backend/app/main.py", "from app.models import Notes\n").reason, /imports Notes from app\.models, which its spec entry does not export \(it exports: Note\)/);
-  assert.match(chk("backend/app/routes/notes.py", "from ..schemas import NoteIn\n").reason, /imports \.\.schemas, which no unit of the spec writes/);
-  // TypeScript: relative code imports only; packages, aliases, styles and default imports are not judged by name.
-  assert.equal(chk("frontend/src/main.tsx", "import React from 'react';\nimport App from './App';\nimport './index.css';\nimport { listNotes } from './api';\nimport * as api from './api.js';\n").ok, true);
-  assert.match(chk("frontend/src/main.tsx", "import { fetchNotes } from './api';\n").reason, /imports fetchNotes from '\.\/api', which its spec entry does not export/);
-  assert.match(chk("frontend/src/main.tsx", "import { x } from './helpers';\n").reason, /imports '\.\/helpers', which no unit of the spec writes/);
+test("only certain faults refuse a file, in any language: exports and imports are never judged, so a correct idiom is never refused", () => {
+  // Every case below is a correct file the old export/import checks refused, or a language no check reads
+  // (found by the independent review). A refused correct file costs solo three Opus calls and the orchestrator
+  // two Flash and one Opus, so such refusals were unfair as well as wasteful; cross-file mistakes are left to
+  // the project's own tests and the repair round, the same for both arms.
+  const ok = (path, content) => assert.equal(checkAnswer({ path }, { path, content }, "python3").ok, true, path);
+  ok("src/dto/index.ts", "export * from './create-invoice.dto';\n");
+  ok("src/InvoiceRow.tsx", "import { memo } from 'react';\nfunction InvoiceRow() { return <tr />; }\nexport default memo(InvoiceRow);\n");
+  ok("src/App.tsx", "function App() { return <div />; }\nexport { App as default };\n");
+  ok("src/status.ts", "export enum InvoiceStatus { Draft = 'draft' }\n");
+  ok("src/vite-env.d.ts", "interface ImportMetaEnv { readonly VITE_API_URL: string }\n");
+  ok("jest.config.js", "module.exports = { testEnvironment: 'node' };\n");
+  ok("src/invoices/invoices.controller.ts", "import { InvoiceService } from './invoices.service';\nexport class InvoicesController {}\n");
+  ok("app/log.py", "try:\n    from rich import print as log\nexcept ImportError:\n    def log(*a):\n        print(*a)\n");
+  ok("app/main.py", "from app.logging import get_logger\n");
+  ok("cmd/server/main.go", "package main\n\nfunc main() {}\n");
+  ok(".eslintrc.json", "{\n  // ESLint reads comments\n  \"root\": true,\n}\n");
+  ok("data/rates.json", "[1, 2, 3]\n");
+  ok("package.json", "\ufeff{ \"name\": \"x\" }\n"); // a byte-order mark: npm and Node's JSON loader strip it
+  // Certain faults still refuse, whatever the language.
+  const no = (path, content, why) => assert.match(checkAnswer({ path }, { path, content }, "python3").reason ?? "", why, path);
+  no("app/main.py", "def f(:\n", /does not parse/);
+  no("src/App.tsx", "export default function App( {\n", /does not parse/);
+  no("data/rates.json", "{ \"a\": }\n", /does not parse/);
+  no("package.json", "{\n  // npm reads package.json strictly\n  \"name\": \"x\"\n}\n", /does not parse/);
+  no("cmd/server/main.go", "  \n", /empty/);
 });
 
 test("never more units in flight than the stated limit, and the receipt stays short", async () => {
@@ -290,12 +288,16 @@ test("the edit contract fails closed: a search found twice or not at all changes
   assert.match(applyEdits("a b a", [{ search: "a", replace: "c" }]).reason, /edit 1: its search text appears 2 times/);
   assert.match(applyEdits("a b", [{ search: "b", replace: "c" }, { search: "z", replace: "y" }]).reason, /edit 2: its search text appears 0 times/);
   assert.deepEqual(applyEdits("x", [{ search: "x", replace: "$&$1" }]), { content: "$&$1" }, "replacement text is literal");
+  // Overlapping occurrences count: "}\n}" appears twice in "}\n}\n}", so the edit is ambiguous (found by the independent review).
+  assert.match(applyEdits("}\n}\n}", [{ search: "}\n}", replace: "X" }]).reason, /appears 2 times/);
 });
 
-test("a fix whose path leaves the code directory is refused before anything is read or sent", async () => {
+test("a fix whose path leaves the code directory is reported, and nothing is read or sent", async () => {
   const dir = mkdtempSync(join(tmpdir(), "exec-"));
   const opus = fake("lean-opus", "opus");
-  await assert.rejects(executeStage(SPEC, OPTS(SOLO, dir, { stage: "repair", repairs: [{ path: "../etc/passwd", problems: ["x"] }] }), { typistFor: () => opus, fallback: opus, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck }), /outside the code directory/);
+  const r = await executeStage(SPEC, OPTS(SOLO, dir, { stage: "repair", repairs: [{ path: "../etc/passwd", problems: ["x"] }] }), { typistFor: () => opus, fallback: opus, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
+  assert.deepEqual(r.not_routed, [{ file: "../etc/passwd", reason: "names no file under the code directory and no file of the spec" }]);
+  assert.equal(r.units, 0);
   assert.equal(opus.calls.length, 0);
 });
 
@@ -325,7 +327,7 @@ test("a vendor pause longer than one rate-limit window is an attempt, not a wait
   const events = [];
   const one = { ...SPEC, units: [SPEC.units[0]] };
   await executeStage(one, OPTS(ORCH, dir), { typistFor: (id) => (id === "opus" ? opus : flash), fallback: opus, shared: "S", sharedFile: "/dev/null", emit: (e) => events.push(e), check: okCheck, sleep: async (ms) => { waits.push(ms); } });
-  assert.deepEqual(waits, []);
+  assert.deepEqual(waits, [8000], "one full window before the next attempt, so the next attempt does not hit the same wall");
   assert.match(events[0].error, /asked for a 90 s pause, longer than one 8 s rate-limit window/);
   assert.deepEqual(events.map((e) => [e.attempt_number, e.success]), [[1, false], [2, true]]);
   assert.equal(TRANSPORT.capMs, 60_000, "one 60 s rate-limit window");
@@ -349,7 +351,110 @@ test("a review's findings become fixes by file; a finding that cannot be placed 
     { severity: "major", file: "/elsewhere/x.py", issue: "i", fix: "f" },
     { severity: "major", issue: "no file" },
   ] }));
-  const r = reviewRepairs([rp], dir);
-  assert.deepEqual(r.items, [{ path: "app/models.py", problems: ["blocker: wrong value — fix: return 1"] }, { path: "app/routes.py", problems: ["minor: naming — fix: rename"] }]);
-  assert.deepEqual(r.not_routed.map((x) => x.reason), ["outside the code directory", "a finding with no file"]);
+  const r = reviewRepairs([rp]);
+  // Findings are read as written; where each file is placed is the executor's job (placeFixPath), for review and test fixes alike.
+  assert.deepEqual(r.items, [
+    { path: "app/models.py", problems: ["blocker: wrong value — fix: return 1"] },
+    { path: join(dir, "app/routes.py"), problems: ["minor: naming — fix: rename"] },
+    { path: "/elsewhere/x.py", problems: ["major: i — fix: f"] },
+  ]);
+  assert.deepEqual(r.not_routed.map((x) => x.reason), ["a finding with no file"]);
+});
+
+/** A code directory shaped like the pipeline smoke's: the code lives in <project>/src, the spec's paths are relative to it. */
+function smokeLayout() {
+  const project = mkdtempSync(join(tmpdir(), "proj-"));
+  const code = join(project, "src");
+  mkdirSync(join(code, "notes_api"), { recursive: true });
+  writeFileSync(join(code, "notes_api/api.py"), "def thing():\n    return 0\n");
+  writeFileSync(join(code, "notes_api/store.py"), "def thing():\n    return 0\n");
+  const units = new Set(["notes_api/api.py", "notes_api/store.py", "tests/conftest.py", "README.md"]);
+  return { project, code, units };
+}
+
+test("a fix path is placed only on a real file under the code directory or a file of the spec — never guessed, never a new stray file", () => {
+  const { project, code, units } = smokeLayout();
+  const ok = (p, want) => assert.deepEqual(placeFixPath(p, code, units), { path: want }, p);
+  const no = (p) => assert.ok("reason" in placeFixPath(p, code, units), `${p} must not be placed`);
+  ok("notes_api/api.py", "notes_api/api.py");
+  ok("./notes_api/api.py", "notes_api/api.py");
+  // The senior reviewer writes paths from the project root (the smoke's review.json: "src/notes_api/api.py" with code_dir <project>/src).
+  ok("src/notes_api/api.py", "notes_api/api.py");
+  ok(join(code, "notes_api/api.py"), "notes_api/api.py");
+  ok("tests/conftest.py", "tests/conftest.py"); // a planned file the spec lists may be written even if it is missing
+  no("src/notes_api/api.py:12"); // a line number glued to the path names no file
+  no("notes_api/missing.py");
+  no("../outside.py");
+  no("/elsewhere/x.py");
+  no("notes_api"); // a directory
+  mkdirSync(join(project, "elsewhere"));
+  writeFileSync(join(project, "elsewhere", "x.py"), "x = 1\n");
+  symlinkSync(join(project, "elsewhere"), join(code, "link"));
+  no("link/x.py"); // a symlink out of the code directory
+});
+
+test("a repair round built from a real review (project-root paths) edits the real files and creates none; unplaceable findings are reported", async () => {
+  const { code, units } = smokeLayout();
+  const spec = { ...SPEC, commands: [], units: [...units].map((p, i) => unit(`U0${i + 1}`, p, "other")) };
+  const rp = join(code, "..", "review.json");
+  writeFileSync(rp, JSON.stringify({ findings: [
+    { severity: "minor", file: "src/notes_api/api.py", line: 3, issue: "returns 0", fix: "return 1" },
+    { severity: "minor", file: "src/notes_api/store.py:2", issue: "glued line", fix: "x" },
+    { severity: "minor", file: "src/notes_api/nowhere.py", issue: "no such file", fix: "x" },
+  ] }));
+  const flash = fake("flash-completion", "flash-completion", (req) => ({ answer: { path: req.unit.path, edits: [{ search: "return 0", replace: "return 1" }] } }));
+  const r = await executeStage(spec, OPTS(ORCH, code, { stage: "repair", repairs: reviewRepairs([rp]).items }), { typistFor: () => flash, fallback: flash, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
+  assert.equal(r.written, 1);
+  assert.equal(readFileSync(join(code, "notes_api/api.py"), "utf8"), "def thing():\n    return 1\n");
+  assert.equal(existsSync(join(code, "src")), false, "no shadow src/src tree");
+  assert.match(flash.calls[0].packet.instruction, /minor \(line 3\): returns 0 — fix: return 1/);
+  assert.deepEqual(r.not_routed.map((x) => x.file).sort(), ["src/notes_api/nowhere.py", "src/notes_api/store.py:2"]);
+});
+
+test("a job that throws is a failed job, not a crashed stage; writes never follow a symlink out of the code directory", async () => {
+  const { project, code, units } = smokeLayout();
+  mkdirSync(join(project, "outside"));
+  symlinkSync(join(project, "outside"), join(code, "gen"));
+  const spec = { ...SPEC, units: [unit("U01", "gen/out.py", "other"), unit("U02", "notes_api/new.py", "other")] };
+  const opus = fake("lean-opus", "opus");
+  const r = await executeStage(spec, OPTS(SOLO, code), { typistFor: () => opus, fallback: opus, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
+  assert.equal(r.written, 1);
+  assert.equal(r.failed.length, 1);
+  assert.match(r.failed[0].reason, /outside the code directory/);
+  assert.deepEqual(readdirSync(join(project, "outside")), [], "nothing written through the symlink");
+});
+
+test("the receipt as sent — compact, not_routed included — stays within its stated bound", () => {
+  const big = { stage: "repair", units: 60, written: 0, failed: Array.from({ length: 40 }, (_, i) => ({ id: `U${i}`, path: `a/very/long/path/number/${i}/file.ts`, reason: "x".repeat(120) })), not_routed: Array.from({ length: 30 }, (_, i) => ({ file: `src/f${i}.py:${i}`, reason: "names no file under the code directory and no file of the spec" })), by_door: {}, calls: 0, transport_waits: 0, cost_usd: 0, seconds: 1, checks: { parsed: 0, non_empty: 0, not_parsed: 0 } };
+  const b = boundReceipt(big);
+  assert.ok(JSON.stringify(b).length <= RECEIPT_MAX_BYTES, `${JSON.stringify(b).length} bytes`);
+  assert.equal(b.failed.length + b.failed_not_listed, 40);
+  assert.equal(b.not_routed.length + (b.not_routed_not_listed ?? 0), 30);
+});
+
+test("execute_stage refuses an unknown stage, and bills to the pass folder's telemetry when no telemetry_path is given", async () => {
+  const r = await handleExecutorTool("execute_stage", { spec_path: "/x/spec.json", stage: "test", code_dir: "/x" }, { run: () => ({ authMode: "estimated" }), overrides: {} });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /unknown stage 'test'/);
+  const { telemetryPathFor } = await import("../dist/executor/tools.js");
+  assert.equal(telemetryPathFor({ spec_path: "/runs/p1/spec.json" }), "/runs/p1/telemetry.jsonl");
+  assert.equal(telemetryPathFor({ spec_path: "/runs/p1/spec.json", telemetry_path: "/t.jsonl" }), "/t.jsonl");
+});
+
+test("a door that refuses the login or permission (401/403) stops the stage — the files are never quietly sent to Opus", async () => {
+  // Found by the independent review: with every Flash call refused, each unit fell back to lean Opus and the
+  // receipt showed no failure, so an orchestrator run would have been a costlier solo run without a sign.
+  const dir = mkdtempSync(join(tmpdir(), "exec-"));
+  const refused = fake("flash-completion", "flash-completion", () => ({ answer: null, error: "HTTP 403 PERMISSION_DENIED", error_status: 403, cost: 0 }));
+  const opus = fake("lean-opus", "opus");
+  const r = await executeStage(SPEC, OPTS(ORCH, dir, { concurrency: 1 }), { typistFor: (id) => (id === "opus" ? opus : refused), fallback: opus, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
+  assert.match(r.stopped, /flash-completion door refused .* HTTP 403/);
+  assert.equal(refused.calls.length, 1, "the first refusal stops it");
+  assert.ok(!opus.calls.some((c) => c.unit.id === "U01"), "the refused file is not handed to the lean Opus attempt");
+  assert.ok(r.written < 3);
+  // Symmetric: a solo run whose Claude login is refused stops the same way.
+  const bad = fake("lean-opus", "opus", () => ({ answer: null, error: "authentication_failed", error_status: 401, cost: 0 }));
+  const s2 = await executeStage(SPEC, OPTS(SOLO, mkdtempSync(join(tmpdir(), "exec-")), { concurrency: 1 }), { typistFor: () => bad, fallback: bad, shared: "S", sharedFile: "/dev/null", emit: () => {}, check: okCheck });
+  assert.match(s2.stopped, /lean-opus door refused .* HTTP 401/);
+  assert.equal(bad.calls.length, 1);
 });

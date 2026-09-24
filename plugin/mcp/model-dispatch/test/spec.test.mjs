@@ -120,6 +120,29 @@ test("sections arrive header first, each checked on arrival; a refused batch sto
   assert.equal(storedUnits(dir).length, 2);
 });
 
+test("a unit path that is another unit's folder is refused: the two files could not both be written", () => {
+  const dir = mkdtempSync(join(tmpdir(), "spec-"));
+  submitSpecSection(dir, { section: "header", header: HEADER });
+  const r = submitSpecSection(dir, { section: "units", units: [unit("U01", "src/config"), unit("U02", "src/config/app.py")] });
+  assert.equal(r.ok, false);
+  assert.match(r.errors.map((e) => e.message).join(" | "), /src\/config is also a folder of src\/config\/app\.py/);
+});
+
+test("requirement ids are read by the same grammar a unit's covers field uses, whatever the numbering", () => {
+  // The pipeline's own requirements number FR-1, FR-2 ...; TeamBoard's used FR-1.1. Both, and AC-1.2, are ids.
+  const text = "FR-1 add a note. FR-2 list notes. FR-3.1 search. AC-1.2 a note can be added. See AC-3. NFR-1 fast.";
+  assert.deepEqual(requiredIds(text).sort(), ["AC-1.2", "AC-3", "FR-1", "FR-2", "FR-3.1"]);
+  const dir = mkdtempSync(join(tmpdir(), "spec-"));
+  submitSpecSection(dir, { section: "header", header: HEADER });
+  submitSpecSection(dir, { section: "units", units: [unit("U01", "a.py", { covers: ["FR-1", "AC-1.2"] })] });
+  const req = join(dir, "requirements.md");
+  writeFileSync(req, "FR-1 x. AC-1.2 y.\n");
+  assert.equal(finalizeSpec(dir, req).ok, true, "AC-1.2 is covered as written, not as AC-1");
+  const gone = finalizeSpec(dir, join(dir, "no-such-requirements.md"));
+  assert.equal(gone.ok, false, "a requirements file that is named but missing is never 'covered'");
+  assert.match(gone.errors[0].message, /requirements file .* does not exist/);
+});
+
 test("finalize refuses a spec that leaves a requirement uncovered, then writes spec.json and design.md", () => {
   const dir = mkdtempSync(join(tmpdir(), "spec-"));
   const req = join(dir, "requirements.md");

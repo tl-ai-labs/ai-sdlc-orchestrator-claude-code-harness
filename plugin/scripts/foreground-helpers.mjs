@@ -16,7 +16,8 @@
  * is allowed untouched — the plugin must not change how people use helpers
  * outside a run.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 /** The plugin's own agents (plugin/agents/*.md). */
 export const PIPELINE_AGENTS = new Set(["orchestrator", "architect", "senior-reviewer", "security-reviewer", "discovery"]);
@@ -38,7 +39,11 @@ export function decide(input) {
   };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run as the hook when this file is the entry point. Compared as resolved file
+// URLs: a plugin under a path with a space (URL-encoded in import.meta.url) or
+// behind a symlink (Node resolves the entry to its real path) must still match.
+const entry = (() => { try { return pathToFileURL(realpathSync(process.argv[1] ?? "")).href; } catch { return ""; } })();
+if (import.meta.url === entry) {
   let input = null;
   try { input = JSON.parse(readFileSync(0, "utf8") || "null"); } catch { /* not a hook payload: allow */ }
   const out = decide(input);

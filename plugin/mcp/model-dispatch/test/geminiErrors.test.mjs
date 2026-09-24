@@ -69,3 +69,11 @@ test("a connection that failed in transit is recorded with its code", async () =
   assert.equal(a.error_status, undefined);
   assert.ok(a.cost_usd > 0, "no response came back, so the request may have been answered: the prompt is billed as input");
 });
+
+test("a request that never reached Google (no address, no route) is billed nothing", async () => {
+  for (const code of ["ENOTFOUND", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH"]) {
+    const err = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("x"), { code }) });
+    const a = (await failWith(err)).attempts.at(-1);
+    assert.equal(a.cost_usd, 0, code);
+  }
+});

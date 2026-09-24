@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cacheOverrides, runCard, settingsFiles } from "../dist/runCard.js";
+import { cacheOverrides, runCard, settingsFiles, runStateConflict } from "../dist/runCard.js";
 
 test("every setting that overrides the pinned cache lifetimes is named, by name only, wherever it is set", () => {
   const env = { FORCE_PROMPT_CACHING_5M: "1", DISABLE_PROMPT_CACHING_OPUS: "1", CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: "5m", CLAUDE_CODE_PROMPT_CACHE_TTL: "1h", PATH: "/bin" };
@@ -47,13 +47,16 @@ test("the run card: plugin version, commit and whether the tree is clean, Claude
     const key = [cmd, ...args].join(" ");
     if (key === "claude --version") return "2.1.280 (Claude Code)\n";
     if (key.endsWith("rev-parse HEAD")) return "abc123\n";
-    if (key.endsWith("status --porcelain")) return " M src/x.ts\n";
+    if (key.endsWith("status --porcelain")) return " M src/x.ts\n?? leftover/\n";
     return null;
   };
   const card = runCard({ pluginDir: "/plug", pluginVersion: "0.7.5", env: { HOME: home }, exec });
   assert.equal(card.plugin_version, "0.7.5");
   assert.equal(card.plugin_commit, "abc123");
-  assert.equal(card.plugin_tree_dirty, true);
+  assert.equal(card.plugin_tree_dirty, true, "a tracked file changed");
+  assert.equal(card.plugin_untracked, 1, "untracked files are counted apart: they are not the committed code");
+  const onlyUntracked = runCard({ pluginDir: "/plug", pluginVersion: "0.7.5", env: { HOME: home }, exec: (c, a) => (a.at(-1) === "--porcelain" ? "?? leftover/\n" : exec(c, a)) });
+  assert.equal(onlyUntracked.plugin_tree_dirty, false);
   assert.equal(card.claude_code_version, "2.1.280 (Claude Code)");
   assert.deepEqual(card.cache_overrides, [`${join(home, ".claude", "settings.json")}: subagentPromptCacheTtl`]);
   assert.match(card.settings_sha256, /^[0-9a-f]{64}$/);
@@ -62,4 +65,12 @@ test("the run card: plugin version, commit and whether the tree is clean, Claude
   assert.equal(outside.plugin_commit, null, "not a git checkout: recorded as unknown, not guessed");
   assert.equal(outside.plugin_tree_dirty, null);
   assert.equal(outside.claude_code_version, null);
+});
+
+test("a second pre-flight that asks for a different auth mode or policy is refused; the same one is fine", () => {
+  const first = { authMode: "estimated", policyName: "opus-only-v5", projectRoot: "/p" };
+  assert.equal(runStateConflict(undefined, first), null);
+  assert.equal(runStateConflict(first, { ...first }), null);
+  assert.match(runStateConflict(first, { ...first, authMode: "vendor" }), /auth mode estimated.*vendor/);
+  assert.match(runStateConflict(first, { ...first, policyName: "opus-plus-flash-v38" }), /policy/);
 });

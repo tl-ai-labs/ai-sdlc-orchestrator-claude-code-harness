@@ -93,6 +93,11 @@ export function submitSpecSection(specDir: string, input: { section: "header"; h
       if (d === u.id) errors.push({ path: `${at}/depends_on`, message: `${u.id} depends on itself` });
       else if (!seenIds.has(d)) errors.push({ path: `${at}/depends_on`, message: `${d} is not an earlier unit (send units after the units they depend on)` });
     }
+    // A path that is another unit's folder (src/config and src/config/app.py): both files cannot exist.
+    for (const other of seenPaths) {
+      if (other.startsWith(`${u.path}/`)) errors.push({ path: `${at}/path`, message: `${u.path} is also a folder of ${other}` });
+      else if (u.path.startsWith(`${other}/`)) errors.push({ path: `${at}/path`, message: `${other} is also a folder of ${u.path}` });
+    }
     const s = u.style_from?.unit;
     if (s !== undefined && !seenIds.has(s)) errors.push({ path: `${at}/style_from/unit`, message: `${s} is not an earlier unit` });
     seenIds.add(u.id);
@@ -115,9 +120,14 @@ export interface FinalizeResult {
   design_path?: string;
 }
 
-/** Requirement ids a spec must cover: every FR-x.y and AC-n in requirements.md. */
+/**
+ * Requirement ids a spec must cover: every FR- and AC- id in requirements.md,
+ * read by the same grammar a unit's `covers` field accepts (FR-1, FR-1.2,
+ * AC-3, AC-1.2), so an id is compared exactly as written, whatever numbering
+ * the requirements use. NFR ids are not required to be covered by a unit.
+ */
 export function requiredIds(requirementsText: string): string[] {
-  return [...new Set(requirementsText.match(/\b(FR-\d+\.\d+|AC-\d+)\b/g) ?? [])];
+  return [...new Set(requirementsText.match(/\b(?:FR|AC)-\d+(?:\.\d+)?\b/g) ?? [])];
 }
 
 export function finalizeSpec(specDir: string, requirementsPath?: string): FinalizeResult {
@@ -128,6 +138,7 @@ export function finalizeSpec(specDir: string, requirementsPath?: string): Finali
   const byPhase: Record<string, number> = {};
   for (const u of units) byPhase[u.phase] = (byPhase[u.phase] ?? 0) + 1;
   let missing: string[] = [];
+  if (requirementsPath && !existsSync(requirementsPath)) errors.push({ path: "/", message: `the requirements file ${requirementsPath} does not exist, so coverage cannot be checked` });
   if (requirementsPath && existsSync(requirementsPath)) {
     const covered = new Set(units.flatMap((u) => u.covers));
     missing = requiredIds(readFileSync(requirementsPath, "utf8")).filter((id) => !covered.has(id));

@@ -71,6 +71,8 @@ export interface TypistResult {
   transport: boolean;
   /** A retry delay the vendor asked for, when it gave one. */
   retry_after_ms?: number;
+  /** The vendor's HTTP status for a refused call, when it reported one (the executor stops a stage on 401/403). */
+  error_status?: number;
   tokens: TypistTokens;
   cost_usd: number;
   price_basis?: string;
@@ -109,7 +111,7 @@ const ZERO: TypistTokens = { input: 0, input_cached: 0, output: 0 };
  */
 export const TRANSIENT_HTTP = new Set([408, 429, 500, 502, 503, 504, 529]);
 /** Node and undici error codes of a connection that failed in transit. */
-export const TRANSIENT_NET = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "EPIPE", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"]);
+export const TRANSIENT_NET = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "EPIPE", "ENOTFOUND", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"]);
 
 export function isTransient(status?: number | null, code?: string): boolean {
   return (typeof status === "number" && TRANSIENT_HTTP.has(status)) || (typeof code === "string" && TRANSIENT_NET.has(code));
@@ -126,8 +128,10 @@ export function flashOutcome(a: Pick<AttemptRecord, "error_status" | "error_code
 }
 
 /**
- * The agent door: the SDK retries transient API errors itself, by the
- * executor's own wait rule (its ModelAPIRetryConfig, set in agyWorkerArgs), and
+ * The agent door: the SDK retries transient API errors itself, with the
+ * executor's retry count and first wait (its ModelAPIRetryConfig, set in
+ * agyWorkerArgs: 6 retries, 2 s doubling to 64 s, no jitter — the SDK does not
+ * document its jitter setting's units, so none is guessed), and
  * the errors it raises carry no HTTP status, so an error that reaches the
  * receipt — after those waits — is an attempt: fail closed.
  */
@@ -265,6 +269,11 @@ function runChild(cmd: string, args: string[], opts: { env: Record<string, strin
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (err += d));
     child.on("error", (e) => { err += String(e); });
+    // A child that exits before reading all of its input (a brief over the
+    // pipe's 64 KB buffer) makes the write fail with EPIPE; without a
+    // listener that error would take the whole MCP server down. It is part of
+    // this child's failure, which the caller reports as a failed attempt.
+    child.stdin.on("error", (e) => { err += String(e); });
     child.on("close", (code) => { clearTimeout(timer); done({ code, out, err, timedOut }); });
     child.stdin.end(opts.input);
   });
@@ -303,7 +312,7 @@ export class LeanOpusTypist implements Typist {
     const tokens: TypistTokens = { input: ledger.tokens.input, input_cached: ledger.tokens.input_cached, output: ledger.tokens.output, input_cache_write: ledger.tokens.input_cache_write, input_cache_write_1h: ledger.tokens.input_cache_write_1h, output_reasoning: o.usage?.output_tokens_details?.thinking_tokens };
     if (o.is_error) {
       const text = `${o.subtype ?? "error"}${o.api_error_status ? ` (HTTP ${o.api_error_status})` : ""}: ${String(o.result ?? r.err)}`;
-      return { answer: null, error: text.slice(0, 300), transport: leanOpusOutcome(o).transport, tokens, cost_usd: ledger.cost_usd, price_basis: ledger.price_basis, latency_ms: latency };
+      return { answer: null, error: text.slice(0, 300), transport: leanOpusOutcome(o).transport, ...(typeof o.api_error_status === "number" ? { error_status: o.api_error_status } : {}), tokens, cost_usd: ledger.cost_usd, price_basis: ledger.price_basis, latency_ms: latency };
     }
     const answer = parseAnswer(o.result, req.contract);
     return { answer, error: answer ? undefined : `the reply was not one JSON object in the ${req.contract === "file" ? "{path, content}" : "{path, edits} or {path, content}"} contract`, transport: false, tokens, cost_usd: ledger.cost_usd, price_basis: ledger.price_basis, latency_ms: latency };
@@ -336,7 +345,7 @@ export class FlashCompletionTypist implements Typist {
     if (!r.success) {
       const text = String(r.error ?? last?.error ?? r.terminal_reason ?? "the completion door failed");
       const o = flashOutcome(last);
-      return { answer: null, error: text.slice(0, 300), transport: o.transport, retry_after_ms: o.retry_after_ms, tokens, cost_usd: r.cost_usd ?? 0, price_basis: last?.price_basis, latency_ms: Date.now() - started };
+      return { answer: null, error: text.slice(0, 300), transport: o.transport, retry_after_ms: o.retry_after_ms, ...(last?.error_status !== undefined ? { error_status: last.error_status } : {}), tokens, cost_usd: r.cost_usd ?? 0, price_basis: last?.price_basis, latency_ms: Date.now() - started };
     }
     const answer = parseAnswer(r.result, req.contract);
     return { answer, error: answer ? undefined : `the reply was not an object in the ${req.contract === "file" ? "{path, content}" : "{path, edits} or {path, content}"} contract`, transport: false, tokens, cost_usd: r.cost_usd ?? 0, price_basis: last?.price_basis, latency_ms: Date.now() - started };
@@ -389,7 +398,11 @@ export class AgyTypist implements Typist {
       const why = r.timedOut ? `the agent typist did not finish within ${this.opts.timeoutSec + 30} s (killed; its usage is unknown)` : `the agent typist wrote no receipt (usage unknown): ${r.err.slice(-300)}`;
       return { answer: null, error: why, transport: false, tokens: ZERO, cost_usd: 0, latency_ms: latency };
     }
-    const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
+    let receipt: any;
+    try { receipt = JSON.parse(readFileSync(receiptFile, "utf8")); } catch (e: any) {
+      // A receipt cut short (a worker killed mid-write) is a failed attempt whose usage is unknown, never a thrown error.
+      return { answer: null, error: `the agent typist left an unreadable receipt (usage unknown): ${e?.message ?? e}`.slice(0, 300), transport: false, tokens: ZERO, cost_usd: 0, latency_ms: latency };
+    }
     // The worker records the session's cumulative usage even when the session
     // failed or timed out, so a failed call is billed for what it spent.
     const tokens = receipt.usage ? mapSidecarTokens({ sdk_version: receipt.sdk_version, usage: receipt.usage }) : ZERO;

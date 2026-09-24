@@ -30,8 +30,8 @@
  * Every typist call, successful or not, is one telemetry event with that
  * call's own tokens and dollars, so every typist process is on the bill.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, posix, relative, resolve, sep } from "node:path";
 import type { FileSlice, Phase, Policy, TaskPacket, TelemetryEvent } from "../types.js";
 import { pickModel } from "../routing.js";
 import type { SelectOverrides } from "../types.js";
@@ -85,6 +85,18 @@ export interface StageReceipt {
   written: number;
   failed: { id: string; path: string; reason: string }[];
   failed_not_listed?: number;
+  /**
+   * Set when a door refused the login or permission (HTTP 401/403): the stage
+   * stopped there, so the files are never quietly handed to the lean Opus
+   * attempt — an orchestrator run with a broken Gemini door would otherwise
+   * complete as a costlier solo run with no failure shown.
+   */
+  stopped?: string;
+  /** Jobs not started because the stage stopped. */
+  not_typed?: number;
+  /** Fixes whose file could not be placed (placeFixPath): reported, never guessed. */
+  not_routed?: { file: string; reason: string }[];
+  not_routed_not_listed?: number;
   by_door: Partial<Record<Door, { units_written: number; calls: number; cost_usd: number }>>;
   calls: number;
   transport_waits: number;
@@ -102,6 +114,69 @@ const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 
 /** The receipt's size bound: a stated limit that keeps what the orchestrator re-reads each turn small. */
 export const RECEIPT_MAX_BYTES = 2048;
+/** HTTP statuses that mean the credentials or permission are wrong, not that the vendor is busy: 401 Unauthorized, 403 Forbidden (RFC 9110). */
+const CONFIG_REFUSALS = new Set([401, 403]);
+
+/**
+ * The receipt as sent, within RECEIPT_MAX_BYTES measured on the compact JSON
+ * the tool replies with: unplaced fixes, then failures, that do not fit are
+ * counted, not listed (the telemetry has every call).
+ */
+export function boundReceipt<T extends { failed: unknown[]; failed_not_listed?: number; not_routed?: unknown[]; not_routed_not_listed?: number }>(receipt: T): T {
+  const r: T = { ...receipt, failed: [...receipt.failed], ...(receipt.not_routed ? { not_routed: [...receipt.not_routed] } : {}) };
+  while (JSON.stringify(r).length > RECEIPT_MAX_BYTES && r.not_routed?.length) {
+    r.not_routed.pop();
+    r.not_routed_not_listed = (r.not_routed_not_listed ?? 0) + 1;
+  }
+  while (JSON.stringify(r).length > RECEIPT_MAX_BYTES && r.failed.length) {
+    r.failed.pop();
+    r.failed_not_listed = (r.failed_not_listed ?? 0) + 1;
+  }
+  return r;
+}
+
+/**
+ * Whether <codeRoot>/<rel> lands inside the code directory once every symlink
+ * is followed: the deepest part of the path that exists decides where a write
+ * would go. A lexical check alone let a symlinked folder carry a write out.
+ */
+export function insideCodeDir(codeRoot: string, rel: string): boolean {
+  const realRoot = realpathSync(codeRoot);
+  let p = resolve(codeRoot, rel);
+  while (!existsSync(p)) { const up = dirname(p); if (up === p) break; p = up; }
+  const r = relative(realRoot, realpathSync(p));
+  return !r.startsWith("..") && !isAbsolute(r);
+}
+
+/**
+ * Where a fix applies. A review finding or a failing test names a file; the
+ * name is placed only on a regular file that exists under the code directory,
+ * or on a file the spec lists (a planned file may be written even if it is
+ * missing) — never guessed, and never a new stray file. The senior reviewer
+ * writes paths from the project root (the pipeline smoke's review.json said
+ * "src/notes_api/api.py" for code_dir <project>/src), so a path written from
+ * a folder that contains the code directory is placed by dropping that
+ * folder's part of the code directory's own path. Anything else — a line
+ * number glued to the name, a missing file, a path that leaves the code
+ * directory, even through a symlink — is reported back.
+ */
+export function placeFixPath(file: string, codeRoot: string, unitPaths: Set<string>): { path: string } | { reason: string } {
+  const root = resolve(codeRoot);
+  const rel = isAbsolute(file) ? relative(root, file).split(sep).join("/") : posix.normalize(file.replace(/\\/g, "/"));
+  const candidates = [rel];
+  const segs = root.split(sep).filter(Boolean);
+  for (let k = 1; k <= segs.length; k++) {
+    const prefix = segs.slice(-k).join("/") + "/";
+    if (rel.startsWith(prefix)) candidates.push(rel.slice(prefix.length));
+  }
+  for (const c of candidates) {
+    if (!isSafeRelativePath(c)) continue;
+    const full = resolve(root, c);
+    const isFile = existsSync(full) && statSync(full).isFile();
+    if ((isFile || unitPaths.has(c)) && insideCodeDir(root, c)) return { path: c };
+  }
+  return { reason: "names no file under the code directory and no file of the spec" };
+}
 /**
  * How long a lean Opus typist's cache stays warm after its last call: the
  * five-minute lifetime the typist is launched with (CLAUDE_CODE_PROMPT_CACHE_TTL=5m,
@@ -118,8 +193,9 @@ export function applyEdits(text: string, edits: Edit[]): { content?: string; rea
   let out = text;
   for (let i = 0; i < edits.length; i++) {
     const { search, replace } = edits[i];
+    // Occurrences are counted overlapping (step 1), so "}\n}" in "}\n}\n}" counts twice: an ambiguous edit is refused, never applied at the first match.
     let count = 0;
-    for (let at = out.indexOf(search); at !== -1; at = out.indexOf(search, at + search.length)) count++;
+    for (let at = out.indexOf(search); at !== -1; at = out.indexOf(search, at + 1)) count++;
     if (count !== 1) return { reason: `edit ${i + 1}: its search text appears ${count} times in the current text (it must appear exactly once); the file was left unchanged` };
     out = out.replace(search, () => replace);
   }
@@ -148,21 +224,26 @@ function unitJob(spec: Spec, unit: SpecUnit, passId: string): Job {
   };
 }
 
-function repairJob(spec: Spec, item: RepairItem, codeRoot: string, passId: string): Job {
+function repairJob(spec: Spec, item: RepairItem, codeRoot: string, passId: string, unitPaths: Set<string>): Job {
   const unit = spec.units.find((u) => u.path === item.path);
-  const read = (p: string) => { const f = resolve(codeRoot, p); return existsSync(f) ? readFileSync(f, "utf8") : null; };
+  const read = (p: string) => { const f = resolve(codeRoot, p); return existsSync(f) && statSync(f).isFile() ? readFileSync(f, "utf8") : null; };
   const current = read(item.path);
   const inputs: FileSlice[] = [
     { path: item.path, reason: current === null ? "current text: the file does not exist yet" : "current text (your edits apply to this)", content: current ?? "" },
-    // Reference files are read only from inside the code directory: a path that
-    // leaves it is named but never read, so nothing outside the project can
+    // Reference files are placed like fixes: only a file under the code
+    // directory (or of the spec) is read, so nothing outside the project can
     // reach a vendor's brief.
-    ...(item.context_paths ?? []).filter((p) => p !== item.path).map((p) => ({ path: p, reason: "for reference only; do not edit", content: isSafeRelativePath(p) ? read(p) ?? "(missing)" : "(outside the code directory; not shown)" })),
+    ...(item.context_paths ?? []).filter((p) => p !== item.path).map((p) => {
+      const placed = placeFixPath(p, codeRoot, unitPaths);
+      return "path" in placed
+        ? { path: placed.path, reason: "for reference only; do not edit", content: read(placed.path) ?? "(missing)" }
+        : { path: p, reason: "for reference only", content: "(not found under the code directory; not shown)" };
+    }),
   ];
   const kind = unit?.kind ?? "other";
   return {
     id: `${unit?.id ?? "F"}-fix`, path: item.path, phase: "debug", kind, contract: "edit",
-    target: unit ?? { path: item.path, exports: [] },
+    target: { path: item.path },
     packet: (refusal) => repairPacket(`${unit?.id ?? "F"}-fix`, kind, renderRepairInstruction(spec, { path: item.path, unit }, item.problems, refusal), passId, inputs, 0),
     resolve: (a) => {
       if (a.content !== undefined) return { content: a.content };
@@ -178,26 +259,29 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
   const random = deps.random ?? Math.random;
   const now = deps.now ?? Date.now;
   const python = checkPython();
-  const check = deps.check ?? ((t: CheckTarget, a: { path: string; content: string }) => checkAnswer(t, a, python, spec));
+  const check = deps.check ?? ((t: CheckTarget, a: { path: string; content: string }) => checkAnswer(t, a, python));
   const codeRoot = resolve(opts.codeDir);
 
   let jobs: Job[];
+  const notRouted: { file: string; reason: string }[] = [];
   if (opts.stage === "repair") {
-    // One job per file: problems for the same path are merged, so two fixes
-    // never race on one file.
+    // Each fix is placed on a real file (placeFixPath); one job per file:
+    // problems for the same file are merged, so two fixes never race on it.
+    const unitPaths = new Set(spec.units.map((u) => u.path));
     const byPath = new Map<string, RepairItem>();
     for (const r of opts.repairs ?? []) {
-      if (!isSafeRelativePath(r.path)) throw new Error(`a fix names a path outside the code directory: ${r.path}`);
-      const m = byPath.get(r.path);
+      const placed = placeFixPath(r.path, codeRoot, unitPaths);
+      if ("reason" in placed) { notRouted.push({ file: r.path, reason: placed.reason }); continue; }
+      const m = byPath.get(placed.path);
       if (m) { m.problems.push(...r.problems); m.context_paths = [...new Set([...(m.context_paths ?? []), ...(r.context_paths ?? [])])]; }
-      else byPath.set(r.path, { path: r.path, problems: [...r.problems], context_paths: [...(r.context_paths ?? [])] });
+      else byPath.set(placed.path, { path: placed.path, problems: [...r.problems], context_paths: [...(r.context_paths ?? [])] });
     }
-    jobs = [...byPath.values()].map((r) => repairJob(spec, r, codeRoot, opts.passId));
+    jobs = [...byPath.values()].map((r) => repairJob(spec, r, codeRoot, opts.passId, unitPaths));
   } else {
     jobs = spec.units.filter((u) => u.phase === opts.stage).map((u) => unitJob(spec, u, opts.passId));
   }
 
-  const receipt: StageReceipt = { stage: opts.stage, units: jobs.length, written: 0, failed: [], by_door: {}, calls: 0, transport_waits: 0, cost_usd: 0, seconds: 0, checks: { parsed: 0, non_empty: 0, not_parsed: 0 } };
+  const receipt: StageReceipt = { stage: opts.stage, units: jobs.length, written: 0, failed: [], ...(opts.stage === "repair" ? { not_routed: notRouted } : {}), by_door: {}, calls: 0, transport_waits: 0, cost_usd: 0, seconds: 0, checks: { parsed: 0, non_empty: 0, not_parsed: 0 } };
   let done = 0;
 
   const bill = (door: Door) => (receipt.by_door[door] ??= { units_written: 0, calls: 0, cost_usd: 0 });
@@ -279,6 +363,11 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
       // that is an attempt, not a wait.
       if (r.transport && r.retry_after_ms !== undefined && r.retry_after_ms > opts.transport.capMs) {
         r = { ...r, transport: false, error: `${r.error ?? "rate limited"} — the vendor asked for a ${Math.round(r.retry_after_ms / 1000)} s pause, longer than one ${Math.round(opts.transport.capMs / 1000)} s rate-limit window` };
+        // It is an attempt, but the next attempt still waits one full window, so it does not hit the same wall at once.
+        await sleep(opts.transport.capMs);
+      }
+      if (r.error_status !== undefined && CONFIG_REFUSALS.has(r.error_status) && !stopped) {
+        stopped = `the ${typist.door} door refused the call with HTTP ${r.error_status} (its login or permission is broken): the stage stopped here instead of sending the remaining files to another typist; fix the credentials and run the stage again`;
       }
       receipt.calls++;
       receipt.cost_usd += r.cost_usd;
@@ -295,6 +384,9 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
     }
   }
 
+  // A door that refuses the login or permission stops the stage (see StageReceipt.stopped).
+  let stopped: string | undefined;
+
   const planFor = (job: Job) => [
     ...Array.from({ length: opts.routedAttempts }, (_, i) => { const d = route(job, i); return { typist: deps.typistFor(d.modelId), decision: d as ReturnType<typeof pickModel> | null }; }),
     { typist: deps.fallback, decision: null },
@@ -307,6 +399,11 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
       const { typist, decision: d } = plan[i];
       const attempt = i + 1;
       const r = await call(job, typist, d, refusal, attempt);
+      if (stopped) {
+        deps.emit(event(job, typist, d, r, attempt, false, r.error));
+        receipt.failed.push({ id: job.id, path: job.path, reason: "stopped: the door refused the login or permission" });
+        return;
+      }
       let verdict: CheckResult | null = null;
       let why = r.error;
       let content: string | undefined;
@@ -350,10 +447,14 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
     const problem = toolchainProblem(jobs.map((j) => j.path), python);
     if (problem) throw new Error(problem);
   }
-  for (const j of jobs) {
+  // A job whose file would land outside the code directory — lexically, or
+  // through a symlinked folder — is failed before any typist is paid for it.
+  jobs = jobs.filter((j) => {
     const rel = relative(codeRoot, resolve(codeRoot, j.path));
-    if (rel.startsWith("..") || rel === "" || j.path.startsWith("/")) throw new Error(`a job path leaves the code directory: ${j.path}`);
-  }
+    const inside = !(rel.startsWith("..") || rel === "" || j.path.startsWith("/")) && insideCodeDir(codeRoot, j.path);
+    if (!inside) receipt.failed.push({ id: j.id, path: j.path, reason: "the file would land outside the code directory" });
+    return inside;
+  });
   for (const j of jobs) planFor(j);
 
   // A pool of `concurrency` workers draining the stage's jobs. A unit's brief
@@ -362,23 +463,21 @@ export async function executeStage(spec: Spec, opts: StageOptions, deps: StageDe
   // file's text, and each file has at most one fix job.
   const queue = [...jobs];
   const workers = Array.from({ length: Math.max(1, Math.min(opts.concurrency, queue.length)) }, async () => {
-    for (let j = queue.shift(); j; j = queue.shift()) {
-      await typeJob(j);
+    for (let j = stopped ? undefined : queue.shift(); j; j = stopped ? undefined : queue.shift()) {
+      // A job that throws (a filesystem error while writing) is a failed job;
+      // it never rejects the stage while other workers are still typing.
+      try { await typeJob(j); } catch (e: any) { receipt.failed.push({ id: j.id, path: j.path, reason: `the job failed: ${e?.message ?? String(e)}`.slice(0, 160) }); }
       done++;
       deps.progress?.(done, jobs.length, `${j.path}`);
     }
   });
   await Promise.all(workers);
 
+  if (stopped) { receipt.stopped = stopped; receipt.not_typed = queue.length; }
   receipt.cost_usd = round6(receipt.cost_usd);
   for (const b of Object.values(receipt.by_door)) b!.cost_usd = round6(b!.cost_usd);
   receipt.seconds = Math.round((Date.now() - started) / 1000);
-  // Keep the receipt within RECEIPT_MAX_BYTES: the orchestrator reads it into
-  // its context, where every byte is re-read on each later turn. Failures that
-  // do not fit are counted, not listed (the telemetry has every one).
-  while (receipt.failed.length && JSON.stringify(receipt).length > RECEIPT_MAX_BYTES) {
-    receipt.failed.pop();
-    receipt.failed_not_listed = (receipt.failed_not_listed ?? 0) + 1;
-  }
-  return receipt;
+  // The orchestrator reads the receipt into its context, where every byte is
+  // re-read on each later turn: it is kept within RECEIPT_MAX_BYTES.
+  return boundReceipt(receipt);
 }

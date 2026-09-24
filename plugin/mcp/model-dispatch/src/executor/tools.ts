@@ -18,7 +18,7 @@
  * arm from the other — by a value a model typed.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ModelConfig, Policy, SelectOverrides, TelemetryEvent } from "../types.js";
 import { getModel } from "../policy.js";
 import { appendEvent } from "../telemetry.js";
@@ -26,7 +26,7 @@ import { log } from "../log.js";
 import { SPEC_HEADER_SCHEMA, SPEC_UNIT_SCHEMA, UNIT_MAX_LINES, UNITS_PER_SECTION } from "../spec/schema.js";
 import { finalizeSpec, loadSpec, submitSpecSection } from "../spec/store.js";
 import { renderShared } from "./brief.js";
-import { executeStage, type RepairItem, type Stage } from "./run.js";
+import { boundReceipt, executeStage, type RepairItem, type Stage } from "./run.js";
 import { AgyTypist, FlashCompletionTypist, LeanOpusTypist, type Typist } from "./typists.js";
 import { LEGACY_GEMINI_ADAPTER_ID } from "../adapters/index.js";
 
@@ -129,6 +129,8 @@ export const EXECUTOR_TOOL_NAMES = new Set(EXECUTOR_TOOLS.map((t) => t.name));
 
 type Reply = { content: { type: "text"; text: string }[]; isError?: boolean };
 const reply = (value: unknown, isError = false): Reply => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }], ...(isError ? { isError } : {}) });
+/** A stage receipt is sent as compact JSON: the size bound (boundReceipt) is measured on exactly what is sent. */
+const compact = (value: unknown): Reply => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
 
 /** What pre-flight recorded for this run: the auth mode and the policy arguments every later call uses. */
 export interface RunState {
@@ -140,25 +142,37 @@ export interface RunState {
 
 /**
  * The fixes a review asks for: every finding that names a file becomes a
- * problem for that file, with its severity, issue and fix. A finding whose
- * file cannot be placed inside the code directory is reported back, never
- * guessed.
+ * problem for that file, with its severity, line (when the finding gives one)
+ * issue and fix. The file is kept as the reviewer wrote it; the executor
+ * places it (placeFixPath) exactly as it places a test failure's file, and
+ * reports any it cannot place. An unreadable review or a finding with no file
+ * is reported here.
  */
-export function reviewRepairs(reviewPaths: string[], codeDir: string): { items: RepairItem[]; not_routed: { review: string; file: string; reason: string }[] } {
-  const root = resolve(codeDir);
+export function reviewRepairs(reviewPaths: string[]): { items: RepairItem[]; not_routed: { file: string; reason: string }[] } {
   const items: RepairItem[] = [];
-  const notRouted: { review: string; file: string; reason: string }[] = [];
+  const notRouted: { file: string; reason: string }[] = [];
   for (const rp of reviewPaths) {
     let review: any;
-    try { review = JSON.parse(readFileSync(rp, "utf8")); } catch (e: any) { notRouted.push({ review: rp, file: "", reason: `unreadable review: ${e?.message ?? e}` }); continue; }
+    try { review = JSON.parse(readFileSync(rp, "utf8")); } catch (e: any) { notRouted.push({ file: rp, reason: `unreadable review: ${e?.message ?? e}` }); continue; }
     for (const f of review?.findings ?? []) {
-      if (typeof f?.file !== "string" || !f.file) { notRouted.push({ review: rp, file: "", reason: "a finding with no file" }); continue; }
-      const rel = isAbsolute(f.file) ? relative(root, f.file) : f.file;
-      if (rel.startsWith("..") || isAbsolute(rel) || !rel) { notRouted.push({ review: rp, file: f.file, reason: "outside the code directory" }); continue; }
-      items.push({ path: rel, problems: [`${f.severity ?? "finding"}: ${f.issue ?? ""}${f.fix ? ` — fix: ${f.fix}` : ""}`] });
+      if (typeof f?.file !== "string" || !f.file) { notRouted.push({ file: rp, reason: "a finding with no file" }); continue; }
+      const where = Number.isInteger(f.line) ? ` (line ${f.line})` : "";
+      items.push({ path: f.file, problems: [`${f.severity ?? "finding"}${where}: ${f.issue ?? ""}${f.fix ? ` — fix: ${f.fix}` : ""}`] });
     }
   }
   return { items, not_routed: notRouted };
+}
+
+/** The stages execute_stage types. */
+const STAGES = new Set(["codegen", "tests", "docs", "repair"]);
+
+/**
+ * Where a stage's typist calls are billed: the call's telemetry_path, else the
+ * pass folder's telemetry.jsonl beside spec.json (the file the pipeline logs
+ * to), so a call that omits the path still lands on the run's bill.
+ */
+export function telemetryPathFor(a: { spec_path: string; telemetry_path?: string }): string {
+  return a.telemetry_path ?? join(dirname(resolve(a.spec_path)), "telemetry.jsonl");
 }
 
 /** The request's progress channel, when the client sent a progress token. */
@@ -205,22 +219,23 @@ export async function handleExecutorTool(name: string, a: any, ctx: { run?: () =
     log(r.ok ? "info" : "warn", "spec.finalize", { ok: r.ok, units: r.units, missing: r.missing_coverage.length });
     return reply(r, !r.ok);
   }
-  // execute_stage — only after pre-flight has recorded the run's auth mode and policy.
+  // execute_stage — a known stage, and only after pre-flight has recorded the run's auth mode and policy.
+  if (!STAGES.has(a.stage)) return reply({ error: `unknown stage '${a.stage}': execute_stage types codegen, tests, docs or repair; nothing was typed.` }, true);
   const run = ctx.run?.();
   if (!run) return reply({ error: "execute_stage runs only after preflight_dispatch has recorded this run's auth mode and policy (Phase -1). Call preflight_dispatch first; nothing was typed." }, true);
   const authMode = run.authMode;
   const policy = ctx.policy!(run);
   const spec = loadSpec(a.spec_path);
   let repairs: RepairItem[] | undefined;
-  let notRouted: { review: string; file: string; reason: string }[] = [];
+  let notRouted: { file: string; reason: string }[] = [];
   if (a.stage === "repair") {
-    const fromReview = reviewRepairs(a.review_paths ?? [], a.code_dir);
+    const fromReview = reviewRepairs(a.review_paths ?? []);
     notRouted = fromReview.not_routed;
     repairs = [
       ...fromReview.items,
       ...(a.failures ?? []).map((f: any) => ({ path: String(f.path), problems: [String(f.problem)], context_paths: (f.context_paths ?? []).map(String) })),
     ];
-    if (!repairs.length) return reply({ stage: "repair", units: 0, written: 0, failed: [], not_routed: notRouted.slice(0, 10), note: "nothing to fix" });
+    if (!repairs.length) return compact(boundReceipt({ stage: "repair", units: 0, written: 0, failed: [], not_routed: notRouted, note: "nothing to fix" }));
   }
   const shared = renderShared(spec);
   const sharedFile = join(dirname(resolve(a.spec_path)), "shared-brief.txt");
@@ -232,8 +247,9 @@ export async function handleExecutorTool(name: string, a: any, ctx: { run?: () =
   };
   const fb = fallbackLeaf(policy);
   const fallback = typistFor(fb.id);
-  if (a.telemetry_path) mkdirSync(dirname(a.telemetry_path), { recursive: true });
-  const emit = (ev: TelemetryEvent) => { if (a.telemetry_path) appendEvent(a.telemetry_path, ev); };
+  const telemetryPath = telemetryPathFor(a);
+  mkdirSync(dirname(telemetryPath), { recursive: true });
+  const emit = (ev: TelemetryEvent) => appendEvent(telemetryPath, ev);
 
   let done = 0, total = spec.units.filter((u) => u.phase === a.stage).length;
   const token = ctx.progress?.token;
@@ -248,8 +264,10 @@ export async function handleExecutorTool(name: string, a: any, ctx: { run?: () =
       typistFor, fallback, shared, sharedFile, emit,
       progress: (d, t, m) => { done = d; total = t; say(`${m} (${d}/${t})`); },
     });
-    log("info", "executor.stage.end", { stage: receipt.stage, written: receipt.written, failed: receipt.failed.length + (receipt.failed_not_listed ?? 0), cost_usd: receipt.cost_usd, seconds: receipt.seconds, not_routed: notRouted.length });
-    return reply(notRouted.length ? { ...receipt, not_routed: notRouted.slice(0, 5), not_routed_total: notRouted.length } : receipt);
+    const final = boundReceipt(notRouted.length ? { ...receipt, not_routed: [...notRouted, ...(receipt.not_routed ?? [])] } : receipt);
+    log("info", "executor.stage.end", { stage: final.stage, written: final.written, failed: final.failed.length + (final.failed_not_listed ?? 0), cost_usd: final.cost_usd, seconds: final.seconds, not_routed: (final.not_routed?.length ?? 0) + (final.not_routed_not_listed ?? 0), telemetry_path: telemetryPath });
+    // A stopped stage is an error the orchestrator must report, with the receipt (and its bill) attached.
+    return final.stopped ? { ...compact(final), isError: true } : compact(final);
   } finally {
     if (heartbeat) clearInterval(heartbeat);
   }

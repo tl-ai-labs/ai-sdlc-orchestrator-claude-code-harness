@@ -51,3 +51,21 @@ test("the script speaks the hook protocol: deny JSON on stdout for a refused lau
   assert.match(entry.hooks[0].command, /scripts\/foreground-helpers\.mjs/);
 });
 
+
+test("the hook answers when the plugin sits under a path with a space or behind a symlink", async () => {
+  const { mkdtempSync, copyFileSync, symlinkSync, mkdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+  const { join, resolve, dirname } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const src = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "plugin", "scripts", "foreground-helpers.mjs");
+  const base = mkdtempSync(join(tmpdir(), "hook-"));
+  mkdirSync(join(base, "with space"));
+  copyFileSync(src, join(base, "with space", "foreground-helpers.mjs"));
+  symlinkSync(join(base, "with space"), join(base, "link"));
+  const payload = JSON.stringify({ tool_name: "Agent", tool_input: { subagent_type: "mmo:architect", run_in_background: true } });
+  for (const p of [join(base, "with space", "foreground-helpers.mjs"), join(base, "link", "foreground-helpers.mjs")]) {
+    const r = spawnSync(process.execPath, [p], { input: payload, encoding: "utf8" });
+    assert.match(r.stdout, /"permissionDecision":"deny"/, p);
+  }
+});

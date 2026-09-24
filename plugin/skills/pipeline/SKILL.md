@@ -94,6 +94,9 @@ Rules for executor mode:
 - **Failures:** a file the receipt lists as failed (every attempt refused) is yours to write or
   fix, in this session, from its spec entry and the receipt's reason. This is the rare case, and
   it is the same in every policy. The same holds for tests still failing after the repair rounds.
+- **A stopped stage:** if `execute_stage` returns an error whose receipt has `stopped` (a model
+  door refused its login or permission), stop the run and report that reason to the user. Do not
+  write the stage's files yourself: the run would no longer be the policy it names.
 - The receipts are all you read about the typed files; do not open the files to check them —
   the senior reviewer does that, and reading them into your conversation is the cost this mode
   exists to remove.

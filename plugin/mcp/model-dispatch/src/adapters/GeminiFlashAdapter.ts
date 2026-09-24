@@ -207,7 +207,9 @@ export class GeminiFlashAdapter implements ModelAdapter {
         // connection that failed with no response keeps the stated bound — the
         // prompt billed as input — since the request may have been answered.
         const answeredWithError = failure.error_status !== undefined && failure.error_status !== 200;
-        const failTokens = answeredWithError
+        // No connection was made (no address, refused, no route): the request never reached Google.
+        const neverSent = failure.error_code !== undefined && NEVER_SENT_CODES.has(failure.error_code);
+        const failTokens = answeredWithError || neverSent
           ? { input: 0, input_cached: 0, output: 0 }
           : { input: estimateTokens(userPrompt), input_cached: 0, output: 0 };
         attempts.push({
@@ -326,6 +328,9 @@ export class GeminiFlashAdapter implements ModelAdapter {
     };
   }
 }
+
+/** Node/undici codes of a request that never left this machine, so nothing reached Google to bill. */
+const NEVER_SENT_CODES = new Set(["ENOTFOUND", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EAI_AGAIN"]);
 
 /**
  * A failed Gemini call, described by the vendor's own fields: the HTTP status

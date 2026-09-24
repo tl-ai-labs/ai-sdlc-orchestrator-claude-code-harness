@@ -139,6 +139,7 @@ test("vendor and network failures are told apart from bad answers by the vendor'
   for (const s of [400, 401, 403, 404, 413, 422, null, undefined]) assert.equal(isTransient(s), false, String(s));
   for (const c of ["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "UND_ERR_SOCKET"]) assert.equal(isTransient(undefined, c), true, c);
   assert.equal(isTransient(undefined, "ENOENT"), false);
+  for (const c of ["ENOTFOUND", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN"]) assert.equal(isTransient(undefined, c), true, `${c}: no connection, so wait`);
 
   // claude -p: its JSON result carries is_error, subtype and api_error_status.
   const opus = (o) => leanOpusOutcome(o);
@@ -170,4 +171,45 @@ test("each policy leaf gets the typist of its door; every shipped policy has a l
   assert.equal(TYPIST_EFFORT, "low");
   assert.ok(existsSync(TYPIST_WORKER), "the agent typist's worker ships with the plugin");
   assert.throws(() => typistForLeaf({ id: "x", adapter: "nope", model_name: "m" }, "estimated"), /no typist for adapter 'nope'/);
+});
+
+test("a typist process that exits before reading its brief is a failed attempt, never a crashed server", async () => {
+  // Found by the independent review: a brief over the pipe's 64 KB buffer, written to a child that has already
+  // exited, raised an unhandled EPIPE and took the MCP server down.
+  const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const bin = mkdtempSync(join(tmpdir(), "fakebin-"));
+  writeFileSync(join(bin, "claude"), "#!/bin/sh\nexit 3\n");
+  chmodSync(join(bin, "claude"), 0o755);
+  const { LeanOpusTypist } = await import("../dist/executor/typists.js");
+  const leaf = { id: "opus", adapter: "builtin-anthropic", model_name: "claude-opus-5", pricing: { input: 5, input_cached: 0.5, output: 25 } };
+  const t = new LeanOpusTypist(leaf, { authMode: "estimated", effort: "low", timeoutMs: 10_000, help: HELP, env: { PATH: `${bin}:/usr/bin:/bin`, HOME: "/tmp" } });
+  const packet = { id: "U01", phase: "debug", task_type: "other", module: "spec", instruction: "x", inputs: [], outputSchema: {}, acceptance: [], budget: { maxInputTokens: 1, maxOutputTokens: 1 }, pass_id: "p" };
+  const r = await t.type({ unit: { id: "U01", path: "a.py" }, packet, framed: "y".repeat(300_000), shared: "S", sharedFile: "/dev/null", contract: "file", passId: "p" });
+  assert.equal(r.answer, null);
+  assert.equal(r.transport, false);
+  assert.match(r.error, /no JSON receipt/);
+});
+
+test("an agent worker whose receipt is damaged is a failed attempt, never a thrown error", async () => {
+  const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const bin = mkdtempSync(join(tmpdir(), "fakepy-"));
+  // A stand-in for the worker's Python: writes half a receipt to --out and exits.
+  writeFileSync(join(bin, "python"), '#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ "$1" = "--out" ]; then printf \'{"finish_output": "{\\"pa\' > "$2"; fi; shift; done\nexit 0\n');
+  chmodSync(join(bin, "python"), 0o755);
+  const policy = loadPolicyFromPath(join(POLICIES, "opus-plus-flash-v38.yaml"));
+  const saved = { ...process.env };
+  Object.assign(process.env, { GEMINI_BACKEND: "vertex", GOOGLE_CLOUD_PROJECT: "p", GOOGLE_CLOUD_LOCATION: "global", GEMINI_WORKER_PYTHON: join(bin, "python") });
+  try {
+    const t = typistForLeaf(policy.models.find((m) => m.id === "flash-agsdk-worker"), "estimated");
+    const packet = { id: "U01", phase: "codegen", task_type: "dto", module: "spec", instruction: "x", inputs: [], outputSchema: {}, acceptance: [], budget: { maxInputTokens: 1, maxOutputTokens: 1 }, pass_id: "p" };
+    const r = await t.type({ unit: { id: "U01", path: "a.py" }, packet, framed: "y", shared: "S", sharedFile: "/dev/null", contract: "file", passId: "p" });
+    assert.equal(r.answer, null);
+    assert.equal(r.transport, false);
+    assert.match(r.error, /unreadable receipt/);
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
 });

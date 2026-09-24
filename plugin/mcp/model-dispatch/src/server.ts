@@ -43,7 +43,7 @@ import { resolveProjectRoot } from "./project-root.js";
 import { log, setLevel, configureSinks, type Level } from "./log.js";
 // Typed-spec executor tools (greenfield --executor): listed below, handled in executor/tools.ts.
 import { EXECUTOR_TOOLS, EXECUTOR_TOOL_NAMES, handleExecutorTool, type RunState } from "./executor/tools.js";
-import { runCard } from "./runCard.js";
+import { runCard, runStateConflict } from "./runCard.js";
 
 /**
  * Cheap up-front schema validation for TaskPacket inputs to execute_with_model.
@@ -644,9 +644,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
         const a = args as any;
         // Parse before the policy loads so a missing mode fails on the mode.
         const authMode = parseAuthMode(a.auth_mode);
+        const next = { authMode, policyName: a.policy_name, projectRoot: a.project_root, policyPath: a.policy_path };
+        const conflict = runStateConflict(runState, next);
+        if (conflict) return { content: [{ type: "text", text: JSON.stringify({ ok: false, halt_reason: conflict }, null, 2) }] };
         const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
         const out = preflightDispatch(policy, authMode, a.project_root);
-        runState = { authMode, policyName: a.policy_name, projectRoot: a.project_root, policyPath: a.policy_path };
+        runState = next;
         return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
       }
       case "load_policy": {
