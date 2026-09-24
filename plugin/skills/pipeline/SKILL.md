@@ -360,6 +360,10 @@ In brownfield the delegation carries paths only — `change_plan.md` (or `requir
 `provenance.json` — per orchestrator.md rule 9; the reviewer reads diffs against
 `git_head_before`, not whole files.
 
+Also pass a one-line-per-suite summary of the tests, typecheck and verify results you already
+have (counts and pass/fail, no logs), so the reviewer does not re-run them. The same summary goes
+to the security reviewer in Phase 8. Both reviewers follow their "Lean review" budget.
+
 ### Phase 7 — test_run
 
 **Greenfield mode.** Bootstrap the env fixture first — this is required for any app whose codegen produced a validating `ConfigModule` (or equivalent) at boot. The codegen phase is contractually required (see Phase 5 acceptance criteria and the senior-reviewer's env-fixture check) to emit `.env.example` (docs) and `.env.test` (fixture values that satisfy the declared schema).

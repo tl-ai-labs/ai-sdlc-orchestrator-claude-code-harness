@@ -1767,3 +1767,31 @@ test("a window opened at the first dispatch is reported as a lower bound, not an
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a run with no manifest.json (single-model, in-session only) is collected from telemetry.jsonl and gets a manifest (Run 29)", () => {
+  const { root, passDir, tDir } = makeGreenfieldFixture({ closingKey: "ended_at" });
+  try {
+    rmSync(join(passDir, "manifest.json"));
+    const res = spawnSync(process.execPath, [SCRIPT, passDir, "--project-root", root, "--transcripts-dir", tDir], { encoding: "utf-8" });
+    const out = (res.stdout ?? "") + (res.stderr ?? "");
+    assert.equal(res.status, 0, `expected exit 0, got ${res.status}\n${out}`);
+    assert.match(out, /no manifest\.json — creating one from telemetry\.jsonl/, out);
+    const manifest = JSON.parse(readFileSync(join(passDir, "manifest.json"), "utf-8"));
+    assert.equal(manifest.run_id, "p-test");
+    assert.equal(manifest.orchestrator_overhead.cost_usd, 1.5);
+    assert.equal(manifest.orchestrator_overhead.window.source, "telemetry-rebuild");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a directory with neither manifest.json nor telemetry.jsonl still fails clearly", () => {
+  const root = mkdtempSync(join(tmpdir(), "collect-empty-"));
+  try {
+    const res = spawnSync(process.execPath, [SCRIPT, root, "--project-root", root], { encoding: "utf-8" });
+    assert.notEqual(res.status, 0);
+    assert.match((res.stdout ?? "") + (res.stderr ?? ""), /no manifest\.json or telemetry\.jsonl/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
