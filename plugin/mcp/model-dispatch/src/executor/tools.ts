@@ -17,14 +17,13 @@
  * pre-flight or fixed in code, so no stage can differ from another — or one
  * arm from the other — by a value a model typed.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ModelConfig, Policy, SelectOverrides, TelemetryEvent } from "../types.js";
 import { getModel } from "../policy.js";
 import { appendEvent } from "../telemetry.js";
 import { log } from "../log.js";
-import { SPEC_HEADER_SCHEMA, SPEC_UNIT_SCHEMA } from "../spec/schema.js";
-import { finalizeSpec, loadSpec, submitSpecSection } from "../spec/store.js";
+import { finalizeSpec, loadSpec, readSectionFile, storedUnits, submitSpecSection } from "../spec/store.js";
 import { renderShared } from "./brief.js";
 import { boundReceipt, executeStage, type RepairItem, type Stage } from "./run.js";
 import { AgyTypist, FlashCompletionTypist, LeanOpusTypist, type Typist } from "./typists.js";
@@ -71,16 +70,15 @@ export const EXECUTOR_TOOLS = [
   {
     name: "submit_spec_section",
     description:
-      `Hand over ONE section of the typed build spec. Send the header first (section: "header", with header: {stack, commands, decisions, shared}), then the units in batches, each written in one reply (section: "units", with units: [...]), each unit after the units it depends on. Each section is checked on arrival; a refused section stores nothing and the reply lists every problem by path, so fix and re-send that section only.`,
+      `Hand over ONE section of the typed build spec as a FILE you wrote with the Write tool under spec_dir: first the header (section: "header", file: spec.sections/header.json holding {stack, commands, decisions, shared}), then the units in batches (section: "units", file: spec.sections/units-001.json, units-002.json, ... each holding a JSON array of units), each unit after the units it depends on. Each section is checked on arrival; a refused section stores nothing. If the file is not valid JSON the reply names the line, column and text: fix that spot with Edit and submit the same file again, never rewrite the whole file. Other problems are listed by path; fix them in the file the same way.`,
     inputSchema: {
       type: "object",
       properties: {
         spec_dir: { type: "string", description: "The run's output directory; the spec is assembled there." },
         section: { type: "string", enum: ["header", "units"] },
-        header: SPEC_HEADER_SCHEMA,
-        units: { type: "array", items: SPEC_UNIT_SCHEMA },
+        file: { type: "string", description: "The section file you wrote with the Write tool, under spec_dir (for example spec.sections/header.json, then spec.sections/units-001.json, ...): the header object, or a JSON array of units." },
       },
-      required: ["spec_dir", "section"],
+      required: ["spec_dir", "section", "file"],
     },
   },
   {
@@ -210,7 +208,13 @@ export function fallbackLeaf(policy: Policy): ModelConfig {
 
 export async function handleExecutorTool(name: string, a: any, ctx: { run?: () => RunState | undefined; policy?: (run: RunState) => Policy; overrides: SelectOverrides; progress?: ProgressChannel }): Promise<Reply> {
   if (name === "submit_spec_section") {
-    const r = submitSpecSection(a.spec_dir, a.section === "header" ? { section: "header", header: a.header } : { section: "units", units: a.units });
+    // The section travels as a file the architect wrote (never inline: that path failed 7 times in 24 on 24 Sep).
+    const loaded = readSectionFile(a.spec_dir, a.file, a.section === "header" ? "header" : "units");
+    if ("error" in loaded) {
+      log("warn", "spec.section", { section: a.section, ok: false, file_error: true });
+      return reply({ ok: false, section: a.section, errors: [{ path: "/", message: loaded.error }], stored_units: 0, total_units: existsSync(a.spec_dir ?? "") ? storedUnits(a.spec_dir).length : 0 }, true);
+    }
+    const r = submitSpecSection(a.spec_dir, a.section === "header" ? { section: "header", header: loaded.value } : { section: "units", units: loaded.value });
     log(r.ok ? "info" : "warn", "spec.section", { section: r.section, ok: r.ok, errors: r.errors.length, total_units: r.total_units });
     return reply(r, !r.ok);
   }

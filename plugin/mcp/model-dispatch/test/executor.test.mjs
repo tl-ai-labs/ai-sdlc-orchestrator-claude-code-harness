@@ -208,6 +208,40 @@ test("an answer cut off at a typist's output limit is never retried at the same 
   assert.match(r2.failed[0].reason, /cut off at the lean-opus typist's output limit/);
 });
 
+test("the architect hands a spec section over as a file it wrote; a file that is not valid JSON is refused with its exact line, column and text, nothing is stored, and a fixed file is accepted", async () => {
+  // 24 Sep: of 24 large submit_spec_section calls in the day's runs, 7 arrived as JSON Claude Code could not
+  // parse, and each was thrown away whole, with no location, costing a full resend (about $0.40 on
+  // receivables); 13 large Write calls and 32 large shell commands never failed. So the section now travels as a
+  // file the architect writes, and this server parses it and names the spot, which the architect fixes with Edit.
+  const dir = mkdtempSync(join(tmpdir(), "spec-file-"));
+  mkdirSync(join(dir, "spec.sections"));
+  const call = async (a) => JSON.parse((await handleExecutorTool("submit_spec_section", { spec_dir: dir, ...a }, { overrides: {} })).content[0].text);
+  const header = { stack: SPEC.stack, commands: SPEC.commands, decisions: SPEC.decisions, shared: SPEC.shared };
+  writeFileSync(join(dir, "spec.sections/header.json"), JSON.stringify(header, null, 2));
+  const h = await call({ section: "header", file: "spec.sections/header.json" });
+  assert.equal(h.ok, true, JSON.stringify(h));
+  const u = [unit("U01", "app/models.py")];
+  const broken = JSON.stringify(u, null, 2).replace('"path": "app/models.py",', '"path": "app/models.py"');
+  writeFileSync(join(dir, "spec.sections/units-001.json"), broken);
+  const bad = await call({ section: "units", file: "spec.sections/units-001.json" });
+  assert.equal(bad.ok, false);
+  assert.match(bad.errors[0].message, /not valid JSON at line 5, column \d+/, "where the parser noticed it");
+  assert.match(bad.errors[0].message, /the line before \(4\) reads: +"path": "app\/models\.py"$/m, "and the line where the comma is missing");
+  assert.match(bad.errors[0].message, /Edit/);
+  assert.equal(bad.total_units, 0, "nothing stored");
+  writeFileSync(join(dir, "spec.sections/units-001.json"), JSON.stringify(u, null, 2));
+  const good = await call({ section: "units", file: "spec.sections/units-001.json" });
+  assert.equal(good.ok, true, JSON.stringify(good));
+  assert.equal(good.total_units, 1);
+  assert.match((await call({ section: "units", file: "../outside.json" })).errors[0].message, /outside the spec directory/);
+  assert.match((await call({ section: "units", file: "spec.sections/none.json" })).errors[0].message, /no file at/);
+  // The section can no longer be sent inline: the tool takes the file only.
+  const tool = EXECUTOR_TOOLS.find((t) => t.name === "submit_spec_section");
+  assert.deepEqual(tool.inputSchema.required.sort(), ["file", "section", "spec_dir"]);
+  assert.equal(tool.inputSchema.properties.header, undefined);
+  assert.equal(tool.inputSchema.properties.units, undefined);
+});
+
 test("never more units in flight than the stated limit, and the receipt stays short", async () => {
   const dir = mkdtempSync(join(tmpdir(), "exec-"));
   let inFlight = 0, peak = 0;

@@ -49,7 +49,7 @@ Without `--executor`, and in brownfield, nothing below applies.
 1. requirements_analysis                  → requirements.md          (unchanged)
    ── GATE 1 ─────────────────────────────────────
 2. architecture_design (subagent: architect, executor mode)
-                                          → submit_spec_section × N, finalize_spec
+                                          → section files (spec.sections/*.json) → submit_spec_section × N, finalize_spec
                                           → spec.json + design.md (rendered from the spec)
    ── GATE 2 ─────────────────────────────────────
 3. execute_stage codegen                  → one receipt

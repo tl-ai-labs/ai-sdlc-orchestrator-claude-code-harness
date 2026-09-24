@@ -263,6 +263,7 @@ What each plugin version changed about how the numbers are produced. A dispatche
 | How files typed apart connect (executor) | The spec named each file's exports only; "exports `app`" meant two different things in a JavaScript project, the files disagreed, and the 24 Sep smoke paid three repair rounds for it | Every unit states its `import_line` in the project's own language; code carries it into every brief that needs it and into design.md, and never parses it |
 | A file longer than a typist can return (executor) | The spec capped every file at 538 lines (8,192 tokens / 11.7 tokens per line, measured on Python) | No line cap: an answer cut off at a typist's output limit (the vendor's stop reason) goes to the next typist in the plan instead of the same one again; with none left the file fails with that reason |
 | The architect's prompt cache and section size (executor) | Five-minute cache, so a section was capped at 31 units (the architect's speed on one brief) | One-hour cache, like the orchestrator; no units-per-call cap |
+| How the architect hands a spec section over (executor) | Inline in the tool call: 7 of 24 large calls on 24 Sep arrived as JSON Claude Code could not parse and were thrown away whole, with no location — a full resend each (about $0.40 on receivables) | As a JSON file the architect writes with the Write tool (large Writes never failed that day); the tool parses it and names the line, column and text of any error, fixed with one Edit |
 
 Figures that move on the same tokens:
 

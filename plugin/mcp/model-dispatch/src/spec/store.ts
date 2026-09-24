@@ -9,8 +9,8 @@
  * A refused section stores nothing and says exactly why, so the architect
  * re-sends that section alone. Parts live under `<spec_dir>/spec.parts/`.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, posix } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { SPEC_HEADER_SCHEMA, SPEC_UNITS_SECTION_SCHEMA, validate, type SchemaError } from "./schema.js";
 
 export interface SpecExport { name: string; kind?: string; params: { name: string; type: string }[]; returns: string }
@@ -61,6 +61,54 @@ export function isSafeRelativePath(p: string): boolean {
   if (!p || p.startsWith("/") || p.includes("\\")) return false;
   const n = posix.normalize(p);
   return n === p && !n.split("/").includes("..") && n !== ".";
+}
+
+/**
+ * A spec section as the file the architect wrote (24 Sep). Of 24 large submit_spec_section calls in that day's
+ * runs, 7 arrived as tool input Claude Code could not parse and were thrown away whole, with no location, each
+ * costing a full resend; 13 large Write calls and 32 large shell commands never failed. So the architect writes
+ * the section with the Write tool and names the file; this parses it and, when it is not valid JSON, names the
+ * exact line, column and text, so one Edit fixes it instead of a resend of the whole section. The file must lie
+ * inside the spec directory (real paths, so a symlink cannot lead out). A header file holds the header object;
+ * a units file holds an array of units (or {"units": [...]}).
+ */
+export function readSectionFile(specDir: string, file: unknown, section: "header" | "units"): { value: unknown } | { error: string } {
+  if (typeof file !== "string" || !file.trim()) return { error: "name the section file you wrote with the Write tool (file: a path under the spec directory, e.g. spec.sections/header.json)" };
+  const root = resolve(specDir);
+  const inside = (p: string, r: string) => { const rel = relative(r, p); return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel); };
+  const full = resolve(root, file);
+  if (!inside(full, root)) return { error: `${file} is outside the spec directory ${specDir}; write the section file under it` };
+  if (!existsSync(full)) return { error: `no file at ${file}: write the section with the Write tool first, then submit it` };
+  if (!inside(realpathSync(full), realpathSync(root))) return { error: `${file} is outside the spec directory ${specDir}; write the section file under it` };
+  const text = readFileSync(full, "utf8");
+  let value: unknown;
+  try { value = JSON.parse(text); } catch (e: any) { return { error: jsonErrorAt(text, String(e?.message ?? e)) }; }
+  if (section === "units") {
+    if (value && !Array.isArray(value) && Array.isArray((value as any).units)) value = (value as any).units;
+    if (!Array.isArray(value)) return { error: `${file} must hold a JSON array of units (or {"units": [...]})` };
+  } else if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { error: `${file} must hold the header object {stack, commands, decisions, shared}` };
+  }
+  return { value };
+}
+
+/** Where a JSON text fails to parse, as a line, a column and that line's text (from the parser's own position). */
+function jsonErrorAt(text: string, message: string): string {
+  const lc = /line (\d+) column (\d+)/.exec(message);
+  let line: number, col: number;
+  if (lc) { line = Number(lc[1]); col = Number(lc[2]); }
+  else {
+    const m = /position (\d+)/.exec(message);
+    const pos = m ? Number(m[1]) : text.length;
+    const before = text.slice(0, pos).split("\n");
+    line = before.length; col = before[before.length - 1].length + 1;
+  }
+  const lines = text.split("\n");
+  const shown = (lines[line - 1] ?? "").slice(0, 200);
+  // The parser notices a missing comma or quote at the NEXT token, so the line before is shown too.
+  const before = line > 1 ? `; the line before (${line - 1}) reads: ${(lines[line - 2] ?? "").slice(0, 200)}` : "";
+  const why = message.replace(/\s*\(line \d+ column \d+\)/, "").replace(/ in JSON at position \d+/, "");
+  return `the file is not valid JSON at line ${line}, column ${col}: ${why}. That line reads: ${shown}${before}\nFix that spot with the Edit tool and submit the same file again; do not rewrite the whole file.`;
 }
 
 export function submitSpecSection(specDir: string, input: { section: "header"; header: unknown } | { section: "units"; units: unknown }): SubmitResult {

@@ -81,6 +81,7 @@ test("the plan refuses on structure, never on characters or sizes: no bound is f
   const architect = readFileSync(join(PLUGIN, "agents", "architect.md"), "utf8");
   const front = architect.split("\n---")[0];
   assert.match(front, /\n\s*cacheTtl: 1h\b/, "the architect keeps a one-hour cache, like the orchestrator");
+  assert.match(front, /\ntools:[^\n]*\bEdit\b/, "the architect can fix one spot of a section file with Edit");
   assert.ok(!/at most \d+ (per call|lines)/.test(architect), "the architect's prompt states no fitted bound");
 });
 
