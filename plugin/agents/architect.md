@@ -108,7 +108,7 @@ Each unit section, in this order:
   `plan-to-packets.mjs` reads every backticked path in this bullet as a file to hydrate.
 - **Edit anchor** (edits only) — one sub-bullet per site, in file order, in exactly this form:
   ``after `:59` `import getAvatar from "./user/controllers/get-avatar";` → rule 1`` — the
-  position word (`after` / `before` / `replace`), the 1-based line as `` `:N` ``, the line's text
+  position word (`after` / `before` / `replace` / `delete`; for a multi-line replace/delete put `×N` after the quoted text, e.g. `` delete `:88` `content: {` ×5 → rule 3 ``), the 1-based line as `` `:N` ``, the line's text
   verbatim in backticks, then the rule it serves and any ordering constraint ("above `:574`
   `api.use("*", …`"). `scripts/plan-to-packets.mjs` reads these; a site written any other way
   (prose, `L59`, "line 59") is parsed on a best-effort basis and may fall back to a whole-file

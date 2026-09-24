@@ -337,6 +337,19 @@ test("spliceEdits resolves anchors on the original text, applies bottom-up, and 
   assert.equal(extractEdits({ content: "whole file" }), null);
 });
 
+test("spliceEdits: delete and multi-line replace take a count; overlapping or out-of-range spans are refused (Run 30)", () => {
+  const src = "a\nb\nc\nd\ne\n";
+  assert.deepEqual(spliceEdits(src, [{ anchor: "b", position: "delete", text: "" }]), { ok: true, content: "a\nc\nd\ne\n" });
+  assert.deepEqual(spliceEdits(src, [{ anchor: "b", position: "delete", text: "", count: 3 }]), { ok: true, content: "a\ne\n" });
+  assert.deepEqual(spliceEdits(src, [{ anchor: "b", position: "replace", text: "X", count: 2 }]), { ok: true, content: "a\nX\nd\ne\n" });
+  // Adjacent ops still combine: delete b..c, insert before d.
+  assert.deepEqual(spliceEdits(src, [{ anchor: "b", position: "delete", text: "", count: 2 }, { anchor: "d", position: "before", text: "Y" }]), { ok: true, content: "a\nY\nd\ne\n" });
+  assert.match(spliceEdits(src, [{ anchor: "b", position: "delete", text: "", count: 2 }, { anchor: "c", position: "after", text: "Y" }]).reason, /two edits target line 3/);
+  assert.match(spliceEdits(src, [{ anchor: "d", position: "delete", text: "", count: 9 }]).reason, /runs past the end/);
+  assert.deepEqual(extractEdits({ edits: [{ anchor: "a", position: "delete", count: 2 }] }), [{ anchor: "a", position: "delete", text: "", line: undefined, count: 2 }]);
+  assert.equal(extractEdits({ edits: [{ anchor: "a", position: "after" }] }), null, "only a delete may omit text");
+});
+
 test("runApplyLoop in edits mode splices into the existing file and retries a bad anchor with the reason", async () => {
   const root = tmpRoot();
   mkdirSync(join(root, "src"));

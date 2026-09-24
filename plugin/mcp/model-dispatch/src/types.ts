@@ -61,7 +61,7 @@ export interface ApplySpec {
   write: boolean;
   /**
    * `content` (default): the model returns the whole file. `edits`: the model
-   * returns `{edits: [{anchor, position, text, line?}]}` and the server splices
+   * returns `{edits: [{anchor, position, text, line?, count?}]}` and the server splices
    * them into the existing file — for an edit to a large file, where returning
    * the whole file would cost more output than the change is worth.
    */

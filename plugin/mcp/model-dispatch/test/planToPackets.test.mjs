@@ -220,6 +220,16 @@ test("buildPackets: errors for an unknown Action and an edit to a missing file; 
   rmSync(root, { recursive: true, force: true });
 });
 
+test("buildPackets: common Action synonyms map to the canonical word with a warning (Run 31)", () => {
+  const root = repo();
+  const plan = `## House style\n- x\n\n## A1 — a.ts\n\n- **File** \`a.ts\` · **Action** \`create\` · **Depends on** —\n- **Verify** \`true\`\n`;
+  const { packets, errors, warnings } = buildPackets(parsePlan(plan), { runId: "r", planPath: "p.md", projectRoot: root });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(packets.map((p) => p.artifact_path), ["a.ts"]);
+  assert.ok(warnings.some((w) => /A1: Action `create` read as `new_file`/.test(w)), warnings.join("\n"));
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("buildPackets: File / Action / Depends on as separate bullets, B-prefixed ids, and a path only in the heading all derive packets (Runs 19-21)", () => {
   const root = repo();
   const plan = `## House style\n- x\n\n## B1 — apps/api/src/user/new.ts\n\n- **File** \`apps/api/src/user/new.ts\`\n- **Action** \`new_file\`\n- **Depends on** —\n- **Verify** \`pnpm exec biome check {path}\`\n\n## B2 — apps/api/src/index.ts\n\n- **Depends on** B1\n- **Edit anchor** after \`:3\` \`x\`\n- **Verify** \`pnpm exec biome check {path}\`\n`;

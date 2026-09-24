@@ -1524,6 +1524,9 @@ test("identity: the manifest's own spellings win; the call log answers only when
   assert.equal(manifestPolicyName(greenfield, echoOnly), undefined);
   assert.equal(manifestPassId(greenfield, echoOnly), undefined);
 
+  // Single-model path: hand-logged lines carry the TaskPacket spelling `pass_id` (Run 31).
+  assert.equal(manifestPassId(greenfield, [{ tier: "orchestrator", pass: "echo" }, { pass_id: "from-pass-id" }]), "from-pass-id");
+
   // No manifest key and no log: undefined, never a guess. main() refuses on this.
   assert.equal(manifestPolicyName(greenfield, []), undefined);
   assert.equal(manifestPassId(greenfield, []), undefined);

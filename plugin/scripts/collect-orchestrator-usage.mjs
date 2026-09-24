@@ -998,7 +998,11 @@ export const manifestPolicyName = (manifest, events = []) =>
   manifest.policy_name ??
   dispatchedOnly(events).find((ev) => ev?.routing?.policy_name)?.routing?.policy_name;
 export const manifestPassId = (manifest, events = []) =>
-  manifest.run_id ?? manifest.pass ?? dispatchedOnly(events).find((ev) => ev?.pass)?.pass;
+  manifest.run_id ??
+  manifest.pass ??
+  // Dispatched lines carry `pass`; lines the orchestrator logs by hand (single-model path) carry the
+  // TaskPacket spelling `pass_id`. Either names the run.
+  dispatchedOnly(events).map((ev) => ev?.pass ?? ev?.pass_id).find(Boolean);
 
 function parseArgs(argv) {
   const args = {

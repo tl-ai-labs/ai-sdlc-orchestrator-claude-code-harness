@@ -135,6 +135,11 @@ function parseFileLine(head) {
  * facts, so read whichever is there: the path falls back to the heading, the
  * Action to its own bullet and then to whether the file exists.
  */
+const ACTION_ALIASES = {
+  create: "new_file", new: "new_file", add: "new_file", "new-file": "new_file", newfile: "new_file",
+  modify: "edit", update: "edit", change: "edit",
+};
+
 function unitHeader(u, exists) {
   const file = bullet(u.body, "File");
   // A long File bullet soft-wraps (`… · **Action** \`x\` ·` / `  **Depends on** A1`); Run 27b lost 10 of
@@ -145,6 +150,10 @@ function unitHeader(u, exists) {
   const path = fromFile.path ?? u.path;
   let action = fromFile.action ?? (bullet(u.body, "Action")?.head.match(/`([^`]+)`/) || [])[1];
   let inferred = false;
+  // Common synonyms (Run 31's orchestrator told the architect `create`; 10 units failed and the plan was
+  // re-edited). They are unambiguous, so map them rather than fail; the canonical words stay in architect.md.
+  let aliased = null;
+  if (action && ACTION_ALIASES[action.trim().toLowerCase()]) { aliased = action; action = ACTION_ALIASES[action.trim().toLowerCase()]; }
   if (!action && path) { action = exists(path) ? "edit" : "new_file"; inferred = true; }
   let depends = fromFile.depends;
   let noDepends = false;
@@ -153,7 +162,7 @@ function unitHeader(u, exists) {
     noDepends = !d;
     depends = d ? [...[d.head, ...d.rest].join(" ").matchAll(UNIT_ID)].map((m) => m[0]) : [];
   }
-  return { path, action, depends, noDepends, hadFileBullet: Boolean(file), inferred };
+  return { path, action, depends, noDepends, hadFileBullet: Boolean(file), inferred, aliased };
 }
 
 /** Same glob dialect as write-contract-check.mjs (`**`, `*`, `?`); that module runs on import, so it is not shared. */
@@ -286,8 +295,8 @@ const NEW_FILE_INSTRUCTION = (path, id) =>
 const EDIT_INSTRUCTION = (path, id) =>
   `Produce the edit list for \`${path}\` from change_plan section \`${id}\` (its Behavior rules and Edit anchor bullets). ` +
   `Do NOT return the file. Return JSON {edits: [{line, anchor, position, text}]} — one entry per anchor in file order: ` +
-  `\`line\` is the anchor's 1-based line number, \`anchor\` the exact existing text of that line, \`position\` "after" | "before" | "replace", ` +
-  `\`text\` the lines to insert (or the replacement line), formatted per House style.`;
+  `\`line\` is the anchor's 1-based line number, \`anchor\` the exact existing text of that line, \`position\` "after" | "before" | "replace" | "delete", ` +
+  `\`text\` the lines to insert (or the replacement), formatted per House style; for replace/delete, \`count\` = lines removed from the anchor down (default 1; delete needs no text).`;
 
 const RUNNERS = /^(pnpm|npm|npx|yarn|bun|node|deno|python3?|pip|go|cargo|make|sh|bash|cd|vitest|jest|biome|tsc|eslint|prettier|pytest|ruff|mypy|dotnet|mvn|gradle|test|grep)\b/;
 /** A backticked span in a Verify bullet is a command only when it starts with a runner. Prose (`"<svg "`, `11`) is not. */
@@ -372,11 +381,12 @@ export function buildPackets(plan, opts) {
   const exists = (p) => { const n = lineCount(p); return n !== null && n !== -1; };
 
   for (const u of plan.units) {
-    const { path, action, depends, noDepends, hadFileBullet, inferred } = unitHeader(u, exists);
+    const { path, action, depends, noDepends, hadFileBullet, inferred, aliased } = unitHeader(u, exists);
     if (!path || !action) { errors.push(`${u.id}: no path in the heading or a \`- **File**\` bullet`); continue; }
     if (!["new_file", "edit", "tooling"].includes(action)) { errors.push(`${u.id}: unknown Action \`${action}\``); continue; }
     if (!hadFileBullet) warnings.push(`${u.id}: no \`- **File**\` bullet; path taken from the heading`);
     if (noDepends) warnings.push(`${u.id}: no \`**Depends on**\` found; assumed none — check the plan if this unit imports another`);
+    if (aliased) warnings.push(`${u.id}: Action \`${aliased}\` read as \`${action}\``);
     if (inferred) warnings.push(`${u.id}: no Action; inferred \`${action}\` from whether ${path} exists`);
     if (hadFileBullet && path !== u.path) warnings.push(`${u.id}: heading path ${u.path} differs from File ${path}; using File`);
     if (contract && !contract.allowlist.some((g) => matchGlob(path, g))) {

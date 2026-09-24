@@ -247,6 +247,14 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.8.9
+
+| Area | Before | From v0.8.9 |
+|---|---|---|
+| Edit lists (`apply.mode: "edits"`) | Positions were `after` / `before` / `replace`, and `replace` covered exactly one line, so a deletion could not be expressed. Run 30's one refinement (an 8-line block cut to 3) ran as a hand splice by the orchestrator instead of a Flash packet. | `position: "delete"` (no `text` needed) and an optional `count` on `replace` / `delete` cover a run of lines from the anchor down. Overlapping spans and spans past the end of the file are refused with a reason the retry carries. The architect writes `×N` after the quoted anchor text for a multi-line site. |
+| Action word in the plan | `plan-to-packets` accepted only `new_file` / `edit` / `tooling`; Run 31's orchestrator told the architect `create`, 10 units failed derivation and the plan was edited and re-derived. | Unambiguous synonyms (`create` / `new` / `add` → `new_file`; `modify` / `update` / `change` → `edit`) are mapped, with a warning naming the unit. |
+| Collector run id on the single-model path | The run id was read only from a dispatched line's `pass`; hand-logged in-session lines carry `pass_id`, so Run 31's collector stopped with "no run id" until the orchestrator added a `pass` field. | `pass_id` is read as well. |
+
 ### v0.8.8
 
 | Area | Before | From v0.8.8 |

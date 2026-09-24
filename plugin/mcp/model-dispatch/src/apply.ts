@@ -36,8 +36,9 @@ export const EDITS_OUTPUT_SCHEMA = {
         properties: {
           line: { type: "number" },
           anchor: { type: "string" },
-          position: { type: "string", enum: ["after", "before", "replace"] },
+          position: { type: "string", enum: ["after", "before", "replace", "delete"] },
           text: { type: "string" },
+          count: { type: "number" },
         },
         required: ["anchor", "position", "text"],
       },
@@ -386,9 +387,11 @@ export function extractFileContent(result: unknown): { content: string; path?: s
 
 export interface EditOp {
   anchor: string;
-  position: "after" | "before" | "replace";
+  position: "after" | "before" | "replace" | "delete";
   text: string;
   line?: number;
+  /** replace / delete only: how many lines, starting at the anchor, the op covers (default 1). */
+  count?: number;
 }
 
 export function extractEdits(result: unknown): EditOp[] | null {
@@ -399,9 +402,18 @@ export function extractEdits(result: unknown): EditOp[] | null {
     for (const e of r.edits) {
       if (!e || typeof e !== "object") return null;
       const o = e as Record<string, unknown>;
-      if (typeof o.anchor !== "string" || typeof o.text !== "string") return null;
-      if (o.position !== "after" && o.position !== "before" && o.position !== "replace") return null;
-      ops.push({ anchor: o.anchor, position: o.position, text: o.text, line: typeof o.line === "number" ? o.line : undefined });
+      if (typeof o.anchor !== "string") return null;
+      if (o.position !== "after" && o.position !== "before" && o.position !== "replace" && o.position !== "delete") return null;
+      // A delete carries no text; every other op must.
+      if (typeof o.text !== "string" && o.position !== "delete") return null;
+      const count = typeof o.count === "number" && Number.isInteger(o.count) && o.count >= 1 ? o.count : undefined;
+      ops.push({
+        anchor: o.anchor,
+        position: o.position,
+        text: typeof o.text === "string" ? o.text : "",
+        line: typeof o.line === "number" ? o.line : undefined,
+        ...(count ? { count } : {}),
+      });
     }
     return ops;
   }
@@ -417,6 +429,8 @@ export function extractEdits(result: unknown): EditOp[] | null {
  * Returns the new text, or the reason it could not be applied — which is
  * what the retry packet carries back to the model.
  */
+const removes = (op: EditOp) => op.position === "replace" || op.position === "delete";
+
 export function spliceEdits(original: string, edits: EditOp[]): { ok: true; content: string } | { ok: false; reason: string } {
   if (edits.length === 0) return { ok: false, reason: "the edit list was empty" };
   const lines = original.split("\n");
@@ -433,16 +447,26 @@ export function spliceEdits(original: string, edits: EditOp[]): { ok: true; cont
       else if (hits.length === 0) return { ok: false, reason: `anchor not found in the file: ${JSON.stringify(op.anchor)}` };
       else return { ok: false, reason: `anchor matches ${hits.length} lines (${hits.map((h) => h + 1).join(", ")}); give \`line\` to pick one: ${JSON.stringify(op.anchor)}` };
     }
-    if (resolved.some((r) => r.index === index && (r.op.position === "replace" || op.position === "replace"))) {
-      return { ok: false, reason: `two edits target line ${index + 1}` };
+    const span = removes(op) ? (op.count ?? 1) : 0;
+    if (index + span > lines.length) {
+      return { ok: false, reason: `${op.position} of ${span} line(s) from line ${index + 1} runs past the end of the file (${lines.length} lines)` };
     }
+    // Two ops clash when either removes lines the other touches.
+    const clash = resolved.find((r) => {
+      const rSpan = removes(r.op) ? (r.op.count ?? 1) : 0;
+      if (span === 0 && rSpan === 0) return false;
+      const lo = Math.max(index, r.index), hi = Math.min(index + Math.max(span, 1), r.index + Math.max(rSpan, 1));
+      return lo < hi;
+    });
+    if (clash) return { ok: false, reason: `two edits target line ${Math.max(index, clash.index) + 1}` };
     resolved.push({ index, op });
   }
   // Bottom-up so earlier indices stay valid; stable for same-line before/after pairs.
   resolved.sort((x, y) => y.index - x.index);
   for (const { index, op } of resolved) {
+    if (op.position === "delete") { lines.splice(index, op.count ?? 1); continue; }
     const ins = op.text.replace(/\n$/, "").split("\n");
-    if (op.position === "replace") lines.splice(index, 1, ...ins);
+    if (op.position === "replace") lines.splice(index, op.count ?? 1, ...ins);
     else if (op.position === "after") lines.splice(index + 1, 0, ...ins);
     else lines.splice(index, 0, ...ins);
   }
@@ -593,7 +617,7 @@ export async function runApplyLoop(deps: ApplyLoopDeps): Promise<ApplyOutcome> {
     let content: string | null = null;
     if (apply.mode === "edits") {
       const edits = extractEdits(one.result.result);
-      if (!edits) failure = "the response had no `edits` array; return JSON {edits: [{anchor, position, text, line?}]}";
+      if (!edits) failure = "the response had no `edits` array; return JSON {edits: [{anchor, position, text, line?, count?}]}";
       else {
         const spliced = spliceEdits(editsBase!, edits);
         if (spliced.ok) content = spliced.content;
