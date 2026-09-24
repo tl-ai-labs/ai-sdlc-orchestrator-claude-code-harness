@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { cliLists, leanOpusArgs, leanOpusEnv, leanOpusOutcome, agyEnv, agyWorkerArgs, agyOutcome, flashOutcome, parseAnswer, isTransient, TYPIST_WORKER, FlashCompletionTypist } from "../dist/executor/typists.js";
 import { FILE_ANSWER_SCHEMA, EDIT_ANSWER_SCHEMA } from "../dist/executor/brief.js";
-import { typistForLeaf, fallbackLeaf, TYPIST_EFFORT } from "../dist/executor/tools.js";
+import { typistForLeaf, fallbackLeaf, TYPIST_EFFORT, TYPIST_TIMEOUT_S, TRANSPORT } from "../dist/executor/tools.js";
 import { loadPolicyFromPath } from "../dist/policy.js";
 import { existsSync } from "node:fs";
 
@@ -66,9 +66,31 @@ test("agent typist environment: an allowlist plus the Vertex project and region;
   assert.deepEqual(env, { PATH: "/bin", HOME: "/h", GOOGLE_APPLICATION_CREDENTIALS: "/adc.json", GOOGLE_CLOUD_PROJECT: "proj", GOOGLE_CLOUD_LOCATION: "global", PYTHONUNBUFFERED: "1" });
 });
 
-test("agent typist request: step 2's agy-best setup — the shared block as the system prompt, the brief, FINISH with the answer schema, LOW thinking, three model calls", () => {
-  const args = agyWorkerArgs({ briefFile: "/s/brief.md", sharedFile: "/run/shared.txt", schemaFile: "/s/schema.json", model: "gemini-3.8-flash", region: "global", workdir: "/s", receiptFile: "/s/r.json", thinking: "low", maxModelCalls: 3, timeoutSec: 540 });
-  assert.deepEqual(args, [TYPIST_WORKER, "--brief-file", "/s/brief.md", "--system-file", "/run/shared.txt", "--answer-schema-file", "/s/schema.json", "--model", "gemini-3.8-flash", "--region", "global", "--workdir", "/s", "--out", "/s/r.json", "--thinking", "LOW", "--max-model-calls", "3", "--timeout", "540"]);
+test("agent typist request: step 2's agy-best setup — the shared block as the system prompt, the brief, FINISH with the answer schema, LOW thinking, three model calls — and the executor's wait rule for rate limits", () => {
+  const args = agyWorkerArgs({ briefFile: "/s/brief.md", sharedFile: "/run/shared.txt", schemaFile: "/s/schema.json", model: "gemini-3.8-flash", region: "global", workdir: "/s", receiptFile: "/s/r.json", thinking: "low", maxModelCalls: 3, timeoutSec: 540, apiRetries: 6, apiRetryInitialMs: 2000 });
+  assert.deepEqual(args, [TYPIST_WORKER, "--brief-file", "/s/brief.md", "--system-file", "/run/shared.txt", "--answer-schema-file", "/s/schema.json", "--model", "gemini-3.8-flash", "--region", "global", "--workdir", "/s", "--out", "/s/r.json", "--thinking", "LOW", "--max-model-calls", "3", "--timeout", "540", "--api-retries", "6", "--api-retry-initial-ms", "2000"]);
+});
+
+test("every typist gets the same stated time limit and the agent door waits out rate limits with the executor's rule", () => {
+  const policy = loadPolicyFromPath(join(POLICIES, "opus-plus-flash-v38.yaml"));
+  const byId = (id) => policy.models.find((m) => m.id === id);
+  assert.equal(TYPIST_TIMEOUT_S, 540);
+  const saved = { ...process.env };
+  Object.assign(process.env, { GEMINI_BACKEND: "vertex", GOOGLE_CLOUD_PROJECT: "p", GOOGLE_CLOUD_LOCATION: "global", GEMINI_WORKER_PYTHON: process.execPath });
+  try {
+    // A leaf's own worker_timeout_sec is for whole agent jobs; a typist types one file, so the executor's bound applies.
+    const agy = typistForLeaf({ ...byId("flash-agsdk-worker"), worker_timeout_sec: 1800 }, "estimated");
+    assert.equal(agy.opts.timeoutSec, 540);
+    assert.equal(agy.opts.apiRetries, TRANSPORT.maxWaits);
+    assert.equal(agy.opts.apiRetryInitialMs, TRANSPORT.baseMs);
+    const flash = typistForLeaf(byId("flash-completion"), "estimated");
+    assert.equal(flash.requestTimeoutMs, 540_000);
+    // A hand-authored policy may still name the completion door by its pre-rename id; the registry accepts it, so the executor does too.
+    assert.equal(typistForLeaf({ ...byId("flash-completion"), adapter: "mcp:gemini" + "-flash-server" }, "estimated").door, "flash-completion");
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
 });
 
 test("completion typist request: step 2's flash-low-r2 setup — the shared block first, thinking low, the answer schema as the response schema", async () => {
@@ -76,7 +98,7 @@ test("completion typist request: step 2's flash-low-r2 setup — the shared bloc
   process.env.GEMINI_API_KEY = "test-key";
   try {
     const leaf = { id: "flash-completion", adapter: "mcp:model-dispatch", model_name: "gemini-3.8-flash", pricing: { input: 0.75, input_cached: 0.075, output: 3.75 }, max_output_tokens_absolute: 8192 };
-    const t = new FlashCompletionTypist(leaf, "low");
+    const t = new FlashCompletionTypist(leaf, "low", 540_000);
     const sent = [];
     t.adapter.transport = { backend: "api-key", location: "", createCache: async () => undefined, generate: async (a) => { sent.push(a); return { text: '{"path":"a.py","content":"x = 1\\n"}', usage: { promptTokenCount: 10, candidatesTokenCount: 5 }, finishReason: "STOP" }; } };
     const packet = { id: "U01", phase: "codegen", task_type: "dto", module: "spec", instruction: "WRITE", inputs: [], outputSchema: FILE_ANSWER_SCHEMA, acceptance: [], budget: { maxInputTokens: 400000, maxOutputTokens: 0 }, pass_id: "p" };
@@ -86,6 +108,7 @@ test("completion typist request: step 2's flash-low-r2 setup — the shared bloc
     assert.deepEqual(sent[0].generationConfig.thinkingConfig, { thinkingLevel: "low" });
     assert.deepEqual(sent[0].generationConfig.responseSchema, FILE_ANSWER_SCHEMA);
     assert.equal(sent[0].generationConfig.maxOutputTokens, 8192, "the leaf's own output cap");
+    assert.deepEqual(sent[0].generationConfig.httpOptions, { timeout: 540_000 }, "the stated time limit, on the request itself");
     assert.deepEqual(r.answer, { path: "a.py", content: "x = 1\n" });
   } finally {
     if (saved === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = saved;

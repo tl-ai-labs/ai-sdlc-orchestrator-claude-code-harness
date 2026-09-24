@@ -3,9 +3,11 @@
  * written. The same checks for every typist, so no door is held to a
  * different bar:
  *  1. the answer names the job's own path, and that path is safe;
- *  2. the content parses (Python with the checker's interpreter, TypeScript /
- *     JavaScript with the TypeScript parser, JSON with JSON.parse; any other
- *     file must be non-empty);
+ *  2. the content parses, by the parser of the tool that reads it (Python
+ *     with the checker's interpreter; TypeScript / JavaScript with the
+ *     TypeScript parser; tsconfig/jsconfig files with TypeScript's config
+ *     parser, which allows comments; any other JSON with JSON.parse); any
+ *     other file must be non-empty;
  *  3. every export the spec declares (except test functions) is defined — at
  *     top level, or, for a dotted name such as `NoteStore.add`, as a member of
  *     that class (or of that exported object);
@@ -90,6 +92,8 @@ function typescript(): any {
 }
 
 const isPy = (p: string) => p.endsWith(".py");
+/** TypeScript's own config files, which it parses as JSON with comments. */
+const TS_CONFIG_JSON = /^(ts|js)config(\.[^/]+)?\.json$/;
 const isTsJs = (p: string) => /\.(tsx?|jsx?|mjs|cjs|mts|cts)$/.test(p);
 
 /**
@@ -102,7 +106,7 @@ export function toolchainProblem(paths: string[], python: string): string | null
     const r = spawnSync(python, ["-c", "import ast, json"], { encoding: "utf8", timeout: 30_000 });
     if (r.status !== 0) return `the checks need a Python interpreter to parse the project's Python files, and '${python}' did not run (set MMO_CHECK_PYTHON to one that does)`;
   }
-  if (paths.some(isTsJs) && !typescript()) return "the checks need the TypeScript parser (the 'typescript' package of the MCP server) and it did not load; run the setup check with --fix";
+  if (paths.some((p) => isTsJs(p) || TS_CONFIG_JSON.test(posix.basename(p))) && !typescript()) return "the checks need the TypeScript parser (the 'typescript' package of the MCP server) and it did not load; run the setup check with --fix";
   return null;
 }
 
@@ -268,7 +272,19 @@ export function checkAnswer(target: CheckTarget, answer: { path: string; content
     a = tsAnalyse(target.path, c);
     if (!a) return { ok: false, reason: "the TypeScript parser did not load", checked: "not-parsed" };
     if (!a.ok) return { ok: false, reason: `the code does not parse: ${a.error}`, checked: "parsed" };
+  } else if (TS_CONFIG_JSON.test(posix.basename(target.path))) {
+    // TypeScript reads its config files (tsconfig*.json, jsconfig*.json) as
+    // JSON with comments and trailing commas — Vite's own template has
+    // /* ... */ section comments — so they are judged by TypeScript's config
+    // parser, the one the project's build uses. Found in step 8: a strict
+    // JSON.parse refused a correct tsconfig.json.
+    const t = typescript();
+    if (!t) return { ok: false, reason: "the TypeScript parser did not load", checked: "not-parsed" };
+    const r = t.parseConfigFileTextToJson(target.path, c);
+    if (r.error) return { ok: false, reason: `the TypeScript config does not parse: ${t.flattenDiagnosticMessageText(r.error.messageText, " ")}`, checked: "parsed" };
+    return { ok: true, checked: "parsed" };
   } else if (target.path.endsWith(".json")) {
+    // Every other JSON file is read by a strict parser (npm reads package.json with JSON.parse).
     try { JSON.parse(c); } catch (e: any) { return { ok: false, reason: `the JSON does not parse: ${e.message}`, checked: "parsed" }; }
     return { ok: true, checked: "parsed" };
   } else {

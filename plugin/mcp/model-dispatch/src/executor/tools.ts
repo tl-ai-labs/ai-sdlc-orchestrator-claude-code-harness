@@ -28,6 +28,7 @@ import { finalizeSpec, loadSpec, submitSpecSection } from "../spec/store.js";
 import { renderShared } from "./brief.js";
 import { executeStage, type RepairItem, type Stage } from "./run.js";
 import { AgyTypist, FlashCompletionTypist, LeanOpusTypist, type Typist } from "./typists.js";
+import { LEGACY_GEMINI_ADAPTER_ID } from "../adapters/index.js";
 
 /**
  * Every typist types at LOW effort. One pre-registered rule chose it on the
@@ -52,8 +53,15 @@ export const ROUTED_ATTEMPTS = 2;
  * attempt (run.ts). Six waits and a 2 s base are stated bounds (DESIGN §6.3b).
  */
 export const TRANSPORT = { maxWaits: 6, baseMs: 2_000, capMs: 60_000 };
-/** A lean Opus typist call's time limit: a stated bound; the call is killed, process group and all, past it. */
-export const LEAN_OPUS_TIMEOUT_MS = 900_000;
+/**
+ * Every typist call's time limit, the same for all three doors: a stated
+ * safety bound that only catches a hung call. 540 s is the agent door's
+ * existing per-job limit, and about 9× the longest typist call measured at
+ * low effort (61 s, steps 2 and 8: Opus 49 s, Flash 61 s under load, agent
+ * 52 s). A call past it is an attempt: a lean Opus or agent process is killed,
+ * process group and all; a completion request fails by the SDK's own timeout.
+ */
+export const TYPIST_TIMEOUT_S = 540;
 /** The agent typist's model-call budget: 3, the agy-best configuration step 2 measured (8/8 first try, one call used per unit). */
 export const AGY_MAX_MODEL_CALLS = 3;
 /** Progress heartbeat while a stage runs: any interval well inside Claude Code's MCP idle limit keeps the call alive (P7). */
@@ -164,12 +172,13 @@ export function typistForLeaf(leaf: ModelConfig, authMode: "estimated" | "vendor
   switch (leaf.adapter) {
     case "builtin-anthropic":
     case "claude-cli":
-      return new LeanOpusTypist(leaf, { authMode, effort: TYPIST_EFFORT, timeoutMs: LEAN_OPUS_TIMEOUT_MS });
+      return new LeanOpusTypist(leaf, { authMode, effort: TYPIST_EFFORT, timeoutMs: TYPIST_TIMEOUT_S * 1000 });
     case "mcp:model-dispatch":
-    case "mcp:gemini-flash-server":
-      return new FlashCompletionTypist(leaf, TYPIST_EFFORT);
+    case LEGACY_GEMINI_ADAPTER_ID: // the registry's compat alias, accepted wherever the registry accepts it
+      return new FlashCompletionTypist(leaf, TYPIST_EFFORT, TYPIST_TIMEOUT_S * 1000);
     case "antigravity-worker":
-      return new AgyTypist(leaf, { effort: TYPIST_EFFORT, maxModelCalls: AGY_MAX_MODEL_CALLS, timeoutSec: (leaf as any).worker_timeout_sec ?? 540 });
+      // The leaf's worker_timeout_sec bounds a whole agent job; a typist types one file, so the executor's bound applies.
+      return new AgyTypist(leaf, { effort: TYPIST_EFFORT, maxModelCalls: AGY_MAX_MODEL_CALLS, timeoutSec: TYPIST_TIMEOUT_S, apiRetries: TRANSPORT.maxWaits, apiRetryInitialMs: TRANSPORT.baseMs });
     default:
       throw new Error(`execute_stage has no typist for adapter '${leaf.adapter}' (leaf ${leaf.id})`);
   }

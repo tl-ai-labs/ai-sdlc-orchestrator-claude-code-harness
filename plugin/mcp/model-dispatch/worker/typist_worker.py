@@ -27,6 +27,10 @@ Contract:
   --thinking LEVEL    HIGH|MEDIUM|LOW|MINIMAL
   --max-model-calls N the session's model-call budget
   --timeout SECONDS   hard cap on the whole session
+  --api-retries N     the SDK's own retries of transient API errors (429, 503), with
+  --api-retry-initial-ms MS  its first wait; each later wait doubles. The executor passes its
+                      transport rule (tools.ts TRANSPORT), so a rate limit is a wait on this
+                      door as on the others. Unset: the SDK's unstated defaults.
 
 Receipt: {"finish_output", "text", "usage", "sdk", "sdk_version",
 "vertex_project", "vertex_location", "thinking", "tool_calls" (names only),
@@ -94,6 +98,9 @@ async def run(a) -> dict:
         capabilities=types.CapabilitiesConfig(enable_subagents=False, enabled_tools=[types.BuiltinTools.FINISH]),
         response_schema=schema,
         budget_config=types.BudgetConfig(max_model_calls=a.max_model_calls),
+        retry_config=(types.RetryConfig(api_retry=types.ModelAPIRetryConfig(
+            max_retries=a.api_retries, initial_sleep_duration_ms=a.api_retry_initial_ms, exponential_multiplier=2.0))
+            if a.api_retries is not None else None),
         policies=[policy.allow_all()],
         workspaces=[a.workdir],
         save_dir=os.path.join(a.workdir, "_save"),
@@ -137,6 +144,8 @@ def main() -> None:
     p.add_argument("--thinking", default="LOW")
     p.add_argument("--max-model-calls", type=int, default=3)
     p.add_argument("--timeout", type=int, default=540)
+    p.add_argument("--api-retries", type=int, default=None)
+    p.add_argument("--api-retry-initial-ms", type=int, default=None)
     a = p.parse_args()
     started = time.time()
     try:

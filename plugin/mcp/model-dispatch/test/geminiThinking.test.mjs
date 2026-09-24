@@ -48,4 +48,5 @@ test("the leaf's reasoning tier becomes Gemini's thinkingLevel on the request", 
 
 test("a leaf with no tier sends no thinking setting, so existing policies keep Google's default", async () => {
   assert.equal((await sentConfig(LEAF)).thinkingConfig, undefined);
+  assert.equal((await sentConfig(LEAF)).httpOptions, undefined, "no request time limit unless the caller states one");
 });

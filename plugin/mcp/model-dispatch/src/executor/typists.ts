@@ -126,9 +126,10 @@ export function flashOutcome(a: Pick<AttemptRecord, "error_status" | "error_code
 }
 
 /**
- * The agent door: the SDK retries transient API errors itself (its
- * ModelAPIRetryConfig), and the errors it raises carry no HTTP status, so an
- * error that reaches the receipt is an attempt — fail closed.
+ * The agent door: the SDK retries transient API errors itself, by the
+ * executor's own wait rule (its ModelAPIRetryConfig, set in agyWorkerArgs), and
+ * the errors it raises carry no HTTP status, so an error that reaches the
+ * receipt — after those waits — is an attempt: fail closed.
  */
 export function agyOutcome(_receipt: { error?: string; error_type?: string }): { transport: boolean } {
   return { transport: false };
@@ -317,10 +318,13 @@ export class FlashCompletionTypist implements Typist {
   readonly modelName: string;
   private readonly adapter: GeminiFlashAdapter;
   private headerSet = "";
-  constructor(private readonly leaf: ModelConfig, effort: string) {
+  /** The time limit on each request (the SDK's own httpOptions.timeout); a request past it fails and is an attempt. */
+  readonly requestTimeoutMs?: number;
+  constructor(private readonly leaf: ModelConfig, effort: string, requestTimeoutMs?: number) {
     this.modelId = leaf.id;
     this.modelName = leaf.model_name;
-    this.adapter = new GeminiFlashAdapter({ ...leaf, reasoning: { ...(leaf as any).reasoning, tier: effort } } as ModelConfig);
+    this.requestTimeoutMs = requestTimeoutMs;
+    this.adapter = new GeminiFlashAdapter({ ...leaf, reasoning: { ...(leaf as any).reasoning, tier: effort } } as ModelConfig, { requestTimeoutMs });
   }
   async type(req: TypeRequest): Promise<TypistResult> {
     if (this.headerSet !== req.shared) { this.adapter.inlineHeader(req.shared); this.headerSet = req.shared; }
@@ -344,10 +348,17 @@ export class FlashCompletionTypist implements Typist {
 const WORKER_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "worker");
 export const TYPIST_WORKER = join(WORKER_DIR, "typist_worker.py");
 
-/** The agent typist's command line: step 2's agy-best setup, with the job's answer schema. */
-export function agyWorkerArgs(i: { briefFile: string; sharedFile: string; schemaFile: string; model: string; region: string; workdir: string; receiptFile: string; thinking: string; maxModelCalls: number; timeoutSec: number }): string[] {
+/**
+ * The agent typist's command line: step 2's agy-best setup, with the job's
+ * answer schema, and the executor's wait rule for rate limits handed to the
+ * SDK's own API retry (its errors carry no HTTP status, so the executor cannot
+ * wait them out itself; left unset, the SDK applies unstated defaults and a
+ * rate limit surfaced as a failed attempt in step 8).
+ */
+export function agyWorkerArgs(i: { briefFile: string; sharedFile: string; schemaFile: string; model: string; region: string; workdir: string; receiptFile: string; thinking: string; maxModelCalls: number; timeoutSec: number; apiRetries: number; apiRetryInitialMs: number }): string[] {
   return [TYPIST_WORKER, "--brief-file", i.briefFile, "--system-file", i.sharedFile, "--answer-schema-file", i.schemaFile, "--model", i.model, "--region", i.region,
-    "--workdir", i.workdir, "--out", i.receiptFile, "--thinking", i.thinking.toUpperCase(), "--max-model-calls", String(i.maxModelCalls), "--timeout", String(i.timeoutSec)];
+    "--workdir", i.workdir, "--out", i.receiptFile, "--thinking", i.thinking.toUpperCase(), "--max-model-calls", String(i.maxModelCalls), "--timeout", String(i.timeoutSec),
+    "--api-retries", String(i.apiRetries), "--api-retry-initial-ms", String(i.apiRetryInitialMs)];
 }
 
 export class AgyTypist implements Typist {
@@ -355,7 +366,7 @@ export class AgyTypist implements Typist {
   readonly modelId: string;
   readonly modelName: string;
   private readonly agent: AntigravityWorkerAdapter;
-  constructor(private readonly leaf: ModelConfig, private readonly opts: { effort: string; maxModelCalls: number; timeoutSec: number }) {
+  constructor(private readonly leaf: ModelConfig, private readonly opts: { effort: string; maxModelCalls: number; timeoutSec: number; apiRetries: number; apiRetryInitialMs: number }) {
     this.modelId = leaf.id;
     this.modelName = leaf.model_name;
     // The product's agent-door adapter resolves the Vertex project, the region,
@@ -369,7 +380,7 @@ export class AgyTypist implements Typist {
     const briefFile = join(scratch, "brief.md"), receiptFile = join(scratch, "receipt.json"), schemaFile = join(scratch, "answer-schema.json");
     writeFileSync(briefFile, req.framed);
     writeFileSync(schemaFile, JSON.stringify(req.packet.outputSchema));
-    const args = agyWorkerArgs({ briefFile, sharedFile: req.sharedFile, schemaFile, model: this.leaf.model_name, region: this.agent.location, workdir: scratch, receiptFile, thinking: this.opts.effort, maxModelCalls: this.opts.maxModelCalls, timeoutSec: this.opts.timeoutSec });
+    const args = agyWorkerArgs({ briefFile, sharedFile: req.sharedFile, schemaFile, model: this.leaf.model_name, region: this.agent.location, workdir: scratch, receiptFile, thinking: this.opts.effort, maxModelCalls: this.opts.maxModelCalls, timeoutSec: this.opts.timeoutSec, apiRetries: this.opts.apiRetries, apiRetryInitialMs: this.opts.apiRetryInitialMs });
     // The worker enforces its own time limit and still writes its receipt; the
     // extra 30 s is the process-group kill for a worker that hangs past it.
     const r = await runChild(this.agent.python, args, { env: agyEnv(process.env, this.agent.project, this.agent.location), cwd: scratch, input: "", timeoutMs: (this.opts.timeoutSec + 30) * 1000 });

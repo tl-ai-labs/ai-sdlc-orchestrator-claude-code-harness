@@ -27,6 +27,12 @@ import { DispatchPricer, geminiRates, unpricedRefusal, type BilledPrice, type Cl
 export interface GeminiFlashOptions {
   /** Clock for the dispatch date the price is looked up on; tests pin it. */
   now?: Clock;
+  /**
+   * A time limit on each request, sent as the SDK's own httpOptions.timeout.
+   * Unset (the default for every existing caller) sends none. The executor's
+   * typist sets one so a hung call cannot stall a stage (tools.ts).
+   */
+  requestTimeoutMs?: number;
 }
 
 // Fallback when the policy YAML omits max_output_tokens_absolute. 8192 is
@@ -57,7 +63,9 @@ export class GeminiFlashAdapter implements ModelAdapter {
     this.transport = transport;
     this.backendChoice = choice;
     this.pricer = new DispatchPricer(config, options.now);
+    this.requestTimeoutMs = options.requestTimeoutMs;
   }
+  private readonly requestTimeoutMs?: number;
 
   /**
    * The price of a dispatch on `date`: the effective rates (the dated list,
@@ -174,6 +182,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
         maxOutputTokens: ceiling,
         ...(wantsJson ? { responseMimeType: "application/json" } : {}),
         ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
+        ...(this.requestTimeoutMs ? { httpOptions: { timeout: this.requestTimeoutMs } } : {}),
       };
       if (wantsJson) generationConfig.responseSchema = packet.outputSchema;
 

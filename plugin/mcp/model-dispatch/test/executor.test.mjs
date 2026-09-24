@@ -164,6 +164,17 @@ test("a stage whose checker cannot run refuses before any typist is paid", async
   assert.equal(opus.calls.length, 0);
 });
 
+test("a JSON file is judged by the parser of the tool that reads it: TypeScript's config files allow comments, package.json does not", () => {
+  // Found in step 8: the agent typist wrote Vite's standard tsconfig.json, with /* ... */ section comments,
+  // and a strict JSON.parse refused it; TypeScript reads tsconfig*.json and jsconfig*.json as JSON with comments.
+  const tsconfig = '{\n  "compilerOptions": {\n    "target": "ES2022",\n\n    /* Bundler mode */\n    "moduleResolution": "bundler", // trailing note\n  },\n  "include": ["src"]\n}\n';
+  for (const path of ["frontend/tsconfig.json", "frontend/tsconfig.node.json", "jsconfig.json"]) {
+    assert.equal(checkAnswer({ path, exports: [] }, { path, content: tsconfig }, "python3").ok, true, path);
+  }
+  assert.match(checkAnswer({ path: "frontend/tsconfig.json", exports: [] }, { path: "frontend/tsconfig.json", content: '{ "compilerOptions": { "target": }\n' }, "python3").reason, /does not parse/);
+  assert.match(checkAnswer({ path: "package.json", exports: [] }, { path: "package.json", content: '{\n  // npm reads strict JSON\n  "name": "x"\n}\n' }, "python3").reason, /the JSON does not parse/);
+});
+
 test("dotted exports are checked as members: a method of a class, a key of an exported object", () => {
   const py = { path: "app/store.py", exports: [{ name: "NoteStore", kind: "class", params: [], returns: "" }, { name: "NoteStore.add", kind: "function", params: [], returns: "Note" }] };
   assert.equal(checkAnswer(py, { path: py.path, content: "class NoteStore:\n    def add(self, n):\n        return n\n" }, "python3").ok, true);
