@@ -16,6 +16,7 @@
  * name a file twice without saying so).
  */
 
+import { readFileSync } from "node:fs";
 import type { TaskPacket } from "./types.js";
 
 export interface BatchItemResult {
@@ -142,4 +143,54 @@ export async function runBatch(deps: BatchDeps): Promise<BatchResult> {
     max_parallel: maxParallel,
     items,
   };
+}
+
+/**
+ * The packets for one execute_batch call: inline `packets`, or `packets_path`
+ * (plan-to-packets output, optionally narrowed by `packet_ids`). Reading the
+ * file here keeps ~15k tokens of packets out of the orchestrator's context,
+ * where it was read once and then typed back out as tool input (Runs 27b/28).
+ * Packets with no apply block (tooling) are skipped and named in the receipt.
+ */
+export function batchPacketsFromArgs(a: any): { list: unknown[]; skipped: string[] } {
+  let list: unknown[];
+  if (typeof a?.packets_path === "string" && a.packets_path) {
+    const raw = JSON.parse(readFileSync(a.packets_path, "utf-8"));
+    list = Array.isArray(raw) ? raw : Array.isArray(raw?.packets) ? raw.packets : [];
+    if (Array.isArray(a.packet_ids) && a.packet_ids.length) {
+      const want = new Set<string>(a.packet_ids);
+      const found = list.filter((p: any) => want.has(p?.id));
+      const missing = [...want].filter((id) => !found.some((p: any) => p.id === id));
+      if (missing.length) throw new Error(`execute_batch: packet_ids not in ${a.packets_path}: ${missing.join(", ")}`);
+      list = found;
+    }
+    const skipped = list.filter((p: any) => !p?.apply).map((p: any) => String(p?.id));
+    list = list.filter((p: any) => p?.apply);
+    if (list.length === 0) throw new Error(`execute_batch: no apply-form packets in ${a.packets_path}`);
+    return { list, skipped };
+  }
+  if (!Array.isArray(a?.packets) || a.packets.length === 0) {
+    throw new Error("execute_batch: pass `packets` (a non-empty array of TaskPackets) or `packets_path`.");
+  }
+  return { list: a.packets, skipped: [] };
+}
+
+// Receipt fields that restate the routing and bookkeeping of a packet that went fine.
+const ROUTINE_OUTCOME_KEYS = new Set(["status", "decision", "apply", "attempts", "tokens", "cost_usd", "terminal_reason", "events_written"]);
+
+/**
+ * The receipt the orchestrator reads, on one line. A packet that applied and
+ * verified keeps only what a decision needs (path, lines, cost, attempts,
+ * verify, and any non-routine outcome field such as deferred commands);
+ * anything else keeps its full outcome. Every figure is already in telemetry.
+ */
+export function compactBatchReceipt(result: BatchResult, skipped: string[] = []): unknown {
+  const items = result.items.map((it) => {
+    const o = it.outcome as any;
+    if (it.status !== "applied" || !o || o.verify?.ok === false) return it;
+    const extra: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(o)) if (!ROUTINE_OUTCOME_KEYS.has(k) && k !== "verify") extra[k] = v;
+    return { id: it.id, status: it.status, path: it.artifact_path, lines: o.apply?.lines, cost_usd: it.cost_usd, attempts: it.attempts, verify: o.verify, ...extra };
+  });
+  return { ...result, items, ...(skipped.length ? { skipped_no_apply: skipped } : {}) };
 }

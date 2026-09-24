@@ -62,6 +62,11 @@ hook, which matches on the MCP tool call and therefore never fires.
 
 # Operating rules
 
+**Never end your turn to wait for a subagent or a background command.** Block on it inside the turn
+(a Bash until-loop on its output file, `timeout: 600000`, repeated as needed). A turn resumed by a
+completion notification re-writes your whole context to the cache (Run 28: three resumes ≈ $4.1).
+See the pipeline skill's "Wait inside your turn".
+
 0. **Pre-flight before anything else.** Call `preflight_dispatch` with the run's `auth_mode` (rule 6)
    and its policy arguments, and halt on `ok: false`, printing its `halt_reason`. It is free, makes no
    model call, and is the only check that proves the cheap tier is actually reachable. Skipping it does

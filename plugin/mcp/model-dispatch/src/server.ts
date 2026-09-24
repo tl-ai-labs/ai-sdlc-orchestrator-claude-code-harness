@@ -47,7 +47,7 @@ import {
   normalizeApply,
   runApplyLoop,
 } from "./apply.js";
-import { runBatch } from "./batch.js";
+import { runBatch, batchPacketsFromArgs, compactBatchReceipt } from "./batch.js";
 import { resolveProjectRoot } from "./project-root.js";
 import { log, setLevel, configureSinks, type Level } from "./log.js";
 
@@ -556,7 +556,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: "object",
         properties: {
-          packets: { type: "array", items: { type: "object" }, description: "TaskPackets, each with an apply block (plan-to-packets output)." },
+          packets: { type: "array", items: { type: "object" }, description: "TaskPackets, each with an apply block (plan-to-packets output). Omit when packets_path is given." },
+          packets_path: { type: "string", description: "Path to packets.json (plan-to-packets output); the server reads it so the packets never pass through the caller's context. Packets without an apply block (tooling) are skipped and listed in the receipt." },
+          packet_ids: { type: "array", items: { type: "string" }, description: "With packets_path: run only these ids." },
           policy_name: { type: "string" },
           project_root: { type: "string" },
           policy_path: { type: "string" },
@@ -566,7 +568,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           max_parallel: { type: "number", description: "1–8, default 4." },
           log_level: { type: "string", enum: ["error", "warn", "info", "debug", "trace"] },
         },
-        required: ["packets"],
+        required: [],
       },
     },
     {
@@ -690,8 +692,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "execute_batch": {
         const a = args as any;
-        if (!Array.isArray(a.packets) || a.packets.length === 0) throw new Error("execute_batch: `packets` must be a non-empty array of TaskPackets.");
-        const packets: TaskPacket[] = a.packets.map((p: unknown) => validateTaskPacket(p));
+        const { list: rawPackets, skipped } = batchPacketsFromArgs(a);
+        const packets: TaskPacket[] = rawPackets.map((p: unknown) => validateTaskPacket(p));
         for (const p of packets) {
           if (!normalizeApply(p.apply)) throw new Error(`execute_batch: packet ${p.id} has no apply block; a batch carries apply-form packets only (the receipt is what makes a batch cheap).`);
         }
@@ -704,7 +706,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           log: (level, event, fields) => log(level, event, fields),
         });
         log("info", "batch.done", { packets: packets.length, status: result.status, counts: JSON.stringify(result.counts), cost_usd: result.cost_usd, duration_ms: result.duration_ms });
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify(compactBatchReceipt(result, skipped)) }] };
       }
       case "simulate_policy": {
         const a = args as any;

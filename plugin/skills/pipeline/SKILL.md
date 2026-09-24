@@ -308,10 +308,24 @@ For each packet, in dependency order:
 
 Write the returned file content to disk at the packet's stated `artifact_path` — **only for packets without `apply`**. Every brownfield codegen, tests, docs and debug packet that produces a file uses the apply form below instead.
 
+**Wait inside your turn — never end it to wait (every mode, every policy).** When a subagent or a
+long test run is in flight, block on it with a Bash until-loop on its output file
+(`until [ -s <file> ]; do sleep 15; done`, `timeout: 600000`, repeated if it needs longer), or
+delegate the subagent in the foreground. Do not end your turn and rely on a completion
+notification to resume you: a resumed turn missed the prompt cache and re-wrote the whole
+context every time (Run 28: three resumes, 408k tokens of cache writes, ≈ $4.1 — more than the
+entire mechanical tier of every run in the study). Two reviewers can still run in parallel:
+delegate both, then wait on both output files in one loop.
+
 **Batch the phase (brownfield, multi-model policies).** Do not dispatch the derived packets one call at
-a time. One `execute_batch` call carries every apply-form packet of the phase (`packets.json` minus
-`tooling` steps and anything already done), with the same `policy_name`, `project_root`, `run_id`,
-`telemetry_path` and `cache_context` you would pass to `execute_with_model`. The server runs them in
+a time. One `execute_batch` call carries every apply-form packet of the phase: pass
+`packets_path: <output_dir>/packets.json` (plus `packet_ids` when only some should run — e.g. the
+ones after a tooling step, or refinement packets you wrote to a second file) with the same
+`policy_name`, `project_root`, `run_id`, `telemetry_path` and `cache_context` you would pass to
+`execute_with_model`. **Do not `Read` packets.json and do not paste packets inline** — the server
+reads the file, skips `tooling` packets (listed as `skipped_no_apply`), and returns a compact
+receipt: full detail only for packets that did not apply and verify. Reading the file and typing it
+back put ~15k tokens into every later turn (Runs 27b/28). To check one packet, `jq` that one id. The server runs them in
 parallel (`max_parallel`, default 4) in `depends_on` order, never two on one `artifact_path` at once,
 and returns one receipt per packet plus totals — one turn for the phase instead of one per packet
 (measured: 25 turns, $3.21, for 21 packets on the row-8 run). Read the batch result:

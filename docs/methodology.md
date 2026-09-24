@@ -247,6 +247,13 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.8.8
+
+| Area | Before | From v0.8.8 |
+|---|---|---|
+| Waiting on subagents and long tests | The orchestrator sometimes ended its turn and was resumed by a completion notification; each resume missed the prompt cache and re-wrote the whole context (Run 28: three resumes, 408k cache-write tokens, ≈ $4.1) | The orchestrator waits inside its turn (a Bash until-loop on the output file). Rates and telemetry fields are unchanged; the saving shows as fewer 1h cache-write tokens. |
+| `execute_batch` input and receipt | The orchestrator read `packets.json` (~15k tokens) and typed every packet back as tool input; the receipt restated routing and token counts for every applied packet (~8k tokens) | `packets_path` (+ optional `packet_ids`) lets the server read the file; tooling packets are skipped and listed. The receipt is one line, and an applied, verified packet keeps only path, lines, cost, attempts, verify and any non-routine field. Telemetry still records every figure. |
+
 ### v0.8.7
 
 | Area | Before | From v0.8.7 |

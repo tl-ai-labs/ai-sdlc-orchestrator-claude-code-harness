@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const { runBatch, validateBatch } = await import(join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "batch.js"));
+const { runBatch, validateBatch, batchPacketsFromArgs, compactBatchReceipt } = await import(join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "batch.js"));
 const silent = () => {};
 const pk = (id, over = {}) => ({ id, phase: "codegen", task_type: "x", module: "m", instruction: "", inputs: [], acceptance: [], budget: { maxInputTokens: 1, maxOutputTokens: 1 }, pass_id: "r", artifact_path: `src/${id}.ts`, apply: { write: true }, ...over });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -84,4 +84,34 @@ test("validateBatch refuses duplicate ids and depends_on cycles; ids outside the
   assert.throws(() => validateBatch([pk("a"), pk("a")]), /duplicate packet id a/);
   assert.throws(() => validateBatch([pk("a", { depends_on: ["b"] }), pk("b", { depends_on: ["a"] })]), /cycle: a → b → a/);
   assert.doesNotThrow(() => validateBatch([pk("a", { depends_on: ["ran-earlier"] })]));
+});
+
+test("batchPacketsFromArgs reads packets_path (array or {packets}), narrows by packet_ids, skips tooling", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "batch-path-"));
+  try {
+    const f = join(dir, "packets.json");
+    writeFileSync(f, JSON.stringify({ packets: [pk("a"), pk("b"), pk("t", { apply: undefined })] }));
+    const all = batchPacketsFromArgs({ packets_path: f });
+    assert.deepEqual(all.list.map((p) => p.id), ["a", "b"]);
+    assert.deepEqual(all.skipped, ["t"]);
+    writeFileSync(f, JSON.stringify([pk("a"), pk("b")]));
+    assert.deepEqual(batchPacketsFromArgs({ packets_path: f, packet_ids: ["b"] }).list.map((p) => p.id), ["b"]);
+    assert.throws(() => batchPacketsFromArgs({ packets_path: f, packet_ids: ["zz"] }), /packet_ids not in/);
+    assert.deepEqual(batchPacketsFromArgs({ packets: [pk("x")] }).list.map((p) => p.id), ["x"]);
+    assert.throws(() => batchPacketsFromArgs({}), /pass `packets`/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("compactBatchReceipt trims applied+verified items, keeps failures and non-routine fields whole", () => {
+  const ok = { id: "a", status: "applied", artifact_path: "src/a.ts", cost_usd: 0.01, attempts: 1,
+    outcome: { status: "applied", decision: { modelId: "m" }, apply: { lines: 12 }, verify: { ok: true, ran: 2 }, tokens: {}, verify_deferred: ["pnpm typecheck"] } };
+  const bad = { id: "b", status: "verify_failed", cost_usd: 0.02, attempts: 2, outcome: { status: "verify_failed", verify: { ok: false, tail: "x" } } };
+  const out = compactBatchReceipt({ status: "partial", counts: {}, cost_usd: 0.03, duration_ms: 1, max_parallel: 4, items: [ok, bad] }, ["t"]);
+  assert.deepEqual(out.items[0], { id: "a", status: "applied", path: "src/a.ts", lines: 12, cost_usd: 0.01, attempts: 1, verify: { ok: true, ran: 2 }, verify_deferred: ["pnpm typecheck"] });
+  assert.deepEqual(out.items[1], bad);
+  assert.deepEqual(out.skipped_no_apply, ["t"]);
 });
