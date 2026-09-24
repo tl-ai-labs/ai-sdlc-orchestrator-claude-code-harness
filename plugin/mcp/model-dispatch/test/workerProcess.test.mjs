@@ -25,6 +25,7 @@ import {
   mapSidecarTokens,
   resolveWorkerPython,
   sidecarToolCallCount,
+  sidecarUsageSemantics,
   workerTaskMarkdown,
   workerThinkingLevel,
   workerVenvPython,
@@ -195,6 +196,7 @@ test("sidecar token counts are read under Python's field names", () => {
   // undefined, which floors to zero, which reports a delegation that cost real
   // money as having cost nothing.
   const tokens = mapSidecarTokens({
+    sdk_version: "0.1.9",
     usage: {
       prompt_token_count: 11554,
       cached_content_token_count: 9000,
@@ -202,9 +204,9 @@ test("sidecar token counts are read under Python's field names", () => {
       thoughts_token_count: 97,
     },
   });
-  // prompt_token_count INCLUDES cached, and computeCostUsd requires the two to
-  // be disjoint. Without the subtraction every cached token is billed twice —
-  // once at the full rate and once at the cached rate — which makes an
+  // On SDK 0.1.9 prompt_token_count INCLUDES cached, and computeCostUsd requires
+  // the two to be disjoint. Without the subtraction every cached token is billed
+  // twice — once at the full rate and once at the cached rate — which makes an
   // effective cache look more expensive than no cache at all.
   assert.equal(tokens.input, 2554);
   assert.equal(tokens.input_cached, 9000);
@@ -216,19 +218,72 @@ test("sidecar token counts are read under Python's field names", () => {
   assert.equal(tokens.output_reasoning, 97);
 });
 
+test("SDK 0.1.16 reports fresh and cached input separately, so both are billed", () => {
+  // Measured, not assumed: a job on Antigravity SDK 0.1.16 whose per-call records sum to exactly
+  // these totals, and whose input Google's own Cloud Monitoring counter
+  // (aiplatform.googleapis.com/publisher/online_serving/token_count) recorded as
+  // prompt + cached = 168,153 tokens. In this version prompt_token_count is the FRESH input only
+  // and cached_content_token_count comes on top of it. Subtracting one from the other (the
+  // Gemini API convention) floors fresh input to zero and bills the dearest tokens as free.
+  const tokens = mapSidecarTokens({
+    sdk_version: "0.1.16",
+    usage: { prompt_token_count: 39439, cached_content_token_count: 128714, candidates_token_count: 4240, thoughts_token_count: 0 },
+  });
+  assert.equal(tokens.input, 39439);
+  assert.equal(tokens.input_cached, 128714);
+  assert.equal(tokens.input + tokens.input_cached, 168153, "Google counted 168,153 input tokens for this job");
+  assert.equal(tokens.output, 4240);
+});
+
 test("an absent, empty or impossible sidecar degrades to zeros rather than NaN", () => {
   for (const input of [null, undefined, {}, { usage: null }]) {
     const t = mapSidecarTokens(input);
     assert.deepEqual(t, { input: 0, input_cached: 0, output: 0, output_reasoning: 0 });
   }
-  // Vendor edge case: a cached count larger than the prompt count. Unclamped it
-  // yields a negative fresh count, which flows into the run's totals and can
-  // make a phase appear to have cost less than nothing.
+  // A cached count larger than the prompt count cannot be the inclusive reading;
+  // it is what the disjoint versions report. With no version recorded the
+  // sidecar is unverified and takes the disjoint reading: nothing goes negative
+  // and nothing is billed as free.
   const weird = mapSidecarTokens({
     usage: { prompt_token_count: 100, cached_content_token_count: 400 },
   });
-  assert.equal(weird.input, 0);
+  assert.equal(weird.input, 100);
   assert.equal(weird.input_cached, 400);
+  // Even on a version listed as inclusive, impossible numbers are not
+  // subtracted into a negative or a zero: the sidecar is treated as unverified.
+  const contradictory = mapSidecarTokens({
+    sdk_version: "0.1.9",
+    usage: { prompt_token_count: 100, cached_content_token_count: 400 },
+  });
+  assert.equal(contradictory.input, 100);
+  assert.equal(contradictory.input_cached, 400);
+});
+
+test("SDK 0.1.9 reports cached input as part of prompt, measured the same way", () => {
+  // A job on Antigravity SDK 0.1.9 (two model calls, the second partly cached)
+  // that Google's own counter recorded as exactly 24,245 input tokens — the
+  // prompt_token_count alone. Here the cached part is inside it.
+  const tokens = mapSidecarTokens({
+    sdk_version: "0.1.9",
+    usage: { prompt_token_count: 24245, cached_content_token_count: 7113, candidates_token_count: 137, thoughts_token_count: 0 },
+  });
+  assert.equal(tokens.input, 17132);
+  assert.equal(tokens.input_cached, 7113);
+  assert.equal(tokens.input + tokens.input_cached, 24245, "Google counted 24,245 input tokens for this job");
+});
+
+test("only SDK versions checked against Google's counter get a named reading", () => {
+  assert.equal(sidecarUsageSemantics({ sdk_version: "0.1.9", usage: {} }), "inclusive");
+  assert.equal(sidecarUsageSemantics({ sdk_version: "0.1.16", usage: {} }), "disjoint");
+  // Neither a version between the checked ones, nor a newer one, nor a missing
+  // one is guessed at.
+  for (const v of ["0.1.12", "0.1.18", "unknown", undefined]) {
+    assert.equal(sidecarUsageSemantics({ sdk_version: v, usage: {} }), "unverified", String(v));
+  }
+  // An unverified version is billed on the larger reading: fresh = prompt.
+  const t = mapSidecarTokens({ sdk_version: "0.1.18", usage: { prompt_token_count: 5000, cached_content_token_count: 2000 } });
+  assert.equal(t.input, 5000);
+  assert.equal(t.input_cached, 2000);
 });
 
 test("the tool-call count comes from the count, not from the capped list", () => {

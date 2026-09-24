@@ -440,7 +440,10 @@ read straight off disk after it finished. Nothing here is reconstructed; it is w
 <p>The usage sidecar for the same packet, and the clearest single view of what the agent door costs.
   <strong>464,291 input tokens</strong> &mdash; 379,548 of them cached &mdash; plus 3,766 tokens of content and
   4,990 of reasoning, to produce a 28-line file. <code>thinking</code> is set to <code>NONE</code>; the 4,990
-  reasoning tokens are what the agent loop spends anyway, not something the policy asked for.</p>
+  reasoning tokens are what the agent loop spends anyway, not something the policy asked for.
+  This sidecar was written by SDK 0.1.9, which counts the cached tokens <em>inside</em>
+  <code>prompt_token_count</code>; SDK 0.1.16 counts them <em>on top</em> of it, and the plugin reads each
+  sidecar by the SDK version recorded in it.</p>
 <p>Below the usage block, all 19 tool calls are recorded with their arguments and resolved paths: 8
   <code>run_command</code>, 4 <code>list_directory</code>, 4 <code>edit_file</code>, 2 <code>view_file</code>,
   1 <code>find_file</code>. The eight shell commands are the agent installing dependencies and running the
