@@ -67,7 +67,7 @@ test("the run card: plugin version, commit and whether the tree is clean, Claude
   assert.equal(outside.claude_code_version, null);
 });
 
-test("a second pre-flight that asks for a different auth mode or policy is refused; the same one is fine", () => {
+test("a run whose stages started under one auth mode or policy conflicts with a later pre-flight asking for another; the same values do not", () => {
   const first = { authMode: "estimated", policyName: "opus-only-v5", projectRoot: "/p" };
   assert.equal(runStateConflict(undefined, first), null);
   assert.equal(runStateConflict(first, { ...first }), null);

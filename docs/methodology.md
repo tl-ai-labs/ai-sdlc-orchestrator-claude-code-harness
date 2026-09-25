@@ -247,6 +247,14 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.7.7
+
+| Area | Before | From v0.7.7 |
+|---|---|---|
+| A second `/mmo:` run in the same chat with another policy or auth mode | Refused at pre-flight ("this run's pre-flight already recorded policy …"): the lock added in v0.7.5 lasted the whole chat (one server process) and was never cleared, so brownfield's per-run policy choice at Gate 0 failed on a chat's second job | Runs. The lock is per run: the executor binds the auth mode and policy at a spec's first stage, and a later stage of the same spec asked to run under different ones stops (`stopped`) and types nothing. Brownfield never uses the executor, so it has no lock, as before v0.7.5 (`test/executor.test.mjs`: the real server answers two pre-flights with different policies) |
+
+No dispatched event is priced differently, and a run that uses one policy from start to finish, as every measured run did, behaves exactly as on v0.7.6.
+
 ### v0.7.6
 
 | Area | Before | From v0.7.6 |

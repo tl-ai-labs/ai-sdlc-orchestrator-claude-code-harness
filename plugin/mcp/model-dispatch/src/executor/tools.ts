@@ -17,7 +17,7 @@
  * pre-flight or fixed in code, so no stage can differ from another — or one
  * arm from the other — by a value a model typed.
  */
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ModelConfig, Policy, SelectOverrides, TelemetryEvent } from "../types.js";
 import { getModel } from "../policy.js";
@@ -29,6 +29,7 @@ import { renderShared } from "./brief.js";
 import { boundReceipt, executeStage, type RepairItem, type Stage } from "./run.js";
 import { AgyTypist, FlashCompletionTypist, LeanOpusTypist, type Typist } from "./typists.js";
 import { LEGACY_GEMINI_ADAPTER_ID } from "../adapters/index.js";
+import { runStateConflict } from "../runCard.js";
 
 /**
  * Every typist types at LOW effort. One pre-registered rule chose it on the
@@ -216,6 +217,17 @@ export function fallbackLeaf(policy: Policy): ModelConfig {
   return leaf;
 }
 
+/**
+ * One run, one auth mode and policy (0.7.7). A run is its spec file: the first
+ * execute_stage of a spec binds the auth mode and policy pre-flight recorded,
+ * and a later stage of the same spec stops rather than run under different
+ * ones, so one run's files never come from two policies. A new run (another
+ * spec) binds its own, so two separate /mmo: runs in one chat can use
+ * different policies. Until 0.7.6 this lock sat on pre-flight and lasted the
+ * whole chat (one server process), which also refused that second run.
+ */
+const RUN_BINDINGS = new Map<string, RunState>();
+
 export async function handleExecutorTool(name: string, a: any, ctx: { run?: () => RunState | undefined; policy?: (run: RunState) => Policy; overrides: SelectOverrides; progress?: ProgressChannel }): Promise<Reply> {
   if (name === "submit_spec_section") {
     // The section travels as a file the architect wrote (never inline: that path failed 7 times in 24 on 24 Sep).
@@ -240,6 +252,15 @@ export async function handleExecutorTool(name: string, a: any, ctx: { run?: () =
   const authMode = run.authMode;
   const policy = ctx.policy!(run);
   const spec = loadSpec(a.spec_path);
+  const runKey = realpathSync(a.spec_path);
+  const bound = RUN_BINDINGS.get(runKey);
+  const switched = bound ? runStateConflict(bound, run) : null;
+  if (switched) {
+    log("warn", "executor.stage.run_switched", { stage: a.stage, spec_path: runKey, reason: switched });
+    const stopped = `${switched}. A run cannot switch its auth mode or policy halfway, so nothing was typed. Start a new /mmo: run to use the new ones.`;
+    return { ...compact(boundReceipt({ stage: a.stage, units: 0, written: 0, failed: [], stopped, by_door: {}, calls: 0, transport_waits: 0, cost_usd: 0, seconds: 0 })), isError: true };
+  }
+  if (!bound) RUN_BINDINGS.set(runKey, { ...run });
   let repairs: RepairItem[] | undefined;
   let notRouted: { file: string; reason: string }[] = [];
   if (a.stage === "repair") {

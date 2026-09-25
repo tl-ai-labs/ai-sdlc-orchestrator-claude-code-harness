@@ -43,7 +43,7 @@ import { resolveProjectRoot } from "./project-root.js";
 import { log, setLevel, configureSinks, type Level } from "./log.js";
 // Typed-spec executor tools (greenfield --executor): listed below, handled in executor/tools.ts.
 import { EXECUTOR_TOOLS, EXECUTOR_TOOL_NAMES, handleExecutorTool, type RunState } from "./executor/tools.js";
-import { runCard, runStateConflict } from "./runCard.js";
+import { runCard } from "./runCard.js";
 
 /**
  * Cheap up-front schema validation for TaskPacket inputs to execute_with_model.
@@ -644,9 +644,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
         const a = args as any;
         // Parse before the policy loads so a missing mode fails on the mode.
         const authMode = parseAuthMode(a.auth_mode);
+        // Pre-flight opens a run: it records the auth mode and policy the run's
+        // executor stages will use. It never refuses a new one (0.7.7): the lock
+        // that keeps one run on one policy is the executor's, per run
+        // (executor/tools.ts, RUN_BINDINGS). Until 0.7.6 it sat here and lasted
+        // the whole chat, so a second, separate /mmo: run with another policy
+        // or auth mode was refused.
         const next = { authMode, policyName: a.policy_name, projectRoot: a.project_root, policyPath: a.policy_path };
-        const conflict = runStateConflict(runState, next);
-        if (conflict) return { content: [{ type: "text", text: JSON.stringify({ ok: false, halt_reason: conflict }, null, 2) }] };
         const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
         const out = preflightDispatch(policy, authMode, a.project_root);
         runState = next;
