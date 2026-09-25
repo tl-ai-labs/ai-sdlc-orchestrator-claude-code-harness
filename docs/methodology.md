@@ -267,6 +267,8 @@ The rule of the join: nothing v0.7.7 does changes, and ambient mode is added on 
 | The start-of-chat note | At session start, so a typed `/mmo:` session carried it when the mode was on | At the chat's first prompt that is not a `/mmo:` command; again after a compaction |
 | The job tools in the server's tool list | Always listed | Listed only when ambient mode is on for the project |
 | A hand-over's background work that fails before anyone collects it | Could end the server process (an unobserved rejection), and with it a pipeline in the same session | Kept for the collector and marked observed; `job_result` still reports the failure |
+| A chat message that asks for one of the eight `/mmo:` jobs (ambient mode on) | An ordinary chat message | Recognised by fixed patterns plus the folder, and started as that job's workflow, unchanged. An unclear one is asked about once (or started, with `routing_unsure: auto`). Switches: `routing`, `routing_unsure`, `routing_defaults` ([ambient-mode.md](ambient-mode.md), "Routing") |
+| A `/mmo:` command the model starts by itself (ambient mode on) | Allowed (v0.7.6); refused, typed-only (v0.8.2) | Allowed only for the routed workflow or one the person agreed to; typed commands always run |
 
 No dispatched pipeline event is priced differently from v0.7.6; ambient hand-overs are priced as in v0.8.2.
 

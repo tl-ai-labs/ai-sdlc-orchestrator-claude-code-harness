@@ -75,6 +75,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh pre-skill",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [

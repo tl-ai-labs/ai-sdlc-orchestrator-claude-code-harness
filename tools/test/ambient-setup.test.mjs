@@ -13,6 +13,9 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
+const { serverBuilt } = await import(join(ROOT, "tools", "test", "lib", "server-built.mjs"));
+// The workflows' model check needs the built server; see tools/test/lib/server-built.mjs.
+const SKIP = serverBuilt();
 const SCRIPT = join(ROOT, "plugin", "scripts", "ambient", "setup.mjs");
 const { plan, addReceipt } = await import(SCRIPT);
 const { loadConfig } = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "config.mjs"));
@@ -24,13 +27,15 @@ function home() {
   return { dir, env, settings: join(dir, ".claude", "settings.json"), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("the default is a dry run: it reports every change and writes nothing", () => {
+test("the default is a dry run: it reports every change and writes nothing", { skip: SKIP ?? false }, () => {
   const h = home();
   try {
     writeFileSync(h.settings, JSON.stringify({ theme: "dark", hooks: { Stop: [] } }));
     const before = readFileSync(h.settings, "utf8");
     const report = plan({ env: h.env });
-    assert.deepEqual(report.map((r) => r.status), ["would-change", "would-change", "would-change", "would-change"]);
+    // Five groups since routing (25 Sep): mode, cache, bash, model, routing.
+    assert.deepEqual(report.map((r) => r.group), ["mode", "cache", "bash", "model", "routing"]);
+    assert.deepEqual(report.map((r) => r.status), ["would-change", "would-change", "would-change", "would-change", "would-change"]);
     assert.equal(readFileSync(h.settings, "utf8"), before);
     assert.deepEqual(readdirSync(join(h.dir, ".claude")), ["settings.json"], "no backup, no new file");
     assert.ok(!existsSync(h.env.MMO_HOME));
@@ -88,5 +93,24 @@ test("the command line prints the plan and says plainly that nothing was changed
     assert.match(out, /Nothing was changed/);
     assert.ok(!existsSync(h.settings));
     assert.match(execFileSync("node", [SCRIPT, "--status"], { env: { ...process.env, ...h.env }, cwd: h.dir }).toString(), /mode: off {3}from: defaults/);
+  } finally { h.cleanup(); }
+});
+
+test("the routing group sets the helpers' model inside the settings file's env block and keeps every other entry there", { skip: SKIP ?? false }, () => {
+  // Full workflows check, before they start, that CLAUDE_CODE_SUBAGENT_MODEL matches the policy's model
+  // (plugin/scripts/driver-model-check.mjs). The desktop app reads it only from this file's env block, and
+  // only when a chat starts. A shallow merge would replace the whole env block and drop the person's own entries.
+  const h = home();
+  try {
+    writeFileSync(h.settings, JSON.stringify({ theme: "dark", env: { MY_TOKEN_FILE: "/x", OTHER: "1" } }));
+    const dry = plan({ env: h.env }).find((r) => r.group === "routing");
+    assert.equal(dry.status, "would-change");
+    assert.match(dry.why, /claude-opus-5/, "it names the model the workflows' own check wants for the default policy");
+    plan({ env: h.env, apply: ["routing"] });
+    const after = JSON.parse(readFileSync(h.settings, "utf8"));
+    assert.deepEqual(after.env, { MY_TOKEN_FILE: "/x", OTHER: "1", CLAUDE_CODE_SUBAGENT_MODEL: "claude-opus-5" });
+    assert.equal(after.theme, "dark");
+    assert.ok(readdirSync(join(h.dir, ".claude")).some((f) => f.startsWith("settings.json.before-mmo-")), "a backup first");
+    assert.equal(plan({ env: h.env }).find((r) => r.group === "routing").status, "already-set");
   } finally { h.cleanup(); }
 });

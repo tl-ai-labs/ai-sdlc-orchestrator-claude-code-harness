@@ -3,6 +3,12 @@
   "mode": "off",
   "thinker": "claude-opus-5",
   "delegation": "on",
+  "routing": "on",
+  "routing_unsure": "ask",
+  "routing_defaults": {
+    "policy": "opus-plus-flash-v38",
+    "auth": "estimated"
+  },
   "lock_model": true,
   "workers": {
     "flash": "gemini-3.8-flash",

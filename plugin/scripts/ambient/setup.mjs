@@ -10,7 +10,10 @@
  *   node setup.mjs --status [project]    the effective mode and where it comes from
  *
  * Groups: mode (the plugin's own ~/.mmo-ambient/ambient.json), cache, bash,
- * model (three keys of Claude Code's user settings file).
+ * model (three keys of Claude Code's user settings file), routing (one entry
+ * of that file's env block: the model full workflows check their helpers run
+ * on, CLAUDE_CODE_SUBAGENT_MODEL, which Claude Code reads only when a chat
+ * starts; the env block is merged entry by entry, never replaced).
  *
  * Every setting name below was checked in the Claude Code 2.1.270 program text:
  *   promptCacheTtl, subagentPromptCacheTtl  "5m" | "1h"
@@ -19,18 +22,43 @@
  * The settings file is MERGED, never replaced, and a timestamped copy is
  * written beside it first. A file that does not parse is left untouched.
  */
+import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig, sha256 } from "./lib/config.mjs";
 import { ensureDir, mmoHome } from "./lib/paths.mjs";
 
+const DRIVER_MODEL_CHECK = resolve(dirname(fileURLToPath(import.meta.url)), "..", "driver-model-check.mjs");
+
+/**
+ * The model the workflows' own run-start check wants for this policy, from
+ * that check itself (the pipeline's router), or null when it cannot say.
+ */
+export function workflowDriverModel(policy, cwd = process.cwd()) {
+  try {
+    const out = execFileSync(process.execPath, [DRIVER_MODEL_CHECK, "--project-root", cwd, "--policy", policy, "--print-only"], { stdio: ["ignore", "pipe", "pipe"], timeout: 8000 }).toString().trim();
+    return /^[\w.:-]+$/.test(out) ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 export function proposals(config, mode = "observe") {
+  const driver = workflowDriverModel(config.routing_defaults?.policy ?? "opus-plus-flash-v38");
   return {
     mode: { file: "ambient", set: { mode }, why: `turns ambient mode to "${mode}" for this account (observe records what each rule would do and changes nothing)` },
     cache: { file: "claude", set: { promptCacheTtl: "1h", subagentPromptCacheTtl: "1h" }, why: "a pause longer than five minutes otherwise re-writes the whole context at the cache-write price; on a subscription the main chat already gets one hour, this also covers metered logins and subagents. One-hour writes cost more per token, so keep this only if the on/off numbers say it pays" },
     bash: { file: "claude", set: { bashOutputMaxChars: 12000 }, why: "Claude Code's own cap on command output kept inline (default 30000); past it the model gets a preview and a file path" },
     model: { file: "claude", set: { model: config.thinker }, why: `new sessions start on the policy's thinker model (${config.thinker})` },
+    routing: driver
+      ? {
+          file: "claude",
+          set: (current) => ({ env: { ...(current.env && typeof current.env === "object" && !Array.isArray(current.env) ? current.env : {}), CLAUDE_CODE_SUBAGENT_MODEL: driver } }),
+          why: `lets zero-touch start full workflows: before starting, they check that their helpers run on ${driver} (the default policy's model), and Claude Code reads this setting only when a chat starts`,
+        }
+      : { unavailable: "the workflows' model check could not run (build the plugin's server first: node plugin/scripts/verify-setup.mjs --fix)" },
   };
 }
 
@@ -52,13 +80,16 @@ export function plan({ env = process.env, apply = [], mode = "observe", now = ne
   const out = [];
   const pending = {};
   for (const [group, p] of Object.entries(proposals(config, mode))) {
+    if (p.unavailable) { out.push({ group, file: files.claude, status: "skipped", why: p.unavailable }); continue; }
     const file = files[p.file];
     const current = readJsonOrNull(file);
     if (current === null) { out.push({ group, file, status: "skipped", why: "the file exists but is not valid JSON; it was left untouched" }); continue; }
-    const changes = Object.entries(p.set).filter(([k, v]) => JSON.stringify(current[k]) !== JSON.stringify(v)).map(([k, v]) => ({ key: k, from: current[k] ?? null, to: v }));
+    // A proposal may depend on what the file holds already (routing merges into the env block).
+    const set = typeof p.set === "function" ? p.set(current) : p.set;
+    const changes = Object.entries(set).filter(([k, v]) => JSON.stringify(current[k]) !== JSON.stringify(v)).map(([k, v]) => ({ key: k, from: current[k] ?? null, to: v }));
     const wanted = apply.includes("all") || apply.includes(group);
     out.push({ group, file, why: p.why, changes, status: changes.length === 0 ? "already-set" : wanted ? "applied" : "would-change" });
-    if (wanted && changes.length) (pending[file] ??= { current, set: {} }).set = { ...pending[file].set, ...p.set };
+    if (wanted && changes.length) (pending[file] ??= { current, set: {} }).set = { ...pending[file].set, ...set };
   }
   for (const [file, { current, set }] of Object.entries(pending)) {
     mkdirSync(dirname(file), { recursive: true });

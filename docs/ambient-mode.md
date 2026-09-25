@@ -201,40 +201,71 @@ A local page over the real records: the realised ledger as the headline, the sha
 node plugin/scripts/ambient/setup.mjs                   # dry run: shows what WOULD change
 node plugin/scripts/ambient/setup.mjs --apply=mode --mode=on
 node plugin/scripts/ambient/setup.mjs --apply=cache,bash,model
+node plugin/scripts/ambient/setup.mjs --apply=routing      # the one setting full workflows need (takes effect in a new chat)
 node plugin/scripts/ambient/setup.mjs --receipt <project>   # trust that project's .sdlc/ambient.json as it is now
 node plugin/scripts/ambient/setup.mjs --status
 ```
 
-The Claude Code settings it can propose (`promptCacheTtl`, `subagentPromptCacheTtl`, `bashOutputMaxChars`, `model`) were each checked in the Claude Code 2.1.270 program. Your settings file is merged, never replaced; a timestamped copy is written first; a file that does not parse is left untouched. One-hour cache writes cost more per token than five-minute ones, so keep the cache group only if your own on/off numbers say it pays.
+The Claude Code settings it can propose (`promptCacheTtl`, `subagentPromptCacheTtl`, `bashOutputMaxChars`, `model`) were each checked in the Claude Code 2.1.270 program. The `routing` group adds one entry to the file's `env` block, `CLAUDE_CODE_SUBAGENT_MODEL`, set to the model the workflows' own run-start check wants for the default policy (asked of that check, `driver-model-check.mjs --print-only`); the env block is merged entry by entry. Your settings file is merged, never replaced; a timestamped copy is written first; a file that does not parse is left untouched. One-hour cache writes cost more per token than five-minute ones, so keep the cache group only if your own on/off numbers say it pays.
 
-## Routing a recognised task to its `/mmo:` command (being built)
+## Routing a recognised task to its workflow
 
-**Goal:** a chat message that asks for one of the eight `/mmo:` jobs runs that job's flow exactly as typing the command would. The jobs are greenfield, docs, bugfix, feature-extend, feature-new, refactor, test and deps. Every other message stays with the rules above.
+With ambient mode on, an ordinary chat message that asks for one of the eight `/mmo:` jobs runs that job's workflow exactly as typing the command would. The jobs are greenfield, docs, bugfix, feature-extend, feature-new, refactor, test and deps. Every other message stays with the rules above.
 
-**Status:** recognition is built and tested (`plugin/scripts/ambient/lib/route.mjs`, `tools/test/ambient-route.test.mjs`). It is not yet wired into the hooks, so nothing routes today.
+**What the person sees.** Nothing in zero-touch's own words names the plugin, a command or a model:
+- **A clear request** ("fix the /login endpoint returning 500"): one plain line, "Running this as a full bug-fix workflow.", then the workflow's own steps and approvals, unchanged.
+- **An unclear one Opus recognises** (typos, casual wording): Opus asks once in plain words, "This looks like a job for the full bug-fix workflow (reproduce, fix, test, review). Shall I run it?", and it runs only on a plain yes.
+- **Anything else:** an ordinary chat.
 
-Recognition uses fixed patterns and no model: the same message in the same folder always gets the same answer. Two signals must agree.
+### The switches
 
-**The message** must be an instruction whose job verb opens it, after "please", "can you" and the like.
+All three are in `~/.mmo-ambient/ambient.json`. A project's own `.sdlc/ambient.json` can only switch routing off or back to `ask`, never on or to `auto`.
+
+| Setting | Values | Default |
+|---|---|---|
+| `mode` | off / observe / on | off: the plugin behaves exactly as 0.7.7 |
+| `routing` | on / off | on (acts only with `mode` on). Off: no workflow is ever started from chat |
+| `routing_unsure` | ask / auto | ask. Auto: an unclear request Opus recognises starts without the question |
+| `routing_defaults` | `{policy, auth}` | `opus-plus-flash-v38`, `estimated`: what a routed workflow starts with |
+
+### Recognition (`lib/route.mjs`)
+
+Fixed patterns, no model. Two signals must agree.
+
+**The message** must be an instruction whose job verb opens it.
 - Two jobs route anyway, because each is part of its own job: a bugfix plus its regression test, and an upgrade plus fixing what the upgrade broke.
 - Never routed:
-  - questions, including anything ending in `?` that is not a "can you / could you" request;
+  - questions (a `?` without "can you");
   - negations;
+  - "fix" as a noun;
+  - follow-ups (also / as well / too / again);
   - a bare "fix it";
-  - "fix" used as a noun ("fix is in");
-  - follow-ups ("also …", "… as well", "… too", "… again");
-  - small edits (a typo, formatting, lint, a rename);
-  - two different jobs in one message.
+  - small edits (typo, formatting, lint, rename);
+  - two different jobs.
 
 **The folder:**
-- **Existing:** `/mmo:greenfield`'s own four signals of an existing repo (a non-empty `src/`, a file git tracks, a stack manifest, a README over 200 bytes), or any source file of its own.
+- **Existing:** `/mmo:greenfield`'s own four signals of an existing repo, or any source file of its own.
 - **New:** everything else.
-- A new folder can only be greenfield; an existing project can only be one of the seven brownfield jobs.
-- "Build a small Go service" reads as a new app in a new folder and as nothing in an existing project, because an api, service or dashboard can be a whole app there.
+- A new folder can only be greenfield; an existing project only a brownfield job.
+- Nouns that can be a whole app (api, service, dashboard) are unsure in an existing project.
 
-Unsure means no route.
+Checked offline against 6,934 messages typed on the author's machine: 6 would route, none by mistake. The messages stay on that machine.
 
-**Checked against real chats:** 6,934 distinct messages typed on the author's machine, each routed as if typed in a new folder and as if typed in an existing project, and every routed one read by a person. 6 would route: 5 real new-app prompts and briefs (greenfield), and 1 instruction that the next step's rule excludes, because it came mid-chat after work had started. The messages stay on that machine; only these counts are recorded.
+### The hand-off (`hook.mjs`, `lib/route-flow.mjs`)
+
+Every workflow start, typed or model-started, reaches the hooks as a `PreToolUse` on the `Skill` tool. This was probed live on Claude Code 2.1.282.
+
+1. **Only before the chat has started work.** A route is considered only while there is no earlier file write in the chat (Write, Edit, the batch write, or a Bash command that writes) and no workflow running. A job-shaped message after that is a follow-up.
+2. **A clear route.** The prompt hook tells Opus which workflow to start (the Skill call and its one-line description), the plain line to say, and that the cost mode and policy are already chosen. For a new app, the message is also the brief.
+3. **Guard A.** Until that Skill call, a Write, Edit, Bash, helper agent or job tool is refused with "Start the workflow first". A route belongs to its prompt: the next prompt drops it.
+4. **Guard B.** A `mmo:` Skill call:
+   - **Allowed:** a typed command (it is already a workflow run), and the routed workflow.
+   - **Unclear request Opus recognises:** in `ask` mode it is refused with the plain question to ask and kept as an offer for one reply, which a plain yes turns into a route. In `auto` mode it starts.
+   - **Refused:** any other command (setup, policy, revert, pass, the generic brownfield), a second workflow, or a workflow in a chat that has started work.
+5. **Starting.** Before a workflow is allowed to start, the hook runs that workflow's own run-start check (`driver-model-check.mjs`), with the policy it will run under: the project's saved policy, else `routing_defaults.policy`, which is then saved as `/mmo:setup`'s scripted path saves it and is never overwritten. Then the chat becomes a workflow run and every ambient rule stands down, as for a typed command.
+6. **When a workflow cannot start** (the helpers' model is not set for this chat), nothing starts. Opus tells the person in plain words that a one-time setting is needed and that it takes effect in a new chat. The setting is `node plugin/scripts/ambient/setup.mjs --apply=routing`: it adds `CLAUDE_CODE_SUBAGENT_MODEL` to `~/.claude/settings.json`'s `env` block, merged entry by entry, with a backup first.
+
+Tests: `tools/test/ambient-route.test.mjs` (recognition) and `tools/test/ambient-routing-hooks.test.mjs` (the hand-off, end to end through the shell shim).
 
 ## What ambient mode leaves alone: everything 0.7.7 does
 
@@ -249,6 +280,7 @@ From 0.8.3 ambient mode sits on top of 0.7.7 (0.7.6 plus one policy per run, not
 - the start-of-chat note goes out at the chat's first prompt that is not a `/mmo:` command, never at session start;
 - from the `/mmo:` prompt on, every rule stands down;
 - the pipeline's own agents get their explicit 0.7.7 tool lists.
+- One change with the mode on, in ordinary chat only: Opus may start just the workflow zero-touch recognised or the person agreed to (Guard B), where 0.7.7 lets it start any. Which workflow may start changes; how a workflow runs does not.
 
 The pipeline's own hooks (the write contract, the foreground-helpers guard, telemetry) keep 0.7.7's settings, with no short timeout. Claude Code lets a tool call through when its guard hook times out.
 
@@ -282,6 +314,8 @@ The hooks rely on three behaviours of the app, each verified in Claude Code 2.1.
 Built and tested offline: everything on this page.
 
 Checked on a live Desktop session (22 Sep 2026, with a stand-alone test hook, not the plugin): hooks fire in the Desktop app and receive `scratchpad_dir`, `prompt_id` and `effort`; a replaced `Read` result is what the model sees; `PreModelSwitch` blocks the Desktop model picker with a clear message; and Claude Code DOES allow a whole-file `Write` after a replaced `Read`, which is why the partial-view guard exists.
+
+Routing (25 Sep 2026): built and tested offline, with the platform facts it rests on probed live on Claude Code 2.1.282 (a Skill call for every command start; the prompt hooks fire before any tool in headless runs; a PreToolUse deny stops a command). No routed workflow has run live yet.
 
 Run live on the zero-touch branch, 22–23 Sep 2026: paired chats with the plugin's own hooks on and real workers (Flash through Google, Sonnet through the Claude login). Pair 12 (one pair, receivables brief): $12.50 with hand-overs against $15.59 without (−19.8%); pair 11 lost (+52.8%) and taught the design-file rule. On 0.8.3 (the same code on top of 0.7.6's pipeline) nothing has run live yet.
 

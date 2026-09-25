@@ -217,7 +217,7 @@ Both check the install, show which model each phase will run on, confirm the pla
 
 Thirteen commands, split by purpose. All are declared in [plugin/commands/](plugin/commands/) with the same descriptions shown here.
 
-For savings in ordinary chat, without typing a command, see [ambient mode](docs/ambient-mode.md) (off by default; with it off the plugin behaves exactly as without it).
+For savings in ordinary chat, and for starting the right workflow from a plain request without typing a command, see [ambient mode](docs/ambient-mode.md) (off by default; with it off the plugin behaves exactly as without it).
 
 ### Run the pipeline
 

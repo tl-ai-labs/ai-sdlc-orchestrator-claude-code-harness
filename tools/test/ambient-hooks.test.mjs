@@ -170,7 +170,10 @@ test("at the start of a chat where the plugin acts, the model is told which work
     // 1,400 while five tools were named; the lookup tool (23 Sep) adds one short sentence, so 1,600. Still one note, not a manual.
     // + the scout tool (23 Sep): seven tools named. Still one note, not a manual.
     // + the batch write and the hand-over instruction (23 Sep): eight tools named and told apart. Still one note, not a manual.
-    assert.ok(note.length < 2400, `one short note, not a manual: ${note.length} chars`);
+    // The chat-savings note keeps its own bound; with routing on (25 Sep) a separate workflows paragraph follows it,
+    // bounded in ambient-routing-hooks.test.mjs. Two things, two bounds, neither raised to make room for the other.
+    const chatPart = note.split("\nFull workflows:")[0];
+    assert.ok(chatPart.length < 2400, `one short note, not a manual: ${chatPart.length} chars`);
     assert.equal((await chatNote("s2", s, { env: { MMO_AMBIENT: "observe" } })).stdout, "", "observe mode says nothing");
     assert.equal((await chatNote("s3", s, { env: { MMO_AMBIENT_ARM: "control" } })).stdout, "", "the control arm says nothing");
   } finally { s.cleanup(); }
