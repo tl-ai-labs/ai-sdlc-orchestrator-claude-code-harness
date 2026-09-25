@@ -42,6 +42,7 @@ import type { TaskPacket, TelemetryEvent, Policy, SelectOverrides } from "./type
 import { resolveProjectRoot } from "./project-root.js";
 import { log, setLevel, configureSinks, type Level } from "./log.js";
 // Typed-spec executor tools (greenfield --executor): listed below, handled in executor/tools.ts.
+import { AMBIENT_TOOL_NAMES, ambientToolsFor, chatPolicyNames, handleAmbientTool } from "./ambient/tools.js";
 import { EXECUTOR_TOOLS, EXECUTOR_TOOL_NAMES, handleExecutorTool, type RunState } from "./executor/tools.js";
 import { runCard, runStateConflict } from "./runCard.js";
 
@@ -410,6 +411,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     ...EXECUTOR_TOOLS,
+    // Ambient-mode job tools (docs/ambient-mode.md): listed only when ambient
+    // mode is on for this project, so with it off the tool list is 0.7.7's.
+    // Every call is still refused unless a plugin hook stamped it.
+    ...(await ambientToolsFor(process.env.CLAUDE_PROJECT_DIR ?? process.cwd())),
   ],
 }));
 
@@ -442,6 +447,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
         policy: (run) => ensurePolicy(run.policyName, run.projectRoot, run.policyPath),
         overrides: selectOverrides(),
         progress: { token, send: (params) => extra.sendNotification({ method: "notifications/progress", params } as any) },
+      });
+    }
+    // The ambient (zero-touch) job tools: a chat job loads its policies
+    // directly, never through ensurePolicy, so it can never swap the policy a
+    // typed pipeline in this same server process is using.
+    if (AMBIENT_TOOL_NAMES.has(name)) {
+      const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+      return await handleAmbientTool(name, args, {
+        projectDir,
+        policies: () => chatPolicyNames(process.env).map((policyName) => loadPolicy({ policyName, projectRoot: projectDir })),
       });
     }
     switch (name) {

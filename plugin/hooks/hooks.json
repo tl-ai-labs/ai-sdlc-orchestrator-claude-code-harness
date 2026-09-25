@@ -20,6 +20,61 @@
             "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/foreground-helpers.mjs"
           }
         ]
+      },
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Refuses a whole-file Write to a file this session only showed as an outline.",
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh pre-write",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. File-dump valve: cat/sed/head/tail of one large repo file.",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh pre-bash",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. The five mmo agents run only inside a typed /mmo: command.",
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh pre-agent",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Small checked worker changes land as native Edits: a marker Edit is swapped for the checked find/replace, or refused.",
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh pre-edit",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Stamps session, prompt and arm onto the plugin's own job tools; the server refuses an unstamped call.",
+        "matcher": "mcp__(plugin_mmo_)?model-dispatch__(repeat_edit_across_files|write_files_from_specs|write_tests_from_cases|fix_from_analysis|scout_repo|consent_to_send|job_result|undo_job|lookup|write_files)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh pre-mmo-tool",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -30,6 +85,169 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/telemetry.sh"
+          }
+        ]
+      },
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Read valve: a large plain Read becomes a code-built outline when the cost rule says it pays.",
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh post-read",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Notices a failing test run from its output (test runs are usually piped through tail).",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh post-bash",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Records a landed marker edit; and notices the same KIND of edit landing in a second file (the repeated-edit trigger).",
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh post-edit",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Trigger: the third NEW file written in a chat.",
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh post-write",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__(plugin_mmo_)?model-dispatch__write_files",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh post-mmo-tool",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Sizes only; failed output is never trimmed.",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh post-bash-failure",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Draws the on/control arm once per session.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh session-start",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). A helper agent Opus started is a chat of its own: this records its start; its note travels on its first tool result. Ships off; always exits 0.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh subagent-start",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Stores a label rule id, never prompt text.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh prompt",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. A typed /mmo: command makes this a pipeline session; ambient mode stands down.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh prompt-expansion",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Marks a context reset for the ledger.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh context-reset",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreModelSwitch": [
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. lock_model: refuses a switch away from the policy's thinker model.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh pre-model-switch",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Marks a session that left the thinker model so it stays out of the savings numbers.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh post-model-switch",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "_comment": "Ambient mode (docs/ambient-mode.md). Ships off: the shim exits before node starts unless MMO_AMBIENT or ~/.mmo-ambient/ambient.json turns it on. Always exits 0; decisions are JSON on stdout. Marks the end of a turn so the board can tell when a task is done.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh turn-end",
+            "timeout": 5
           }
         ]
       }

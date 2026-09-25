@@ -1,0 +1,333 @@
+{
+  "schema_version": 1,
+  "note": "Starting evidence for the worker-picking rule. Every row says what was measured, on which door, under which success definition. tools/test/ambient-seeds.test.mjs audits this file: rows built from never-dispatched runs, rows bucketed on something that happens after the worker ran, and rows that try to open a cell on thin or weak evidence all fail the build.",
+  "base_job_cost_usd": {
+    "bugfix_code": 4.68
+  },
+  "rows": [
+    {
+      "job": "bugfix_code",
+      "file_kind": "any",
+      "worker": "flash",
+      "door": "agent",
+      "success_definition": "hidden_tests",
+      "dispatched_only": true,
+      "bucketed_on": "none",
+      "paired": {
+        "n": 523,
+        "only_thinker_right": 14,
+        "only_worker_right": 6
+      },
+      "checks_passed": [
+        0.994,
+        523
+      ],
+      "source": "Our own SWE-bench Pro runs, all repositories: the same bugs given to both models, graded by hidden tests"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "any",
+      "worker": "sonnet",
+      "door": "agent",
+      "success_definition": "hidden_tests",
+      "dispatched_only": true,
+      "bucketed_on": "none",
+      "paired": {
+        "n": 536,
+        "only_thinker_right": 22,
+        "only_worker_right": 6
+      },
+      "checks_passed": [
+        0.979,
+        536
+      ],
+      "source": "Our own SWE-bench Pro runs, all repositories: the same bugs given to both models, graded by hidden tests"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "go",
+      "worker": "flash",
+      "door": "agent",
+      "success_definition": "hidden_tests",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "paired": {
+        "n": 130,
+        "only_thinker_right": 2,
+        "only_worker_right": 1
+      },
+      "checks_passed": [
+        0.992,
+        130
+      ],
+      "source": "Our own SWE-bench Pro runs, Go repositories only: the same bugs given to both models, graded by hidden tests"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "go",
+      "worker": "sonnet",
+      "door": "agent",
+      "success_definition": "hidden_tests",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "paired": {
+        "n": 142,
+        "only_thinker_right": 3,
+        "only_worker_right": 1
+      },
+      "checks_passed": [
+        0.993,
+        142
+      ],
+      "source": "Our own SWE-bench Pro runs, Go repositories only: the same bugs given to both models, graded by hidden tests"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "js_ts",
+      "worker": "flash",
+      "door": "agent",
+      "success_definition": "hidden_tests",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "paired": {
+        "n": 129,
+        "only_thinker_right": 2,
+        "only_worker_right": 2
+      },
+      "checks_passed": [
+        0.992,
+        129
+      ],
+      "source": "Our own SWE-bench Pro runs, JavaScript and TypeScript repositories only: the same bugs given to both models, graded by hidden tests"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "js_ts",
+      "worker": "sonnet",
+      "door": "agent",
+      "success_definition": "hidden_tests",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "paired": {
+        "n": 130,
+        "only_thinker_right": 4,
+        "only_worker_right": 2
+      },
+      "checks_passed": [
+        0.969,
+        130
+      ],
+      "source": "Our own SWE-bench Pro runs, JavaScript and TypeScript repositories only: the same bugs given to both models, graded by hidden tests"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "python",
+      "worker": "flash",
+      "door": "agent",
+      "success_definition": "hidden_tests",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "paired": {
+        "n": 264,
+        "only_thinker_right": 10,
+        "only_worker_right": 3
+      },
+      "checks_passed": [
+        0.996,
+        264
+      ],
+      "source": "Our own SWE-bench Pro runs, Python repositories only: the same bugs given to both models, graded by hidden tests"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "python",
+      "worker": "sonnet",
+      "door": "agent",
+      "success_definition": "hidden_tests",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "paired": {
+        "n": 264,
+        "only_thinker_right": 15,
+        "only_worker_right": 3
+      },
+      "checks_passed": [
+        0.977,
+        264
+      ],
+      "source": "Our own SWE-bench Pro runs, Python repositories only: the same bugs given to both models, graded by hidden tests"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "any",
+      "worker": "flash",
+      "cost_only": true,
+      "saving_pct": 7.2,
+      "bucketed_on": "none",
+      "source": "Our own SWE-bench Pro runs, all repositories: whole-bug cost of the same bugs, worker arm against Opus alone"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "any",
+      "worker": "sonnet",
+      "cost_only": true,
+      "saving_pct": 7.6,
+      "bucketed_on": "none",
+      "source": "Our own SWE-bench Pro runs, all repositories: whole-bug cost of the same bugs, worker arm against Opus alone"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "go",
+      "worker": "flash",
+      "cost_only": true,
+      "saving_pct": -1.8,
+      "bucketed_on": "pre_treatment",
+      "source": "Our own SWE-bench Pro runs, Go repositories only: whole-bug cost of the same bugs, worker arm against Opus alone"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "go",
+      "worker": "sonnet",
+      "cost_only": true,
+      "saving_pct": 8.2,
+      "bucketed_on": "pre_treatment",
+      "source": "Our own SWE-bench Pro runs, Go repositories only: whole-bug cost of the same bugs, worker arm against Opus alone"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "js_ts",
+      "worker": "flash",
+      "cost_only": true,
+      "saving_pct": 6.6,
+      "bucketed_on": "pre_treatment",
+      "source": "Our own SWE-bench Pro runs, JavaScript and TypeScript repositories only: whole-bug cost of the same bugs, worker arm against Opus alone"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "js_ts",
+      "worker": "sonnet",
+      "cost_only": true,
+      "saving_pct": 6.8,
+      "bucketed_on": "pre_treatment",
+      "source": "Our own SWE-bench Pro runs, JavaScript and TypeScript repositories only: whole-bug cost of the same bugs, worker arm against Opus alone"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "python",
+      "worker": "flash",
+      "cost_only": true,
+      "saving_pct": 12.1,
+      "bucketed_on": "pre_treatment",
+      "source": "Our own SWE-bench Pro runs, Python repositories only: whole-bug cost of the same bugs, worker arm against Opus alone"
+    },
+    {
+      "job": "bugfix_code",
+      "file_kind": "python",
+      "worker": "sonnet",
+      "cost_only": true,
+      "saving_pct": 7.8,
+      "bucketed_on": "pre_treatment",
+      "source": "Our own SWE-bench Pro runs, Python repositories only: whole-bug cost of the same bugs, worker arm against Opus alone"
+    },
+    {
+      "job": "tests",
+      "file_kind": "python",
+      "worker": "flash",
+      "door": "completion",
+      "success_definition": "valid_result",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "rate": [
+        10,
+        11
+      ],
+      "source": "Our own greenfield pipeline runs (the cheaper model wrote it, the main model reviewed it)"
+    },
+    {
+      "job": "boilerplate",
+      "file_kind": "python",
+      "worker": "flash",
+      "door": "completion",
+      "success_definition": "valid_result",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "rate": [
+        7,
+        8
+      ],
+      "source": "Our own greenfield pipeline runs (the cheaper model wrote it, the main model reviewed it)"
+    },
+    {
+      "job": "boilerplate",
+      "file_kind": "js_ts",
+      "worker": "flash",
+      "door": "completion",
+      "success_definition": "valid_result",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "rate": [
+        5,
+        6
+      ],
+      "source": "Our own greenfield pipeline runs (the cheaper model wrote it, the main model reviewed it)"
+    },
+    {
+      "job": "logic",
+      "file_kind": "python",
+      "worker": "flash",
+      "door": "completion",
+      "success_definition": "valid_result",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "rate": [
+        18,
+        22
+      ],
+      "source": "Our own greenfield pipeline runs (the cheaper model wrote it, the main model reviewed it)"
+    },
+    {
+      "job": "docs",
+      "file_kind": "docs",
+      "worker": "flash",
+      "door": "completion",
+      "success_definition": "valid_result",
+      "dispatched_only": true,
+      "bucketed_on": "pre_treatment",
+      "rate": [
+        5,
+        5
+      ],
+      "source": "Our own greenfield pipeline runs (the cheaper model wrote it, the main model reviewed it)"
+    },
+    {
+      "job": "repeat_edit",
+      "file_kind": "any",
+      "worker": "flash",
+      "door": "completion",
+      "success_definition": "edit_format",
+      "dispatched_only": true,
+      "bucketed_on": "none",
+      "older_model_version": true,
+      "rate": [
+        215,
+        225
+      ],
+      "source": "Public Aider leaderboard, an older Gemini Flash: share of edits that came back in the right format"
+    },
+    {
+      "job": "repeat_edit",
+      "file_kind": "any",
+      "worker": "sonnet",
+      "door": "completion",
+      "success_definition": "edit_format",
+      "dispatched_only": true,
+      "bucketed_on": "none",
+      "older_model_version": true,
+      "rate": [
+        221,
+        225
+      ],
+      "source": "Public Aider leaderboard, an older Claude Sonnet: share of edits that came back in the right format"
+    }
+  ]
+}

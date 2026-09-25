@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "mode": "off",
+  "thinker": "claude-opus-5",
+  "delegation": "on",
+  "lock_model": true,
+  "workers": {
+    "flash": "gemini-3.8-flash",
+    "sonnet": "claude-sonnet-5",
+    "default": "flash"
+  },
+  "control": {
+    "share": 0.5
+  },
+  "valves": {
+    "read": {
+      "enabled": true,
+      "min_chars": 8000,
+      "outline_budget_chars": 9000,
+      "min_coverage": 0.7,
+      "act": true
+    },
+    "file_dump": {
+      "enabled": true,
+      "min_chars": 6000,
+      "act": true,
+      "max_file_bytes": 5000000
+    }
+  },
+  "cost": {
+    "margin_usd": 0.002,
+    "developer_time_usd_per_s": 0,
+    "extra_request_seconds": 8,
+    "n_hat": 23,
+    "chars_per_token": 4,
+    "cache_tier": "auto",
+    "ranged_followup_share": 0.25,
+    "prices_usd_per_mtok": {
+      "claude-opus-5": {
+        "input": 5,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10,
+        "cache_read": 0.5,
+        "output": 25
+      },
+      "claude-sonnet-5": {
+        "input": 2,
+        "cache_write_5m": 2.5,
+        "cache_write_1h": 4,
+        "cache_read": 0.2,
+        "output": 10
+      },
+      "claude-opus-4-8": {
+        "input": 5,
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10,
+        "cache_read": 0.5,
+        "output": 25
+      },
+      "claude-haiku-4-5": {
+        "input": 1,
+        "cache_write_5m": 1.25,
+        "cache_write_1h": 2,
+        "cache_read": 0.1,
+        "output": 5
+      }
+    },
+    "unknown_context_tokens": 100000,
+    "expected_chars_per_file": {
+      "bugfix_code": 2700,
+      "boilerplate": 2800,
+      "tests": 13000,
+      "repeat_edit": 300,
+      "docs": 3000
+    },
+    "prior_full_reread": [
+      1,
+      5
+    ],
+    "prior_ranged_followup": [
+      2,
+      4
+    ]
+  },
+  "closed_cells": [],
+  "never_delegate_paths": [],
+  "vendors_allowed_everywhere": [],
+  "cost_of_bad_result_usd": 9,
+  "retention_days": 30,
+  "offers": {
+    "share": 1,
+    "assumed_saving_usd": 0.25,
+    "retry_cost_usd": 0.1,
+    "max_marker_edits": 5,
+    "enforce_handover": true
+  },
+  "jobs": {
+    "worker_thinking": "low",
+    "block_ms": 540000,
+    "block_cap_5m_ms": 270000,
+    "landing": "auto",
+    "worker_timeout_ms": 1800000,
+    "network_retries": 4,
+    "answer_retries": 2,
+    "job_retries": 1,
+    "worker_cascade": true,
+    "verify_before_handback": true,
+    "verify_retries": 2,
+    "verify_timeout_ms": 600000,
+    "rate_limit_backoff_ms": [
+      5000,
+      10000,
+      20000,
+      40000,
+      60000,
+      120000
+    ],
+    "queue_wait_ms": 1200000,
+    "max_parallel": 4,
+    "result_wait_ms": 90000,
+    "max_files": 60,
+    "max_diff_chars": 6000,
+    "keep_briefs": false,
+    "breaker_minutes": 1,
+    "worker_prices_usd_per_mtok": {
+      "gemini-3.8-flash": {
+        "input": 0.75,
+        "output": 3.75
+      },
+      "claude-sonnet-5": {
+        "input": 2,
+        "output": 10
+      }
+    }
+  }
+}

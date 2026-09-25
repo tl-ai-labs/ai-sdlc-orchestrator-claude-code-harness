@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intelligent Orchestrator, With and Without Hand-overs</title>
+<style nonce="__NONCE__">
+:root{--bg:#f4f5f4;--panel:#fff;--ink:#16201b;--muted:#5f6d67;--faint:#e4e9e6;--a:#0d7a5a;--a-soft:#e1f3ec;--b:#94600f;--b-soft:#f7eedd;--ok:#1c7a39;--no:#b3261e;
+--mono:ui-monospace,Menlo,Consolas,monospace;--sans:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1412;--panel:#161d1a;--ink:#e8eeeb;--muted:#9ba9a3;--faint:#26312c;--a:#55cba4;--a-soft:#16322a;--b:#e4b466;--b-soft:#372b15;--ok:#79d596;--no:#ff8f86}}
+:root[data-theme="dark"]{--bg:#0f1412;--panel:#161d1a;--ink:#e8eeeb;--muted:#9ba9a3;--faint:#26312c;--a:#55cba4;--a-soft:#16322a;--b:#e4b466;--b-soft:#372b15;--ok:#79d596;--no:#ff8f86}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
+main{max-width:1180px;margin:0 auto;padding:28px 16px 64px;display:grid;gap:28px}
+h1{font-size:26px;margin:0;text-wrap:balance} h2{font-size:17px;margin:0 0 4px} h3{font-size:14px;margin:0;letter-spacing:.04em;text-transform:uppercase}
+p{margin:0;color:var(--muted)} .lead{font-size:16px;color:var(--ink)}
+.panel{background:var(--panel);border:1px solid var(--faint);border-radius:10px;padding:18px}
+.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.num{font:600 34px/1.1 var(--mono);font-variant-numeric:tabular-nums} .num.loss{color:var(--no)} .num.gain{color:var(--ok)}
+.cap{font-size:13px;color:var(--muted);margin-top:6px}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:14px} @media (max-width:760px){.pair{grid-template-columns:1fr}}
+.col{border-radius:10px;padding:16px;border:1px solid var(--faint)} .col.a{background:var(--a-soft)} .col.b{background:var(--b-soft)}
+.col.a h3{color:var(--a)} .col.b h3{color:var(--b)}
+ol.steps{margin:12px 0 0;padding:0 0 0 20px;display:grid;gap:4px;font-size:14px} ol.steps li::marker{color:var(--muted)}
+.tot{display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--faint);margin-top:12px;padding-top:10px;font:600 15px var(--mono);font-variant-numeric:tabular-nums}
+.verdict{font-size:16px} .wait{color:var(--muted)}
+.scroll{overflow-x:auto} table{border-collapse:collapse;width:100%;font-size:14px} th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--faint);vertical-align:top}
+th{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600} td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;border:1px solid var(--faint)} .pill.on{background:var(--a-soft);color:var(--a)} .pill.control{background:var(--b-soft);color:var(--b)} .pill.rules{background:var(--b-soft);color:var(--b);border-style:dashed}
+.empty{color:var(--muted);font-style:italic}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Intelligent orchestrator: with hand-overs vs without</h1>
+    <p class="lead" id="lead">The same task is run twice. Side A runs with the intelligent orchestrator. Side B runs without hand-overs. Everything on this page is read from real records on this machine; nothing is a sample.</p>
+    <p id="updated" class="cap"></p>
+  </header>
+
+  <section class="big">
+    <div class="panel"><div class="num" id="saved">$0.0000</div><div class="cap" id="savedCap">Dollars kept out so far, priced from what really happened after each action. Losses count as losses.</div></div>
+    <div class="panel"><div class="num" id="share">0%</div><div class="cap">Share of all the money spent that went to the cheaper model instead of the main one.</div></div>
+    <div class="panel"><div class="num" id="counted">0</div><div class="cap" id="countedCap">Chats recorded so far.</div></div>
+  </section>
+
+  <section class="panel">
+    <h2>This pair, as it happens</h2>
+    <p id="pairNote"></p>
+    <p>Each box is a live log of what the orchestrator saw and did in that chat, including the times it did nothing and why. It refreshes every two seconds.</p>
+    <div class="pair">
+      <div class="col a"><h3>A · orchestrator on</h3><ol class="steps" id="stepsA"></ol><div class="tot"><span id="touchA">0 prompts typed</span><span id="sumA">$0.0000</span></div></div>
+      <div class="col b"><h3 id="headB">B · without hand-overs</h3><ol class="steps" id="stepsB"></ol><div class="tot"><span id="touchB">0 prompts typed</span><span id="sumB">$0.0000</span></div></div>
+    </div>
+    <p class="verdict" id="verdict"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Every session</h2>
+    <p>When each task finished and what it cost. A task counts as finished when the model's answer to the last prompt has ended.</p>
+    <div class="scroll"><table><thead><tr><th>Side</th><th>Task</th><th>Repo</th><th>Finished</th><th>Prompts</th><th>Thinker</th><th>Worker</th><th>Total</th><th>Kept out</th></tr></thead><tbody id="sessions"></tbody></table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Which typing jobs may go to a cheaper model, and why</h2>
+    <p>This is what the orchestrator starts from. Each row is one kind of work: what was measured, how much that evidence can be trusted, what the orchestrator decides from it today, and where the numbers came from. Results from this machine are added on top as jobs run.</p>
+    <div class="scroll"><table><thead><tr><th>Kind of work</th><th>Language</th><th>Cheaper model</th><th>What was measured</th><th>How far to trust it</th><th>Decision today</th><th>Where it came from</th></tr></thead><tbody id="seeds"></tbody></table></div>
+  </section>
+
+  <section class="panel">
+    <h2>The numbers behind "should this file be shortened?"</h2>
+    <p>Before it shortens a file the orchestrator weighs what it can win (a shorter file is paid for again on every later reply) against what it can lose (sometimes the full file is needed anyway, and one reply was wasted). These are the numbers it uses.</p>
+    <div class="scroll"><table><thead><tr><th>Number</th><th>Value now</th><th>Where it came from</th></tr></thead><tbody id="numbers"></tbody></table></div>
+  </section>
+</main>
+<script src="/app.js?t=__TOKEN__"></script>
+</body>
+</html>
