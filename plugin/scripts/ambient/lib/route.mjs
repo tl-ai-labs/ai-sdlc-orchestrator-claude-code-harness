@@ -68,7 +68,13 @@ const POLITE = /^(?:(?:hey|hi|hello|ok|okay|so|now|next|then|alright|right|pleas
  */
 const FOLLOW_UP = /^also\b|\bas well\b|\b(?:too|again)$/;
 
-/** Too small to be a pipeline job, anywhere in the clause (a colon does not hide it: "fix the spelling: teh"). */
+/**
+ * Too small to be a pipeline job when it is the thing named: the head of the
+ * object, up to its first colon, preposition or clause ("fix the spelling:
+ * teh", "fix the lint errors"). A mention further on ("the bug where comments
+ * are not saved", a brief listing "ticket comments") names something else
+ * (step 5 replay, 25 Sep: checking the whole clause dropped a real new-app brief).
+ */
 const SMALL_EDIT = /\b(typos?|spelling|grammar|formatting|indentation|whitespace|lint(?:ing)?|linter|prettier|eslint|import order|comments?|commit messages?)\b/;
 
 /** An object that starts by negating itself ("fix nothing yet, just explain") asks for no job. */
@@ -183,6 +189,11 @@ function realObject(object, { software }) {
   return { ok: true };
 }
 
+/** The thing an object names: up to its first colon, preposition or clause. */
+function objectHead(object) {
+  return String(object ?? "").trim().split(/:|\s(?:for|about|on|of|to|in|into|with|from|by|at|where|that|which|who|when|while|so|because|after|before|since|until)\s/)[0];
+}
+
 /** Every job one clause could be asking for, in JOBS order (one entry per job, its first matching pattern). */
 function clauseJobs(clause) {
   const found = [];
@@ -195,11 +206,13 @@ function clauseJobs(clause) {
       // A colon hands over the subject ("fix this bug: TypeError …"): what follows it is part of the object.
       const colon = clause.indexOf(":");
       const subject = colon >= 0 ? `${object.slice(0, Math.max(0, object.indexOf(":")))} ${clause.slice(colon + 1)}` : object;
-      const check = SMALL_EDIT.test(clause)
-        ? { ok: false, why: "a small edit (typo, spelling, formatting, lint, a commit message), not a pipeline job" }
-        // A new app and a dependency upgrade carry their subject in the pattern itself (the app noun, the version):
-        // what follows is context, and for a new app a brief below IS the input. Project jobs check their object.
-        : spec.objectOptional ? { ok: true } : realObject(subject || object, { software: spec.software === true });
+      // A new app and a dependency upgrade carry their subject in the pattern itself (the app noun, the version):
+      // what follows is context, and for a new app a brief below IS the input. Project jobs check their object.
+      const check = spec.objectOptional
+        ? { ok: true }
+        : SMALL_EDIT.test(objectHead(object))
+          ? { ok: false, why: "a small edit (typo, spelling, formatting, lint, a commit message), not a pipeline job" }
+          : realObject(subject || object, { software: spec.software === true });
       found.push({ job: spec.job, check });
       break;
     }

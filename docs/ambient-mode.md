@@ -244,7 +244,7 @@ Fixed patterns, no model. Two signals must agree.
   - follow-ups (also / as well / too / again);
   - a bare "fix it";
   - text in the message ("the code below");
-  - small edits (typo, spelling, grammar, formatting, lint, a commit message; checked across the whole clause);
+  - small edits: typo, spelling, grammar, formatting, lint or a commit message as the thing named (the head of the object). "The bug where comments are not saved" and a brief listing "ticket comments" are not small edits;
   - two different jobs.
 
 **The folder:**
@@ -253,14 +253,23 @@ Fixed patterns, no model. Two signals must agree.
 - A new folder can only be greenfield; an existing project only a brownfield job.
 - Nouns that can be a whole app (api, service, dashboard) are unsure in an existing project.
 
-**Checked offline** against 6,955 messages typed on the author's machine, before and after the independent review of 25 Sep 2026: 5 route, all real new-app prompts and briefs, none by mistake. The review's 19 look-alike wrong routes are now test cases. The messages stay on that machine.
+**Checked offline** against 6,958 messages typed on the author's machine: 6 route, all real new-app prompts and briefs, none by mistake. The independent review's 19 look-alike wrong routes are now test cases.
+
+Then every chat on that machine was replayed through the real hooks, routing on, at $0: 497 chat files, 18,012 prompts, each chat as if in a new folder and as if in an existing project.
+- 32 routes, all to those 6 new-app prompts, at the chat's first to fourth message, before any work.
+- None in an existing project.
+- After each route, the next tool that would change something was held (29), and read-only tools ran (2).
+- Of 676 typed commands (98 of them `/mmo:`) and 26 workflow starts, none was refused.
+- 0 hook failures. About 55 ms per hook call (95th percentile 76 ms).
+
+The messages stay on that machine.
 
 ### The hand-off (`hook.mjs`, `lib/route-flow.mjs`)
 
 Every workflow start, typed or model-started, reaches the hooks as a `PreToolUse` on the `Skill` tool. This was probed live on Claude Code 2.1.282. A typed `/mmo:bugfix`, or `/bugfix` where Claude Code allows the plugin's command without its prefix, makes the chat a workflow run before any tool runs.
 
 1. **Only before the chat has started work.** Nothing is routed once:
-   - a file inside the project has been written (Write, Edit, the batch write, or a Bash command that writes one); or
+   - a file inside the project has been written (Write, Edit, the batch write, or a Bash command that writes one; a file written elsewhere does not count); or
    - the project's git state (HEAD and `git status`) has moved since the conversation began, which catches deletes, patches and formatters; or
    - a workflow is running.
 2. **A clear route.** The prompt hook tells Opus which workflow to start (the Skill call and its one-line description), the plain line to say, and the settings already chosen. A route belongs to its prompt, and the next prompt drops it.

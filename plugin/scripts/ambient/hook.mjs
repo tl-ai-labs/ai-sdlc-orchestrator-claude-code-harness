@@ -210,6 +210,10 @@ function workStarted(ctx) {
   if (now && now !== base) { markWorkStarted(ctx); return true; }
   return false;
 }
+/** Marks started work when any of these paths is inside the project; a file written elsewhere is not work on it. */
+function markWorkStartedFor(ctx, paths) {
+  if (paths.some((p) => typeof p === "string" && p && insideDir(absOf(ctx, p), ctx.projectDir))) markWorkStarted(ctx);
+}
 function markWorkStarted(ctx) {
   if (hasSessionMarker(ctx, "work_started")) return;
   setSessionMarker(ctx, "work_started");
@@ -960,7 +964,7 @@ const handlers = {
   async "post-bash"(ctx) {
     const resp = ctx.input.tool_response;
     const command = ctx.input.tool_input?.command;
-    if (bashWrittenPaths(command).some((p) => insideDir(absOf(ctx, p), ctx.projectDir))) markWorkStarted(ctx);
+    markWorkStartedFor(ctx, bashWrittenPaths(command));
     const lines = [noteOnce(ctx), await newFilesFromBash(ctx)];
     // A failing test run that was piped through tail or head arrives HERE, as a
     // success. Notice it from its output; never touch that output. (A rule that
@@ -1060,7 +1064,7 @@ const handlers = {
   /** After the batch write: the files it created count as created files, so the new-files and tests moments still happen. */
   async "post-mmo-tool"(ctx) {
     if (ambientToolName(ctx.input.tool_name) !== "write_files") return;
-    markWorkStarted(ctx);
+    markWorkStartedFor(ctx, (Array.isArray(ctx.input.tool_input?.files) ? ctx.input.tool_input.files : []).map((f) => f?.path));
     const out = mcpResult(ctx.input.tool_response);
     const created = Array.isArray(out?.created) ? out.created.filter((x) => typeof x === "string") : [];
     if (!created.length) return;
@@ -1112,7 +1116,7 @@ const handlers = {
 
   async "post-edit"(ctx) {
     // Runs only after the native Edit SUCCEEDED.
-    markWorkStarted(ctx);
+    markWorkStartedFor(ctx, [ctx.input.tool_input?.file_path]);
     // 1. A marker edit: pair it with the fill it belongs to through the
     //    tool_use_id kept by pre-edit.
     const id = ctx.input.tool_use_id;
@@ -1147,7 +1151,7 @@ const handlers = {
   },
 
   async "post-write"(ctx) {
-    markWorkStarted(ctx);
+    markWorkStartedFor(ctx, [ctx.input.tool_input?.file_path]);
     // Claude Code says whether a Write CREATED the file. Three new files in one
     // chat is the visible sign of "many files to type".
     if (ctx.input.tool_response?.type !== "create" || typeof ctx.input.tool_input?.file_path !== "string") return;

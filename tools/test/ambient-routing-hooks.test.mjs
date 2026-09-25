@@ -442,3 +442,21 @@ test("started work means files inside the project changed since the chat began, 
     assert.doesNotMatch(context(await prompt(s, "ws2", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/);
   } finally { s.cleanup(); }
 });
+
+test("a Write or Edit outside the project is not work on the project; inside it is", { skip: SKIP ?? false }, async () => {
+  // Step 5 design, 25 Sep: the Bash rule counted only in-project paths (independent review), but Write and Edit
+  // counted any path, so a note written elsewhere stopped a later job from routing.
+  const s = sandbox("existing");
+  try {
+    await prompt(s, "wo1", "hi");
+    await run("post-write", { session_id: "wo1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.dir, "notes-elsewhere.md"), content: "x" }, tool_response: { type: "create" } }, s);
+    await run("post-edit", { session_id: "wo1", cwd: s.repo, tool_name: "Edit", tool_input: { file_path: join(s.dir, "other.md"), old_string: "a", new_string: "b" }, tool_response: {} }, s);
+    assert.match(context(await prompt(s, "wo1", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/);
+    const t = sandbox("existing");
+    try {
+      await prompt(t, "wo2", "hi");
+      await run("post-edit", { session_id: "wo2", cwd: t.repo, tool_name: "Edit", tool_input: { file_path: join(t.repo, "package.json"), old_string: "shop", new_string: "shop2" }, tool_response: {} }, t);
+      assert.doesNotMatch(context(await prompt(t, "wo2", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/);
+    } finally { t.cleanup(); }
+  } finally { s.cleanup(); }
+});

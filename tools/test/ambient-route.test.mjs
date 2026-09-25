@@ -65,6 +65,9 @@ const ROUTED = [
   ["add a webhooks module (endpoint, storage, retry loop)", EXISTING, "feature-new"],
   ["add a notifications module with email and SMS", EXISTING, "feature-new"],
   ["build a new reporting page for managers", EXISTING, "feature-new"],
+  // Step 5 replay, 25 Sep: a small-edit word anywhere killed real jobs. It counts only as the thing named.
+  ["Build a multi-tenant helpdesk API in TypeScript with Fastify: organisations, tickets, ticket comments and tags", NEW, "greenfield"],
+  ["fix the bug where comments are not saved", EXISTING, "bugfix"],
   ["fix 3 failing tests in the parser", EXISTING, "bugfix"],
 ];
 
