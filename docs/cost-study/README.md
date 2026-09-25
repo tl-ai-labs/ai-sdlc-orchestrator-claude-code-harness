@@ -29,7 +29,7 @@ The same study as a formatted page: [opus-flash-cost-study.html](opus-flash-cost
 - **The two setups.**
   - **Opus-only**: Claude Opus plans, writes all the code, and reviews it.
   - **Opus + Flash**: Opus plans and reviews, and hands the code-writing to Google's much cheaper Gemini Flash model.
-- **Same conditions each time.** Same laptop, same starting code, same wording of the task, same review steps, and the same cache setting ("1-hour memory") on both sides from 23 Sep onwards.
+- **Same conditions each time.** Same laptop, same starting code, same wording of the task, same review steps, and the same cache setting ("1-hour memory") on both sides from 23 Sep onwards. Since plugin 0.8.10, 1-hour memory is the default in every shipped policy, so a new user gets the same setting the study measured (before that, Opus-only defaulted to 5 minutes).
 - **What "cost" means.** The full bill for the run: every Opus message (the manager plus its helpers: planner, reviewers) plus what Flash cost. The plugin's collector prices each message at the public list price from the Claude Code logs. Where our own chat landed inside a run's time window, we give both the **full bill** and **the work itself**.
 
 ### A quick picture of where the money goes

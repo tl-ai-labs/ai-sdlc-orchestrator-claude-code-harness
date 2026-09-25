@@ -7,10 +7,9 @@
  * Code subagents, and their prompt-cache TTL decides what a long wait costs.
  * The 1h TTL bills each cache write at 2x input instead of 1.25x, but keeps
  * the orchestrator's context warm while it waits on dispatched packets and
- * reviewers — a multi-model policy waits a lot, a single-model policy barely
- * waits and just pays the premium. Measured 2026-09-18 on the kaneo BIG brief
- * (docs/planning/opus-plus-flash-cost-plan.md §2.2): 1h saved the opus+flash
- * arm and cost the opus-only arm ≈ $2. So the TTL belongs to the policy
+ * reviewers and test suites. Since 0.8.8 every run waits inside its turn, so
+ * every shipped policy declares 1h (docs/cost-study/README.md); a local policy
+ * may still choose 5m. So the TTL belongs to the policy
  * (`subagent_cache_ttl: 5m | 1h`), not to the project, and this script keeps
  * the two in step.
  *

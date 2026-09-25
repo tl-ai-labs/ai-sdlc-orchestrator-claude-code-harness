@@ -167,10 +167,11 @@ test("policy with an invalid TTL is refused at load", () => {
   }
 });
 
-test("shipped presets: every multi-model policy wants 1h, every single-model one 5m", () => {
+test("shipped presets: every policy, single-model included, wants 1h", () => {
   const want = {
-    "opus-only": "5m",
-    "opus-only-v5": "5m",
+    "flash-agsdk-only": "1h",
+    "opus-only": "1h",
+    "opus-only-v5": "1h",
     "opus-plus-flash": "1h",
     "opus-plus-flash-v37": "1h",
     "opus-plus-flash-v38": "1h",

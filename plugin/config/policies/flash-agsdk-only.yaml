@@ -83,3 +83,7 @@ rules:
 # Hard per-run cost cap. Flash is cheap per token but the AG-SDK agent can
 # burn tokens on long sessions — keep the cap on.
 hard_cost_cap_usd: 50
+
+# 1h, like every shipped policy: the Claude driver turns wait on dispatched work and reviewers.
+# Enforced at run start by scripts/cache-ttl-check.mjs --fix.
+subagent_cache_ttl: 1h

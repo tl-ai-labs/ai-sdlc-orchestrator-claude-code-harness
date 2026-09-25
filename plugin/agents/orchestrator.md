@@ -115,8 +115,8 @@ See the pipeline skill's "Wait inside your turn".
    the env var cannot misprice anything.
 
    **Third mandatory step under `estimated`: the cache-TTL check.** The policy's `subagent_cache_ttl`
-   (1h for multi-model policies, 5m for single-model ones — measured 2026-09-18, see
-   `docs/planning/opus-plus-flash-cost-plan.md` §2.2) must be what the project's
+   (1h in every shipped policy — the run waits for reviewers and test suites inside its turn, and a
+   5m cache expires during those waits; see `docs/cost-study/README.md`) must be what the project's
    `.claude/settings.local.json` declares as `subagentPromptCacheTtl`, or the driver subagents are
    billed at the wrong cache rate. Run, with the same policy arguments as above:
 

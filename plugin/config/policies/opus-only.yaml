@@ -42,9 +42,10 @@ rules:
 # Users on custom policies may raise or omit this.
 hard_cost_cap_usd: 50
 
-# Single-model: the driver subagents never wait on a dispatch, so the 5m default TTL is
-# cheaper than paying the 1h write rate for nothing.
-# Measured 2026-09-18, kaneo BIG brief: 1h saved the opus+flash arm and cost the opus-only
-# arm ≈ $2 (docs/planning/opus-plus-flash-cost-plan.md §2.2). Enforced at run start by
+# 1h, like every shipped policy. Since 0.8.8 the orchestrator waits for reviewers and test
+# suites inside its turn, so single-model runs wait too, and a 5m cache expires during those
+# waits: the one 5m opus-only run on 0.8.x (kaneo Run 21, $17.43) cost more than every 1h
+# opus-only run after it ($9.55–$14.18, Runs 22–35). The cost study's opus-only numbers were
+# all measured at 1h (docs/cost-study/README.md). Enforced at run start by
 # scripts/cache-ttl-check.mjs --fix, which writes .claude/settings.local.json for you.
-subagent_cache_ttl: 5m
+subagent_cache_ttl: 1h

@@ -247,6 +247,12 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.8.10
+
+| Area | Before | From v0.8.10 |
+|---|---|---|
+| Subagent cache TTL | Multi-model policies declared `subagent_cache_ttl: 1h`; `opus-only` and `opus-only-v5` declared `5m`, `flash-agsdk-only` declared nothing, and preflight warned when a single-model policy asked for 1h. The study's opus-only runs (Runs 22–35) were all measured at 1h through a local policy copy, so a new user's opus-only run did not match the published numbers. | Every shipped policy declares `1h` and the warning is gone. Since 0.8.8 the orchestrator waits for reviewers and test suites inside its turn, so single-model runs wait too; the one 5m opus-only run on 0.8.x (Run 21, $17.43) cost more than every 1h opus-only run after it. `cache-ttl-check --fix` still writes the value and asks for one relaunch when it changes. |
+
 ### v0.8.9
 
 | Area | Before | From v0.8.9 |
