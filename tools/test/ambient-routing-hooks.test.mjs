@@ -37,9 +37,9 @@ function sandbox(kind = "existing", settings = {}) {
 function run(event, payload, { home, repo }, env = {}) {
   return new Promise((done) => {
     const childEnv = {
+      // No CLAUDE_CODE_SUBAGENT_MODEL (v0.8.3, 25 Sep): the workflows' helpers name their model in the plugin's
+      // agent files, so every scenario here runs as a person with nothing set would.
       PATH: process.env.PATH, HOME: home, MMO_HOME: home, CLAUDE_PROJECT_DIR: repo, MMO_AMBIENT_ARM: "on",
-      // The workflows check this before a run starts (plugin/scripts/driver-model-check.mjs); the default policy's driver is Opus 5.
-      CLAUDE_CODE_SUBAGENT_MODEL: "claude-opus-5",
       ...env,
     };
     for (const k of Object.keys(childEnv)) if (childEnv[k] === undefined) delete childEnv[k];
@@ -217,14 +217,14 @@ test("a route not taken ends with its prompt: the next message is judged afresh 
   } finally { s.cleanup(); }
 });
 
-test("a workflow that could not start is never routed: the person is told in plain words what is missing", { skip: SKIP ?? false }, async () => {
+test("with no helper setting at all, a clear job starts: the workflows' helpers name their model in the plugin's agent files", { skip: SKIP ?? false }, async () => {
+  // Until v0.8.3's pin (25 Sep) this was "cannot start: it needs a one-time setting, then a new chat". The live
+  // desktop test hit exactly that on the first try; the pin removes the step for everyone.
   const s = sandbox("existing");
   try {
-    const c = context(await prompt(s, "m1", "fix the /login endpoint returning 500 on missing password", { CLAUDE_CODE_SUBAGENT_MODEL: undefined }));
-    assert.doesNotMatch(c, /"mmo:bugfix"/, "the workflow's own check would stop it, so it is not started");
-    assert.match(c, /one-time setting/);
-    assert.match(c, /new chat/);
-    assert.equal(projectPolicy(s), null, "nothing was written");
+    const c = context(await prompt(s, "m1", "fix the /login endpoint returning 500 on missing password"));
+    assert.match(c, /"mmo:bugfix"/, "the workflow's own check passes with nothing set, so it starts");
+    assert.doesNotMatch(c, /one-time setting|--apply=routing|new chat/);
   } finally { s.cleanup(); }
 });
 
@@ -260,19 +260,14 @@ test("inside a workflow run, typed or started by routing, every zero-touch tool 
 // ─── Independent review, 25 Sep: the causes a workflow cannot start, the start hook's timing, guard gaps ───
 
 test("a workflow that cannot start says the real cause and the fix that works for it", { skip: SKIP ?? false }, async () => {
-  const unset = sandbox("existing");
-  try {
-    const c = context(await prompt(unset, "k1", "fix the /login endpoint returning 500 on missing password", { CLAUDE_CODE_SUBAGENT_MODEL: undefined }));
-    assert.match(c, /--apply=routing/, "a missing setting: the one-time setting fixes it");
-  } finally { unset.cleanup(); }
   const other = sandbox("existing");
   try {
     mkdirSync(join(other.repo, ".sdlc"));
     writeFileSync(join(other.repo, ".sdlc", "project.json"), JSON.stringify({ schema_version: 2, default_policy: "opus-plus-flash" }));
     const c = context(await prompt(other, "k2", "fix the /login endpoint returning 500 on missing password"));
-    assert.doesNotMatch(c, /"mmo:bugfix"/, "this project's saved choice wants another helpers' model than this chat has");
-    assert.doesNotMatch(c, /--apply=routing/, "the one-time setting cannot fix that: it would already say already-set");
+    assert.doesNotMatch(c, /"mmo:bugfix"/, "this project's saved choice (an Opus 4.7 policy) wants helpers on another model than the plugin's agent files name");
     assert.match(c, /saved/);
+    assert.doesNotMatch(c, /one-time setting|--apply=routing|the setting|new chat/, "no setting can fix it: the choice is the project's policy");
   } finally { other.cleanup(); }
   const broken = sandbox("existing");
   try {
@@ -282,9 +277,19 @@ test("a workflow that cannot start says the real cause and the fix that works fo
     assert.doesNotMatch(c, /"mmo:bugfix"|--apply=routing/);
     assert.match(c, /\.sdlc\/project\.json/);
   } finally { broken.cleanup(); }
+  // CLAUDE_CODE_SUBAGENT_MODEL_FORCE on makes Claude Code ignore the agent files' model; with nothing set the helpers
+  // would follow the chat, so the workflow's own check refuses, and zero-touch passes on the check's own reason
+  // rather than calling it an old saved choice.
+  const forced = sandbox("existing");
+  try {
+    const c = context(await prompt(forced, "k5", "fix the /login endpoint returning 500 on missing password", { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1" }));
+    assert.doesNotMatch(c, /"mmo:bugfix"/);
+    assert.match(c, /CLAUDE_CODE_SUBAGENT_MODEL_FORCE/);
+    assert.doesNotMatch(c, /saved workflow choice is an older one/);
+  } finally { forced.cleanup(); }
   const vendor = sandbox("existing", { routing_defaults: { policy: "opus-plus-flash-v38", auth: "vendor" } });
   try {
-    const c = context(await prompt(vendor, "k4", "fix the /login endpoint returning 500 on missing password", { CLAUDE_CODE_SUBAGENT_MODEL: undefined }));
+    const c = context(await prompt(vendor, "k4", "fix the /login endpoint returning 500 on missing password"));
     assert.match(c, /"mmo:bugfix"/, "under vendor the workflow skips its helpers'-model check, so routing does too");
     assert.match(c, /cost recording "vendor"/);
   } finally { vendor.cleanup(); }

@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pinnedDriverModel } from "../../driver-model-check.mjs";
 import { ensureSessionDir, sessionDir } from "./paths.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -22,7 +23,6 @@ const SCRIPTS = resolve(HERE, "..", "..");
 const SETUP_POLICY = join(SCRIPTS, "setup-policy.mjs");
 const DRIVER_MODEL_CHECK = join(SCRIPTS, "driver-model-check.mjs");
 const VERIFY_SETUP = join(SCRIPTS, "verify-setup.mjs");
-export const ZERO_TOUCH_SETUP = join(SCRIPTS, "ambient", "setup.mjs");
 
 /** What the person hears for each job, and the steps it runs, in plain words. */
 export const PLAIN = {
@@ -108,17 +108,19 @@ export function workflowsParagraph() {
  * What Opus says when a workflow cannot start in this chat: the real cause and
  * the fix that works for that cause (independent review, 25 Sep: one fixed
  * sentence sent every cause to the one-time setting, which fixes only one).
+ *
+ * v0.8.3 (25 Sep, after the live desktop test): there is no "unset" cause any
+ * more. The workflows' helpers name their model in the plugin's agent files,
+ * so no setting is needed, and none can help: the only model mismatch left is
+ * a project whose saved choice is an older policy with another judgment model.
  */
 export function cannotStartInstruction(job, problem) {
   const lead = `The person's message asks for a full ${PLAIN[job].name}, but it cannot start in this chat:`;
   const tail = `Meanwhile handle the request as an ordinary chat if they want. ${KEEP_OUT}`;
   switch (problem?.cause) {
-    case "unset":
-      return `${lead} it needs a one-time setting (which model the workflow's helpers run on), and that setting takes effect in a new chat. ` +
-        `Tell the person that in one plain sentence and offer to add it; if they agree, run: node ${JSON.stringify(ZERO_TOUCH_SETUP)} --apply=routing . ${tail}`;
     case "mismatch":
-      return `${lead} this project's saved workflow choice needs its helpers on a different model than this chat is set up for. ` +
-        `Tell the person that plainly; the choice is theirs (change the project's saved choice, or the setting, then start a new chat). Do not change either yourself. ${tail}`;
+      return `${lead} this project's saved workflow choice is an older one that needs its helpers on a different model than this version of the workflows runs. ` +
+        `Tell the person that plainly; the choice is theirs (change the project's saved workflow choice to the current one, then ask again). Do not change it yourself. ${tail}`;
     case "not-built":
       return `${lead} the plugin is not fully installed on this machine. Tell the person in one plain sentence and offer to finish the install; if they agree, run: node ${JSON.stringify(VERIFY_SETUP)} --fix . ${tail}`;
     case "project-file":
@@ -207,9 +209,16 @@ export function startProblem({ projectDir, fallback, auth, env = process.env }) 
   try {
     execFileSync(process.execPath, [DRIVER_MODEL_CHECK, "--project-root", projectDir, "--policy", found.policy], { cwd: projectDir, env, stdio: ["ignore", "pipe", "pipe"], timeout: 3000 });
     return { problem: null, policy: found.policy, saved: found.saved };
-  } catch {
-    const have = String(env.CLAUDE_CODE_SUBAGENT_MODEL ?? "").trim();
-    return { problem: have ? { cause: "mismatch", have, needed } : { cause: "unset", needed } };
+  } catch (err) {
+    // v0.8.3 (25 Sep): the helpers' model is named in the plugin's agent files, so the check no longer fails for a
+    // missing setting. The failure a person meets is a project whose saved choice is an older policy with another
+    // judgment model (have = the agent files' model, needed = the policy's). The rest, rare, are passed on in the
+    // check's own words: the CLAUDE_CODE_SUBAGENT_MODEL_FORCE switch, or agent files that do not name one model.
+    let pinned = null;
+    try { pinned = pinnedDriverModel(); } catch { /* a damaged install: the check's own words below say so */ }
+    if (pinned && needed !== pinned) return { problem: { cause: "mismatch", have: pinned, needed } };
+    const why = String(err?.stderr ?? "").trim().split("\n")[0] || "its run-start model check failed.";
+    return { problem: { cause: "check", why } };
   }
 }
 

@@ -201,12 +201,11 @@ A local page over the real records: the realised ledger as the headline, the sha
 node plugin/scripts/ambient/setup.mjs                   # dry run: shows what WOULD change
 node plugin/scripts/ambient/setup.mjs --apply=mode --mode=on
 node plugin/scripts/ambient/setup.mjs --apply=cache,bash,model
-node plugin/scripts/ambient/setup.mjs --apply=routing      # the one setting full workflows need (takes effect in a new chat)
 node plugin/scripts/ambient/setup.mjs --receipt <project>   # trust that project's .sdlc/ambient.json as it is now
 node plugin/scripts/ambient/setup.mjs --status
 ```
 
-The Claude Code settings it can propose (`promptCacheTtl`, `subagentPromptCacheTtl`, `bashOutputMaxChars`, `model`) were each checked in the Claude Code 2.1.270 program. The `routing` group adds one entry to the file's `env` block, `CLAUDE_CODE_SUBAGENT_MODEL`, set to the model the workflows' own run-start check wants for the project in hand: its saved choice, else the default policy (asked of that check, `driver-model-check.mjs --print-only`). The env block is merged entry by entry, and a different value already there is never replaced. Your settings file is merged, never replaced; a timestamped copy is written first; a file that does not parse is left untouched. One-hour cache writes cost more per token than five-minute ones, so keep the cache group only if your own on/off numbers say it pays.
+The Claude Code settings it can propose (`promptCacheTtl`, `subagentPromptCacheTtl`, `bashOutputMaxChars`, `model`) were each checked in the Claude Code 2.1.270 program. Full workflows need nothing from setup: their helpers name their model in the plugin's own agent files (see "What ambient mode leaves alone"), so the `routing` group that added `CLAUDE_CODE_SUBAGENT_MODEL` was removed on 25 Sep and setup never touches that entry. Your settings file is merged, never replaced; a timestamped copy is written first; a file that does not parse is left untouched. One-hour cache writes cost more per token than five-minute ones, so keep the cache group only if your own on/off numbers say it pays.
 
 ## Routing a recognised task to its workflow
 
@@ -216,6 +215,14 @@ With ambient mode on, an ordinary chat message that asks for one of the eight `/
 - **A clear request** ("fix the /login endpoint returning 500"): one plain line, "Running this as a full bug-fix workflow.", then the workflow's own steps and approvals. Two of the workflow's own setup questions are answered from the switches instead of asked: the cost-recording mode (`routing_defaults.auth`), and, for a new app, the brief (the person's message is the brief, written in the Project Brief layout). The saved policy is the project's own, or `routing_defaults.policy` for a folder with none. Every phase, gate and approval is the workflow's own.
 - **An unclear one Opus recognises** (typos, casual wording): Opus asks once in plain words, "This looks like a job for the full bug-fix workflow (reproduce, fix, test, review). Shall I run it?", and it runs only on a plain yes.
 - **Anything else:** an ordinary chat.
+
+Nothing has to be set first. A workflow's helpers name their model in the plugin's own agent files, so the first chat after install can start one, and switching the chat to another model does not move them.
+
+**What the app shows is not zero-touch's to change.** Once a workflow starts, the app lists the command start ("Ran skill /mmo:greenfield") and the workflow's helper agents in its activity rows, and the workflow's own messages keep its own wording: exactly what a typed run shows. A plugin cannot rename those rows, for two reasons, both checked on 25 Sep in the Claude Code build the desktop app ran (2.1.281):
+- Claude Code starts a plugin command only by its full `plugin:command` name. A bare `greenfield` is refused with "Did you mean mmo:greenfield?".
+- Command aliases exist only for Claude Code's built-in skills. A plugin's command file cannot declare one.
+
+Only renaming the plugin would change those rows, and a rename changes every typed `/mmo:` command too.
 
 ### The switches
 
@@ -286,14 +293,14 @@ Every workflow start, typed or model-started, reaches the hooks as a `PreToolUse
 
    | Cause | Fix offered |
    |---|---|
-   | The helpers' model is not set | `setup.mjs --apply=routing`, then a new chat |
-   | It is set to a different model than this project's saved choice needs | The person's choice, never changed automatically |
+   | This project's saved choice is an older policy whose judgment model is not the one the helpers' agent files name (the Opus 4.7 policies) | The person's choice of policy, never changed automatically |
+   | Anything else the workflow's own model check refuses (the rare `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` switch, or agent files that do not name one model) | The check's own reason, passed on |
    | The plugin is not fully installed | `verify-setup.mjs --fix` |
    | `.sdlc/project.json` does not read | Shown to the person |
    | The folder is inside another project with no saved choice | Said plainly |
 
    Under `vendor` the helpers'-model check is skipped, as the workflow itself skips it.
-7. **The one-time setting.** `setup.mjs --apply=routing` adds `CLAUDE_CODE_SUBAGENT_MODEL` to `~/.claude/settings.json`'s `env` block, merged entry by entry, with a backup first. The model is the one the project in hand needs (its saved choice, else the default). A different value already there is never replaced: other projects may need it, and it is the default model of every helper agent on the machine.
+7. **No one-time setting.** Until 25 Sep a missing `CLAUDE_CODE_SUBAGENT_MODEL` stopped every workflow in estimated mode, and zero-touch offered to add it and sent the person to a new chat (Test 0 of the live desktop test hit exactly that). The helpers now name their model in their agent files, so that cause, the offer and setup's `routing` group are gone.
 8. **Around it:**
    - `/clear` starts a fresh conversation: an earlier workflow run, route, offer and started work no longer count.
    - The control arm of a measurement changes nothing, the `mmo:` agent guard and the model lock included.
@@ -304,6 +311,11 @@ Tests: `tools/test/ambient-route.test.mjs` (recognition) and `tools/test/ambient
 ## What ambient mode leaves alone: everything 0.7.7 does
 
 From 0.8.3 ambient mode sits on top of 0.7.7 (0.7.6 plus one policy per run, not per chat), and nothing 0.7.7 does changes. That covers every `/mmo:` command, typed or started by the model: the same phases, gates, policies, routing, worker launches, output caps and hooks.
+
+**One deliberate exception, for every run, typed or routed, mode on or off (25 Sep 2026, a project decision, in this version only; the v0.7.7 branch is untouched):** which model the five driver agents run on under `--auth=estimated`.
+- **0.7.7:** the user's `CLAUDE_CODE_SUBAGENT_MODEL`, which had to be set before launch (in the desktop app only in `~/.claude/settings.json`, and read only when a chat starts); the run-start check stopped a run without it.
+- **0.8.3:** each agent file names `model: claude-opus-5`, which Claude Code (2.1.251 and later) puts above that setting and above the chat's model, checked live in the desktop app on 25 Sep (chat on Sonnet 5: the pinned helper ran Opus 5, an unpinned one Sonnet 5). The run-start check compares the pin with the policy, so a mismatch still stops the run and the report never prices a model that did not run (the PR #34 defect of 2 Sep, when an unchecked `model: opus` did exactly that).
+- **What a person notices:** nothing to set, no new chat, and the chat's model picker cannot move the helpers. The older Opus 4.7 policies (`opus-plus-flash`, `opus-only`) stop in estimated mode.
 
 **With the mode off (the shipped default), the plugin behaves as 0.7.7:**
 - the commands, skills and agents read exactly as in 0.7.7;
@@ -350,7 +362,14 @@ Built and tested offline: everything on this page.
 
 Checked on a live Desktop session (22 Sep 2026, with a stand-alone test hook, not the plugin): hooks fire in the Desktop app and receive `scratchpad_dir`, `prompt_id` and `effort`; a replaced `Read` result is what the model sees; `PreModelSwitch` blocks the Desktop model picker with a clear message; and Claude Code DOES allow a whole-file `Write` after a replaced `Read`, which is why the partial-view guard exists.
 
-Routing (25 Sep 2026): built and tested offline, with the platform facts it rests on probed live on Claude Code 2.1.282 (a Skill call for every command start; the prompt hooks fire before any tool in headless runs; a PreToolUse deny stops a command). No routed workflow has run live yet.
+Routing (25 Sep 2026): built and tested offline, with the platform facts it rests on probed live on Claude Code 2.1.282 (a Skill call for every command start; the prompt hooks fire before any tool in headless runs; a PreToolUse deny stops a command).
+
+Live in the desktop app, 25 Sep 2026 (before the helpers' model was pinned):
+- **Without the setting**, "build me a small todo API in TypeScript with Express" got the plain "needs a one-time setting" reply, and nothing started.
+- **With the setting**, the same message in a new chat started the new-app workflow at the first attempt. It ran 0.7.7's own steps (brief questions, the plan screen, requirements) up to Gate 1, at about $0.17 estimated.
+- **The pin check:** with the chat on Sonnet 5 and nothing set, a helper whose agent file names Opus 5 ran on Opus 5.
+
+The pinned version has not yet run a routed workflow live.
 
 Run live on the zero-touch branch, 22–23 Sep 2026: paired chats with the plugin's own hooks on and real workers (Flash through Google, Sonnet through the Claude login). Pair 12 (one pair, receivables brief): $12.50 with hand-overs against $15.59 without (−19.8%); pair 11 lost (+52.8%) and taught the design-file rule. On 0.8.3 (the same code on top of 0.7.6's pipeline) nothing has run live yet.
 
