@@ -569,3 +569,69 @@ test("execute_stage carries new_file from a failure through to the repair job", 
   const schema = EXECUTOR_TOOLS.find((t) => t.name === "execute_stage").inputSchema.properties.failures.items.properties;
   assert.equal(schema.new_file.type, "boolean");
 });
+
+// ─── One run, one policy (0.7.7) ───────────────────────────────────────
+// Until 0.7.6 the lock lived on pre-flight and lasted the whole chat (one server process): a SECOND, separate
+// /mmo: run in the same chat with another policy or auth mode was refused, which broke brownfield's per-run
+// policy choice at Gate 0. The lock belongs to one run: a run is its spec file, and the first stage of a spec
+// binds the auth mode and policy pre-flight recorded.
+
+/** A spec on disk with no docs units: a docs stage types nothing, so no typist is ever called. */
+function specOnDisk() {
+  const dir = mkdtempSync(join(tmpdir(), "run-lock-"));
+  const specPath = join(dir, "spec.json");
+  writeFileSync(specPath, JSON.stringify(SPEC));
+  return { dir, specPath };
+}
+const policyOf = (run) => (run.policyName === "opus-only-v5" ? SOLO : ORCH);
+const stage = (specPath, dir, runState) => handleExecutorTool(
+  "execute_stage",
+  { spec_path: specPath, stage: "docs", code_dir: dir, telemetry_path: join(dir, "telemetry.jsonl") },
+  { run: () => runState, policy: policyOf, overrides: {} },
+);
+
+test("a run cannot switch policy or auth mode halfway: the next stage of the same spec stops, with the reason, and types nothing", async () => {
+  const { dir, specPath } = specOnDisk();
+  const first = { authMode: "estimated", policyName: "opus-plus-flash-v38" };
+  const ok = await stage(specPath, dir, first);
+  assert.notEqual(ok.isError, true, ok.content[0].text);
+  const switchedPolicy = await stage(specPath, dir, { ...first, policyName: "opus-only-v5" });
+  assert.equal(switchedPolicy.isError, true);
+  const r = JSON.parse(switchedPolicy.content[0].text);
+  assert.match(r.stopped, /started its stages under policy opus-plus-flash-v38; the latest pre-flight asked for opus-only-v5/);
+  assert.match(r.stopped, /cannot switch/);
+  assert.equal(r.written, 0);
+  const switchedAuth = await stage(specPath, dir, { ...first, authMode: "vendor" });
+  assert.match(JSON.parse(switchedAuth.content[0].text).stopped, /auth mode estimated; the latest pre-flight asked for vendor/);
+  // Back on the run's own settings, the run goes on.
+  assert.notEqual((await stage(specPath, dir, first)).isError, true);
+});
+
+test("two separate runs in one chat may use different policies: each run binds its own", async () => {
+  const a = specOnDisk();
+  const b = specOnDisk();
+  assert.notEqual((await stage(a.specPath, a.dir, { authMode: "estimated", policyName: "opus-plus-flash-v38" })).isError, true);
+  const second = await stage(b.specPath, b.dir, { authMode: "estimated", policyName: "opus-only-v5" });
+  assert.notEqual(second.isError, true, second.content[0].text);
+});
+
+test("pre-flight no longer locks the chat: a second pre-flight for a new run with another policy is not refused", async () => {
+  // The real server over stdio. Both policies are Opus-only and the mode is estimated, so pre-flight has no
+  // model to reach: no network, no credential. On 0.7.6 the second call answered ok:false with
+  // "this run's pre-flight already recorded policy opus-only-v5".
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+  const home = mkdtempSync(join(tmpdir(), "run-lock-home-"));
+  const transport = new StdioClientTransport({ command: process.execPath, args: [join(HERE, "..", "dist", "server.js")], env: { PATH: process.env.PATH, HOME: home }, stderr: "ignore" });
+  const client = new Client({ name: "run-lock-test", version: "0" });
+  await client.connect(transport);
+  try {
+    const preflight = async (policy_name) => JSON.parse((await client.callTool({ name: "preflight_dispatch", arguments: { auth_mode: "estimated", policy_name, project_root: home } })).content[0].text);
+    const first = await preflight("opus-only-v5");
+    assert.equal(first.ok, true, JSON.stringify(first));
+    const second = await preflight("opus-only");
+    assert.equal(second.ok, true, JSON.stringify(second));
+  } finally {
+    await client.close();
+  }
+});

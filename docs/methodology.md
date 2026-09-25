@@ -250,10 +250,10 @@ What each plugin version changed about how the numbers are produced. A dispatche
 ### v0.8.3
 
 0.8.3 joins two lines that both start from v0.7.3:
-- v0.7.4–v0.7.6: the typed pipeline, measured on three briefs;
+- v0.7.4–v0.7.7: the typed pipeline, measured on three briefs (v0.7.7 is v0.7.6 with one policy per run instead of per chat);
 - v0.8.0–v0.8.2: ambient mode (zero-touch), built on the zero-touch branch and never released.
 
-The rule of the join: nothing the pipeline does changes, and ambient mode is added on top, off by default ([ambient-mode.md](ambient-mode.md), "What ambient mode leaves alone"). The v0.8.0–v0.8.2 notes below describe ambient mode as it was built; where they disagree with this table, this table holds.
+The rule of the join: nothing v0.7.7 does changes, and ambient mode is added on top, off by default ([ambient-mode.md](ambient-mode.md), "What ambient mode leaves alone"). The v0.8.0–v0.8.2 notes below describe ambient mode as it was built; where they disagree with this table, this table holds.
 
 | Area | v0.8.2 (zero-touch branch) | From v0.8.3 |
 |---|---|---|
@@ -345,6 +345,13 @@ No dispatched pipeline event is priced differently from v0.7.6; ambient hand-ove
 | Worker cost in chat | Not applicable | Each worker job is priced at the worker's own card (`jobs.worker_prices_usd_per_mtok`) and added to the session's total on the board, so a pair compares thinker plus worker against thinker alone. |
 | Spending cap | `hard_cost_cap_usd` was declared in every policy and read by nothing | A dispatch is refused once the run's telemetry file sums to the cap. The sum is read from the file, so it holds across sessions. |
 | Migrations | Routed to the worker tier with other boilerplate | Fall through to each policy's premium default. Numbers of runs that contained a migration are not comparable across this line. |
+### v0.7.7
+
+| Area | Before | From v0.7.7 |
+|---|---|---|
+| A second `/mmo:` run in the same chat with another policy or auth mode | Refused at pre-flight ("this run's pre-flight already recorded policy …"): the lock added in v0.7.5 lasted the whole chat (one server process) and was never cleared, so brownfield's per-run policy choice at Gate 0 failed on a chat's second job | Runs. The lock is per run: the executor binds the auth mode and policy at a spec's first stage, and a later stage of the same spec asked to run under different ones stops (`stopped`) and types nothing. Brownfield never uses the executor, so it has no lock, as before v0.7.5 (`test/executor.test.mjs`: the real server answers two pre-flights with different policies) |
+
+No dispatched event is priced differently, and a run that uses one policy from start to finish, as every measured run did, behaves exactly as on v0.7.6.
 
 ### v0.7.6
 

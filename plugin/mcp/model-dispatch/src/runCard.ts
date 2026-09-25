@@ -92,14 +92,15 @@ export function runCard(opts: { pluginDir: string; pluginVersion: string; env: R
 }
 
 /**
- * Why a second pre-flight must be refused: the run already recorded one auth
- * mode and policy, and every later stage uses them. The same values again
- * (after a context compaction, say) are fine; different ones would change the
- * run midway.
+ * Why a run's next executor stage must not run: its first stage ran under one
+ * auth mode and policy, and the latest pre-flight recorded different ones, so
+ * the run would change midway. The same values again (a pre-flight repeated
+ * after a context compaction, say) are fine. Checked per run, by the executor
+ * (executor/tools.ts, RUN_BINDINGS); a new run is never refused (0.7.7).
  */
 export function runStateConflict(prev: { authMode: string; policyName?: string; policyPath?: string } | undefined, next: { authMode: string; policyName?: string; policyPath?: string }): string | null {
   if (!prev) return null;
-  if (prev.authMode !== next.authMode) return `this run's pre-flight already recorded auth mode ${prev.authMode}; a second pre-flight asked for ${next.authMode}`;
-  if ((prev.policyName ?? "") !== (next.policyName ?? "") || (prev.policyPath ?? "") !== (next.policyPath ?? "")) return `this run's pre-flight already recorded policy ${prev.policyName ?? prev.policyPath ?? "(default)"}; a second pre-flight asked for ${next.policyName ?? next.policyPath ?? "(default)"}`;
+  if (prev.authMode !== next.authMode) return `this run started its stages under auth mode ${prev.authMode}; the latest pre-flight asked for ${next.authMode}`;
+  if ((prev.policyName ?? "") !== (next.policyName ?? "") || (prev.policyPath ?? "") !== (next.policyPath ?? "")) return `this run started its stages under policy ${prev.policyName ?? prev.policyPath ?? "(default)"}; the latest pre-flight asked for ${next.policyName ?? next.policyPath ?? "(default)"}`;
   return null;
 }
