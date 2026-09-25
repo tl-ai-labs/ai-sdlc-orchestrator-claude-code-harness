@@ -207,6 +207,35 @@ node plugin/scripts/ambient/setup.mjs --status
 
 The Claude Code settings it can propose (`promptCacheTtl`, `subagentPromptCacheTtl`, `bashOutputMaxChars`, `model`) were each checked in the Claude Code 2.1.270 program. Your settings file is merged, never replaced; a timestamped copy is written first; a file that does not parse is left untouched. One-hour cache writes cost more per token than five-minute ones, so keep the cache group only if your own on/off numbers say it pays.
 
+## Routing a recognised task to its `/mmo:` command (being built)
+
+**Goal:** a chat message that asks for one of the eight `/mmo:` jobs runs that job's flow exactly as typing the command would. The jobs are greenfield, docs, bugfix, feature-extend, feature-new, refactor, test and deps. Every other message stays with the rules above.
+
+**Status:** recognition is built and tested (`plugin/scripts/ambient/lib/route.mjs`, `tools/test/ambient-route.test.mjs`). It is not yet wired into the hooks, so nothing routes today.
+
+Recognition uses fixed patterns and no model: the same message in the same folder always gets the same answer. Two signals must agree.
+
+**The message** must be an instruction whose job verb opens it, after "please", "can you" and the like.
+- Two jobs route anyway, because each is part of its own job: a bugfix plus its regression test, and an upgrade plus fixing what the upgrade broke.
+- Never routed:
+  - questions, including anything ending in `?` that is not a "can you / could you" request;
+  - negations;
+  - a bare "fix it";
+  - "fix" used as a noun ("fix is in");
+  - follow-ups ("also …", "… as well", "… too", "… again");
+  - small edits (a typo, formatting, lint, a rename);
+  - two different jobs in one message.
+
+**The folder:**
+- **Existing:** `/mmo:greenfield`'s own four signals of an existing repo (a non-empty `src/`, a file git tracks, a stack manifest, a README over 200 bytes), or any source file of its own.
+- **New:** everything else.
+- A new folder can only be greenfield; an existing project can only be one of the seven brownfield jobs.
+- "Build a small Go service" reads as a new app in a new folder and as nothing in an existing project, because an api, service or dashboard can be a whole app there.
+
+Unsure means no route.
+
+**Checked against real chats:** 6,934 distinct messages typed on the author's machine, each routed as if typed in a new folder and as if typed in an existing project, and every routed one read by a person. 6 would route: 5 real new-app prompts and briefs (greenfield), and 1 instruction that the next step's rule excludes, because it came mid-chat after work had started. The messages stay on that machine; only these counts are recorded.
+
 ## What ambient mode leaves alone: everything 0.7.7 does
 
 From 0.8.3 ambient mode sits on top of 0.7.7 (0.7.6 plus one policy per run, not per chat), and nothing 0.7.7 does changes. That covers every `/mmo:` command, typed or started by the model: the same phases, gates, policies, routing, worker launches, output caps and hooks.
