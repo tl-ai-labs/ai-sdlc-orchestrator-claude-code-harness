@@ -1,5 +1,7 @@
 # opus+flash vs opus-only — cost plan and results ledger
 
+> Plain-English summary of every run and the current verdict: [../cost-study/README.md](../cost-study/README.md).
+
 Goal: `opus-plus-flash` beats `opus-only-v5` on **true total** (driver session + helper subagents + dispatched work) for the BIG brief, without changing the pipeline's phases, gates, policy format or packet contract. Every improvement below is one row in the ledger; each row records what changed, the files, the expected saving from measurement, and the measured result once the pair is re-run.
 
 Terms (from Sriram's SWE-bench-pro notes, kept here so both studies read the same): the expensive model running the session is the **driver** (Opus); the cheap model it hands work to is the **worker** (Flash).
