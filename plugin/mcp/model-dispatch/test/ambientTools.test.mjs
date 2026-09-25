@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AMBIENT_TOOLS, AMBIENT_TOOL_NAMES, ambientToolsFor, handleAmbientTool, completionModelFor, completionModelIn, reachableIn, chatPolicyNames, chatWorkerAdapter, chatModelConfig, completionDoor } from "../dist/ambient/tools.js";
@@ -178,6 +178,21 @@ test("job_result takes many ids in one call and returns every job's state", asyn
     const schema = AMBIENT_TOOLS.find((t) => t.name === "job_result").inputSchema;
     assert.ok(schema.properties.job_ids && schema.properties.job_id, "one id or many");
     assert.ok(!schema.required?.includes("job_id"), "job_id alone is no longer required");
+  } finally { w.cleanup(); }
+});
+
+test("write_files and lookup refuse a call that carries no stamp: the hooks are not running, so nothing is written or read", async () => {
+  // Independent review, 25 Sep: the batch write took unstamped calls, so it worked wherever the hook did not stand
+  // guard. A stamp means the plugin's hooks saw the call; without one the call fails closed, like the start tools.
+  const w = world();
+  try {
+    const wrote = await handleAmbientTool("write_files", { files: [{ path: "src/unstamped.js", content: "x" }] }, w.deps);
+    assert.equal(wrote.isError, true);
+    assert.match(body(wrote).reason, /no session stamp/);
+    assert.ok(!existsSync(join(w.repo, "src", "unstamped.js")), "nothing written");
+    const found = await handleAmbientTool("lookup", { terms: ["x"] }, w.deps);
+    assert.equal(found.isError, true);
+    assert.match(body(found).reason, /no session stamp/);
   } finally { w.cleanup(); }
 });
 

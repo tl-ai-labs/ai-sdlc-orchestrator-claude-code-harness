@@ -68,12 +68,35 @@ const POLITE = /^(?:(?:hey|hi|hello|ok|okay|so|now|next|then|alright|right|pleas
  */
 const FOLLOW_UP = /^also\b|\bas well\b|\b(?:too|again)$/;
 
-/** Objects too small to be a pipeline job. */
-const SMALL_EDIT = /\b(typos?|spelling|grammar|formatting|indentation|whitespace|lint(?:ing)?|linter|prettier|eslint|import order|comments?)\b/;
+/** Too small to be a pipeline job, anywhere in the clause (a colon does not hide it: "fix the spelling: teh"). */
+const SMALL_EDIT = /\b(typos?|spelling|grammar|formatting|indentation|whitespace|lint(?:ing)?|linter|prettier|eslint|import order|comments?|commit messages?)\b/;
+
+/** An object that starts by negating itself ("fix nothing yet, just explain") asks for no job. */
+const NEGATED_OBJECT = /^(?:nothing|none|no|not|never)\b/;
+
+/** An object pointing at text in the message ("the code below") is about that text, not the project. */
+const PASTED = /\b(?:below|above|following|attached|pasted)\b/;
+
+/**
+ * A project job must name something in the software (independent review,
+ * 25 Sep: "restructure this essay", "troubleshoot my wifi" and "fix merged"
+ * routed). Precision first, so this is a positive requirement, never a list of
+ * exceptions: a path or file name, a code identifier or call, an HTTP status,
+ * an error type, or a word of the software trade.
+ */
+const SOFTWARE = new RegExp([
+  "[\\w-]+/[\\w./-]+",                                   // a path: src/payments, /login
+  "\\b[\\w-]+\\.(?:[cm]?[jt]sx?|py|go|rb|java|kt|rs|cs|php|swift|json|ya?ml|toml|sql|html|s?css|sh|md)\\b", // a file
+  "\\b[a-z0-9]+_[a-z0-9_]+\\b", "\\w\\(\\)",                 // an identifier, a call
+  "\\b[1-5]\\d\\d\\b", "\\b\\w+(?:error|exception)\\b",       // an HTTP status, an error type
+  "\\b(?:bugs?|errors?|exceptions?|crash(?:es|ed|ing)?|fail(?:s|ed|ing|ures?)?|broken|regressions?|flaky|timeouts?|leaks?|tests?|specs?|coverage|endpoints?|apis?|routes?|router|handlers?|controllers?|services?|modules?|packages?|librar(?:y|ies)|functions?|methods?|class(?:es)?|components?|hooks?|pages?|screens?|forms?|buttons?|views?|quer(?:y|ies)|database|db|schemas?|migrations?|models?|tables?|parsers?|builds?|compiler|deploy(?:ment)?s?|pipelines?|jobs?|workers?|queues?|cli|commands?|scripts?|config(?:uration)?s?|login|logout|auth(?:entication|orization)?|signup|sessions?|tokens?|cache|servers?|clients?|frontend|backend|ui|code|codebase|repo(?:sitory)?|features?|logic|validation|exports?|imports?|uploads?|downloads?|webhooks?|integrations?|dependenc(?:y|ies)|deps|readme|docs?|documentation|docstrings?|helpers?|utils?|utilit(?:y|ies)|loaders?|folders?|director(?:y|ies)|files?|src|lib)\\b",
+].join("|"));
 
 const ART = "(?:a |an )";
 const ADJ = "(?:(?:new|simple|small|basic|minimal|full|complete|tiny|production[- ]ready|full[- ]stack)\\s+)*";
-const SOME = "(?:[\\w.+#/-]+\\s+){0,6}?";
+// The words between the article and the head noun: modifiers only, never a preposition or a clause, so the
+// app noun is what gets built ("a haiku about a bot" is a poem; independent review, 25 Sep).
+const SOME = "(?:(?!(?:for|about|on|of|to|in|with|from|by|at|into|like|as|that|which|who|where|when)\\b)[\\w.+#/-]+\\s+){0,6}?";
 const APP_NOUN = "(?:app|application|web ?app|website|site|api|backend|back-end|frontend|front-end|service|microservice|server|cli(?: tool)?|command[- ]line tool|tool|bot|dashboard|project|library|sdk|game|prototype|mvp|platform|system|portal|extension)";
 // Parts of a project only. A noun that can also be a whole app (api, service, dashboard, backend …) is unsure in an
 // existing project: "build an inventory REST API" there may be a new app in the wrong folder (offline audit, 25 Sep).
@@ -82,6 +105,9 @@ const THING = "(?:endpoint|route|api|module|page|screen|component|service|comman
 const VERSION = "(?:v?\\d[\\w.]*|latest|the latest(?: versions?)?|their latest versions?)";
 const PKG = "[\\w@][\\w@/.-]*";
 const DEP_WORDS = "(?:(?:npm |pip |python |node |go |js |javascript )?(?:dependencies|deps|packages|libraries|modules))";
+// An upgrade of the dependencies ends there, or names a target version or a part of the project; anything else
+// ("the deps list in the README") is about the dependencies, not an upgrade of them.
+const DEP_TAIL = `(?: to ${"(?:v?\\d[\\w.]*|latest|the latest(?: versions?)?|their latest versions?)"})?(?: (?:in|for|across) (?:the |this |our )?[\\w./-]+)?`;
 
 /**
  * Each job: the patterns that open an instruction for it, tried in this order
@@ -90,22 +116,28 @@ const DEP_WORDS = "(?:(?:npm |pip |python |node |go |js |javascript )?(?:depende
  */
 const JOBS = [
   { job: "deps", re: [
-    new RegExp(`^(?:upgrade|bump|update) (?:the |our |all |all the |all our )?${DEP_WORDS}(?<object>.*)$`),
+    new RegExp(`^(?:upgrade|bump|update) (?:the |our |all |all the |all our )?${DEP_WORDS}${DEP_TAIL}(?<object>)$`),
     new RegExp(`^(?:upgrade|bump) (?<object>${PKG})(?: from ${VERSION})? to ${VERSION}\\b.*$`),
     new RegExp(`^(?:update|migrate) (?<object>${PKG})(?: from ${VERSION})? to v?\\d[\\w.]*\\b.*$`),
   ], objectOptional: true },
-  { job: "test", re: [
+  { job: "test", software: true, re: [
     /^(?:write|add|create|backfill|generate|increase|improve|expand)(?: more| some| missing| the)?(?: unit| integration| e2e| end-to-end| regression| api)? (?:tests?|test cases|test coverage|coverage|specs?)(?: for| of| on| to| in| covering)?(?<object>.*)$/,
   ] },
   { job: "docs", re: [
-    /^(?:write|add|create|generate|update|improve)(?: the| a| an| some| missing| inline| better)? (?:api docs|docs|documentation|readme|docstrings|adrs?|architecture decision records?|changelog|jsdoc|javadoc|runbook)\b(?<object>.*)$/,
+    // A project's own documents are software by themselves; plain "docs" must say what they document.
+    /^(?:write|add|create|generate|update|improve)(?: the| a| an| some| missing| inline| better)? (?:api docs|readme|docstrings|adrs?|architecture decision records?|changelog|jsdoc|javadoc|runbook)\b(?<object>.*)$/,
+  ] },
+  { job: "docs", software: true, re: [
+    /^(?:write|add|create|generate|update|improve)(?: the| a| an| some| missing| inline| better)? (?:docs|documentation)\b(?<object>.*)$/,
     /^document (?<object>.+)$/,
   ] },
-  { job: "bugfix", re: [
+  { job: "bugfix", software: true, re: [
     /^(?:fix|debug|resolve|repair|troubleshoot|diagnose and fix|investigate and fix|find and fix) (?<object>.+)$/,
   ] },
-  { job: "refactor", re: [
+  { job: "refactor", software: true, re: [
     /^(?:refactor|restructure|reorgani[sz]e|consolidate|deduplicate|de-?dupe|de-duplicate|decouple|modulari[sz]e) (?<object>.+)$/,
+  ] },
+  { job: "refactor", re: [
     /^extract (?<object>.+?) (?:into|to|out into) (?:a |an |the |one )?(?:shared |common |separate |new |single )?(?:module|util|utility|utils|helper|library|package|file|class|function|service|component)\b.*$/,
   ] },
   { job: "feature-extend", re: [
@@ -126,8 +158,13 @@ const COMPANIONS = {
   deps: /^(?:fix|patch|adapt|update) (?:whatever|what|anything|everything|all)?(?: that)? ?(?:breaks|broke|fails|failed|changed)\b|^(?:fix|patch|adapt)(?: to)? the (?:breakages?|breaking changes?|fallout)\b/,
 };
 
-/** A brief pasted as the message: it opens with a heading naming a brief, spec or requirements. */
-const BRIEF_HEADING = /^#{1,3}\s+[^\n]*\b(?:brief|spec|specification|requirements|prd|design doc(?:ument)?)\b/i;
+/**
+ * A brief pasted as the message: /mmo:greenfield's own brief layout, whose
+ * first heading begins "# Project Brief" (greenfield.md step 2a), and not
+ * followed by a question (independent review, 25 Sep: "## Requirements …
+ * Is this list complete?" routed).
+ */
+const BRIEF_HEADING = /^#\s+project brief\b/i;
 
 function stripOpeners(s) {
   let prev;
@@ -135,11 +172,14 @@ function stripOpeners(s) {
   return s;
 }
 
-function realObject(object) {
-  const text = (object ?? "").replace(/[`'"(),.!?;:]/g, " ").toLowerCase();
-  if (SMALL_EDIT.test(text)) return { ok: false, why: "a small edit (typo, formatting, lint), not a pipeline job" };
+function realObject(object, { software }) {
+  const raw = (object ?? "").trim().toLowerCase();
+  if (NEGATED_OBJECT.test(raw)) return { ok: false, why: "the request negates itself" };
+  if (PASTED.test(raw)) return { ok: false, why: "about text in the message (below / above), not the project" };
+  const text = raw.replace(/[`'"(),.!?;:]/g, " ");
   const words = text.split(/\s+/).filter(Boolean);
   if (!words.some((w) => !DEICTIC.has(w))) return { ok: false, why: "no subject of its own (it / this / that): a follow-up, not a new job" };
+  if (software && !SOFTWARE.test(raw)) return { ok: false, why: "names nothing in the software (no file, path, error, test, module …)" };
   return { ok: true };
 }
 
@@ -152,10 +192,14 @@ function clauseJobs(clause) {
       if (!m) continue;
       if (clause.split(/\s+/).slice(1, 3).some((w) => AUX.has(w))) break; // the verb is a noun here
       const object = m.groups?.object ?? "";
-      // A colon hands over the subject ("fix this bug: TypeError …"): what follows it is the object.
+      // A colon hands over the subject ("fix this bug: TypeError …"): what follows it is part of the object.
       const colon = clause.indexOf(":");
-      const subject = colon >= 0 ? clause.slice(colon + 1) : object;
-      const check = spec.objectOptional && !object.trim() ? { ok: true } : realObject(subject || object);
+      const subject = colon >= 0 ? `${object.slice(0, Math.max(0, object.indexOf(":")))} ${clause.slice(colon + 1)}` : object;
+      const check = SMALL_EDIT.test(clause)
+        ? { ok: false, why: "a small edit (typo, spelling, formatting, lint, a commit message), not a pipeline job" }
+        // A new app and a dependency upgrade carry their subject in the pattern itself (the app noun, the version):
+        // what follows is context, and for a new app a brief below IS the input. Project jobs check their object.
+        : spec.objectOptional ? { ok: true } : realObject(subject || object, { software: spec.software === true });
       found.push({ job: spec.job, check });
       break;
     }
@@ -183,7 +227,8 @@ export function routeMessage(message, folder) {
   if (text.startsWith("/")) return { job: null, reason: "a typed command: Claude Code runs it itself" };
   const firstLine = text.split("\n").find((l) => l.trim()) ?? "";
 
-  if (BRIEF_HEADING.test(firstLine.trim())) {
+  const lastLine = text.split("\n").filter((l) => l.trim()).pop() ?? "";
+  if (BRIEF_HEADING.test(firstLine.trim()) && !lastLine.trim().endsWith("?")) {
     return folder === "new"
       ? { job: "greenfield", args: "", reason: "a pasted brief in a new folder" }
       : { job: null, reason: "a brief pasted in an existing project: not sure it is a new build" };

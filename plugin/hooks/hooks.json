@@ -85,6 +85,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh pre-any",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -148,6 +158,16 @@
           {
             "type": "command",
             "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh post-mmo-tool",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh post-skill",
             "timeout": 5
           }
         ]

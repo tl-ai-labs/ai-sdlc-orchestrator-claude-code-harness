@@ -206,14 +206,14 @@ node plugin/scripts/ambient/setup.mjs --receipt <project>   # trust that project
 node plugin/scripts/ambient/setup.mjs --status
 ```
 
-The Claude Code settings it can propose (`promptCacheTtl`, `subagentPromptCacheTtl`, `bashOutputMaxChars`, `model`) were each checked in the Claude Code 2.1.270 program. The `routing` group adds one entry to the file's `env` block, `CLAUDE_CODE_SUBAGENT_MODEL`, set to the model the workflows' own run-start check wants for the default policy (asked of that check, `driver-model-check.mjs --print-only`); the env block is merged entry by entry. Your settings file is merged, never replaced; a timestamped copy is written first; a file that does not parse is left untouched. One-hour cache writes cost more per token than five-minute ones, so keep the cache group only if your own on/off numbers say it pays.
+The Claude Code settings it can propose (`promptCacheTtl`, `subagentPromptCacheTtl`, `bashOutputMaxChars`, `model`) were each checked in the Claude Code 2.1.270 program. The `routing` group adds one entry to the file's `env` block, `CLAUDE_CODE_SUBAGENT_MODEL`, set to the model the workflows' own run-start check wants for the project in hand: its saved choice, else the default policy (asked of that check, `driver-model-check.mjs --print-only`). The env block is merged entry by entry, and a different value already there is never replaced. Your settings file is merged, never replaced; a timestamped copy is written first; a file that does not parse is left untouched. One-hour cache writes cost more per token than five-minute ones, so keep the cache group only if your own on/off numbers say it pays.
 
 ## Routing a recognised task to its workflow
 
 With ambient mode on, an ordinary chat message that asks for one of the eight `/mmo:` jobs runs that job's workflow exactly as typing the command would. The jobs are greenfield, docs, bugfix, feature-extend, feature-new, refactor, test and deps. Every other message stays with the rules above.
 
 **What the person sees.** Nothing in zero-touch's own words names the plugin, a command or a model:
-- **A clear request** ("fix the /login endpoint returning 500"): one plain line, "Running this as a full bug-fix workflow.", then the workflow's own steps and approvals, unchanged.
+- **A clear request** ("fix the /login endpoint returning 500"): one plain line, "Running this as a full bug-fix workflow.", then the workflow's own steps and approvals. Two of the workflow's own setup questions are answered from the switches instead of asked: the cost-recording mode (`routing_defaults.auth`), and, for a new app, the brief (the person's message is the brief, written in the Project Brief layout). The saved policy is the project's own, or `routing_defaults.policy` for a folder with none. Every phase, gate and approval is the workflow's own.
 - **An unclear one Opus recognises** (typos, casual wording): Opus asks once in plain words, "This looks like a job for the full bug-fix workflow (reproduce, fix, test, review). Shall I run it?", and it runs only on a plain yes.
 - **Anything else:** an ordinary chat.
 
@@ -233,14 +233,18 @@ All three are in `~/.mmo-ambient/ambient.json`. A project's own `.sdlc/ambient.j
 Fixed patterns, no model. Two signals must agree.
 
 **The message** must be an instruction whose job verb opens it.
-- Two jobs route anyway, because each is part of its own job: a bugfix plus its regression test, and an upgrade plus fixing what the upgrade broke.
-- Never routed:
+- **A project job** must also name something in the software: a path or file, a code identifier, an HTTP status, an error type, or a word of the trade (bug, test, endpoint, module, …). This is a positive requirement, never a list of exceptions.
+- **A new app:** the app word must head what is built. "A haiku about a bot" is a poem: no preposition may sit between the article and the app word.
+- **A pasted brief** counts only in `/mmo:greenfield`'s own layout (`# Project Brief`), and not when it ends with a question.
+- **Two jobs** route anyway, because each is part of its own job: a bugfix plus its regression test, and an upgrade plus fixing what the upgrade broke.
+- **Never routed:**
   - questions (a `?` without "can you");
-  - negations;
+  - negations, including a self-negating object ("fix nothing yet");
   - "fix" as a noun;
   - follow-ups (also / as well / too / again);
   - a bare "fix it";
-  - small edits (typo, formatting, lint, rename);
+  - text in the message ("the code below");
+  - small edits (typo, spelling, grammar, formatting, lint, a commit message; checked across the whole clause);
   - two different jobs.
 
 **The folder:**
@@ -249,21 +253,42 @@ Fixed patterns, no model. Two signals must agree.
 - A new folder can only be greenfield; an existing project only a brownfield job.
 - Nouns that can be a whole app (api, service, dashboard) are unsure in an existing project.
 
-Checked offline against 6,934 messages typed on the author's machine: 6 would route, none by mistake. The messages stay on that machine.
+**Checked offline** against 6,955 messages typed on the author's machine, before and after the independent review of 25 Sep 2026: 5 route, all real new-app prompts and briefs, none by mistake. The review's 19 look-alike wrong routes are now test cases. The messages stay on that machine.
 
 ### The hand-off (`hook.mjs`, `lib/route-flow.mjs`)
 
-Every workflow start, typed or model-started, reaches the hooks as a `PreToolUse` on the `Skill` tool. This was probed live on Claude Code 2.1.282.
+Every workflow start, typed or model-started, reaches the hooks as a `PreToolUse` on the `Skill` tool. This was probed live on Claude Code 2.1.282. A typed `/mmo:bugfix`, or `/bugfix` where Claude Code allows the plugin's command without its prefix, makes the chat a workflow run before any tool runs.
 
-1. **Only before the chat has started work.** A route is considered only while there is no earlier file write in the chat (Write, Edit, the batch write, or a Bash command that writes) and no workflow running. A job-shaped message after that is a follow-up.
-2. **A clear route.** The prompt hook tells Opus which workflow to start (the Skill call and its one-line description), the plain line to say, and that the cost mode and policy are already chosen. For a new app, the message is also the brief.
-3. **Guard A.** Until that Skill call, a Write, Edit, Bash, helper agent or job tool is refused with "Start the workflow first". A route belongs to its prompt: the next prompt drops it.
-4. **Guard B.** A `mmo:` Skill call:
-   - **Allowed:** a typed command (it is already a workflow run), and the routed workflow.
-   - **Unclear request Opus recognises:** in `ask` mode it is refused with the plain question to ask and kept as an offer for one reply, which a plain yes turns into a route. In `auto` mode it starts.
-   - **Refused:** any other command (setup, policy, revert, pass, the generic brownfield), a second workflow, or a workflow in a chat that has started work.
-5. **Starting.** Before a workflow is allowed to start, the hook runs that workflow's own run-start check (`driver-model-check.mjs`), with the policy it will run under: the project's saved policy, else `routing_defaults.policy`, which is then saved as `/mmo:setup`'s scripted path saves it and is never overwritten. Then the chat becomes a workflow run and every ambient rule stands down, as for a typed command.
-6. **When a workflow cannot start** (the helpers' model is not set for this chat), nothing starts. Opus tells the person in plain words that a one-time setting is needed and that it takes effect in a new chat. The setting is `node plugin/scripts/ambient/setup.mjs --apply=routing`: it adds `CLAUDE_CODE_SUBAGENT_MODEL` to `~/.claude/settings.json`'s `env` block, merged entry by entry, with a backup first.
+1. **Only before the chat has started work.** Nothing is routed once:
+   - a file inside the project has been written (Write, Edit, the batch write, or a Bash command that writes one); or
+   - the project's git state (HEAD and `git status`) has moved since the conversation began, which catches deletes, patches and formatters; or
+   - a workflow is running.
+2. **A clear route.** The prompt hook tells Opus which workflow to start (the Skill call and its one-line description), the plain line to say, and the settings already chosen. A route belongs to its prompt, and the next prompt drops it.
+3. **Guard A** (one catch-all `PreToolUse` hook, `pre-any`). Until that Skill call, only tools that change nothing run (Read, Glob, Grep, ToolSearch, TodoWrite, the web tools, Skill). Everything else waits with "Start the workflow first", including every other MCP server's tools and helpers already running.
+4. **Guard B** (`pre-skill`), for a `mmo:` Skill call (a leading `/` is the same command):
+   - **Allowed:** a typed command (already a workflow run) and the routed workflow.
+   - **Refused:** a helper agent starting the chat's workflow, any other command (setup, policy, revert, pass, the generic brownfield), a second workflow, a workflow in a chat that has started work, and one the folder rule forbids.
+   - **An unclear request Opus recognises:** in `ask` mode it is refused with the plain question to ask and kept as an offer. The offer is answered by the person's next typed message, whenever it comes, because the question is the last thing asked. Only a reply made entirely of agreement words ("yes", "Yes, please", "go for it", "okay, run it") accepts it. Anything else ends it, and Opus is told to carry on and offer again only if asked. In `auto` mode it starts.
+5. **Starting.**
+   - A route made by the prompt hook was already checked there, so the chat is marked a workflow run first. The policy is then saved, only for a folder with none, as `/mmo:setup`'s scripted path saves it: never overwritten, and never into an enclosing project.
+   - A start Opus made in `auto` mode is checked at that moment.
+   - The after-hook (`post-skill`) marks the start too, so a start hook that timed out cannot leave the workflow blocked.
+6. **When a workflow cannot start,** nothing starts and Opus tells the person the real cause, with the fix for that cause:
+
+   | Cause | Fix offered |
+   |---|---|
+   | The helpers' model is not set | `setup.mjs --apply=routing`, then a new chat |
+   | It is set to a different model than this project's saved choice needs | The person's choice, never changed automatically |
+   | The plugin is not fully installed | `verify-setup.mjs --fix` |
+   | `.sdlc/project.json` does not read | Shown to the person |
+   | The folder is inside another project with no saved choice | Said plainly |
+
+   Under `vendor` the helpers'-model check is skipped, as the workflow itself skips it.
+7. **The one-time setting.** `setup.mjs --apply=routing` adds `CLAUDE_CODE_SUBAGENT_MODEL` to `~/.claude/settings.json`'s `env` block, merged entry by entry, with a backup first. The model is the one the project in hand needs (its saved choice, else the default). A different value already there is never replaced: other projects may need it, and it is the default model of every helper agent on the machine.
+8. **Around it:**
+   - `/clear` starts a fresh conversation: an earlier workflow run, route, offer and started work no longer count.
+   - The control arm of a measurement changes nothing, the `mmo:` agent guard and the model lock included.
+   - Inside a workflow run every zero-touch tool is refused, and the server refuses a zero-touch tool call that carries no stamp from the hook.
 
 Tests: `tools/test/ambient-route.test.mjs` (recognition) and `tools/test/ambient-routing-hooks.test.mjs` (the hand-off, end to end through the shell shim).
 
@@ -281,6 +306,7 @@ From 0.8.3 ambient mode sits on top of 0.7.7 (0.7.6 plus one policy per run, not
 - from the `/mmo:` prompt on, every rule stands down;
 - the pipeline's own agents get their explicit 0.7.7 tool lists.
 - One change with the mode on, in ordinary chat only: Opus may start just the workflow zero-touch recognised or the person agreed to (Guard B), where 0.7.7 lets it start any. Which workflow may start changes; how a workflow runs does not.
+- Inside a workflow run every zero-touch tool is refused, and never stamped, so the batch write can never get around a brownfield run's write contract.
 
 The pipeline's own hooks (the write contract, the foreground-helpers guard, telemetry) keep 0.7.7's settings, with no short timeout. Claude Code lets a tool call through when its guard hook times out.
 

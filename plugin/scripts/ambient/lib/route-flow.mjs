@@ -12,7 +12,7 @@
  * one reply: a plain yes turns it into a route, anything else ends it.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureSessionDir, sessionDir } from "./paths.mjs";
@@ -21,6 +21,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS = resolve(HERE, "..", "..");
 const SETUP_POLICY = join(SCRIPTS, "setup-policy.mjs");
 const DRIVER_MODEL_CHECK = join(SCRIPTS, "driver-model-check.mjs");
+const VERIFY_SETUP = join(SCRIPTS, "verify-setup.mjs");
 export const ZERO_TOUCH_SETUP = join(SCRIPTS, "ambient", "setup.mjs");
 
 /** What the person hears for each job, and the steps it runs, in plain words. */
@@ -38,9 +39,23 @@ export const PLAIN = {
 /** One wording everywhere; it informs, it does not order (the chat note's own rule), and it is exact. */
 export const KEEP_OUT = "Keep the plugin, command names and model names out of what you say to the person.";
 
-/** A reply that accepts an offer: the whole message is a plain yes, nothing added. */
+/**
+ * A reply that accepts an offer: every word is a word of agreement, and at
+ * least one of them says yes. "Yes, please", "go for it", "okay, run it" are
+ * yes; "yes but only the controller", a question, or anything else is a no.
+ */
+const AFFIRM = new Set(["yes", "y", "yeah", "yea", "yep", "yup", "sure", "ok", "okay", "k", "go", "alright", "absolutely", "definitely", "do", "run", "start", "proceed", "please", "lets", "let's", "sounds"]);
+const AGREEMENT = new Set([...AFFIRM, "ahead", "for", "it", "thing", "good", "great", "fine", "that", "thanks", "thank", "you"]);
 export function isPlainYes(text) {
-  return /^\s*(?:yes|y|yeah|yep|yup|sure|ok|okay|go|go ahead|do it|please do|yes please|run it|start it|sounds good)\s*[.!]*\s*$/i.test(String(text ?? ""));
+  const t = String(text ?? "").toLowerCase().trim();
+  if (!t || t.includes("?")) return false;
+  const words = t.replace(/[.,!;:()"]/g, " ").split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.length <= 8 && words.every((w) => AGREEMENT.has(w)) && words.some((w) => AFFIRM.has(w));
+}
+
+/** After an offer the person did not accept. */
+export function declinedInstruction(job) {
+  return `The person did not agree to run the full ${PLAIN[job].name}: carry on as an ordinary chat, and offer it again only if they ask for it. ${KEEP_OUT}`;
 }
 
 /** The instruction that starts a routed workflow. `via` is "rules" or "yes". */
@@ -63,7 +78,7 @@ export function startInstruction({ job, args, via, auth }) {
 
 /** Guard A's refusal while a route waits for its Skill call. */
 export function startFirstReason(job) {
-  return `Start the workflow first: the person asked for the full ${PLAIN[job].name}. Call the Skill tool with skill "mmo:${job}" now; other tools are blocked until it starts.`;
+  return `Start the workflow first: the person asked for the full ${PLAIN[job].name}. Call the Skill tool with skill "mmo:${job}" now; other tools are blocked until it starts. ${KEEP_OUT}`;
 }
 
 /** Guard B's refusal in "ask" mode: the person must agree first. */
@@ -89,14 +104,30 @@ export function workflowsParagraph() {
   );
 }
 
-/** What Opus says when a workflow cannot start in this chat, and how the person can fix it. */
-export function cannotStartInstruction(job, why) {
-  return (
-    `The person's message asks for a full ${PLAIN[job].name}, but it cannot start in this chat: ${why} ` +
-    `Tell the person in one plain sentence that full workflows need a one-time setting, that it takes effect in a new chat, ` +
-    `and offer to add it; if they agree, run: node ${JSON.stringify(ZERO_TOUCH_SETUP)} --apply=routing . ` +
-    `Meanwhile handle the request as an ordinary chat if they want. ${KEEP_OUT}`
-  );
+/**
+ * What Opus says when a workflow cannot start in this chat: the real cause and
+ * the fix that works for that cause (independent review, 25 Sep: one fixed
+ * sentence sent every cause to the one-time setting, which fixes only one).
+ */
+export function cannotStartInstruction(job, problem) {
+  const lead = `The person's message asks for a full ${PLAIN[job].name}, but it cannot start in this chat:`;
+  const tail = `Meanwhile handle the request as an ordinary chat if they want. ${KEEP_OUT}`;
+  switch (problem?.cause) {
+    case "unset":
+      return `${lead} it needs a one-time setting (which model the workflow's helpers run on), and that setting takes effect in a new chat. ` +
+        `Tell the person that in one plain sentence and offer to add it; if they agree, run: node ${JSON.stringify(ZERO_TOUCH_SETUP)} --apply=routing . ${tail}`;
+    case "mismatch":
+      return `${lead} this project's saved workflow choice needs its helpers on a different model than this chat is set up for. ` +
+        `Tell the person that plainly; the choice is theirs (change the project's saved choice, or the setting, then start a new chat). Do not change either yourself. ${tail}`;
+    case "not-built":
+      return `${lead} the plugin is not fully installed on this machine. Tell the person in one plain sentence and offer to finish the install; if they agree, run: node ${JSON.stringify(VERIFY_SETUP)} --fix . ${tail}`;
+    case "project-file":
+      return `${lead} the project's saved workflow settings (.sdlc/project.json) cannot be read. Tell the person plainly and offer to show them the file so they can fix it. ${tail}`;
+    case "enclosing":
+      return `${lead} this folder is inside another project (${problem.root}), and nothing is set up for workflows there. Tell the person plainly. ${tail}`;
+    default:
+      return `${lead} ${problem?.why ?? "its setup could not be checked."} Tell the person plainly. ${tail}`;
+  }
 }
 
 // ─── Route state (one chat) ─────────────────────────────────────────────
@@ -133,33 +164,61 @@ export function dropOffer(sid) { try { rmSync(join(sessionDir(sid), OFFER), { fo
  */
 export function workflowPolicy({ projectDir, fallback }) {
   try {
-    const saved = execFileSync(process.execPath, [SETUP_POLICY, "--print-only"], { cwd: projectDir, stdio: ["ignore", "pipe", "pipe"], timeout: 4000 }).toString().trim();
+    const saved = execFileSync(process.execPath, [SETUP_POLICY, "--print-only"], { cwd: projectDir, stdio: ["ignore", "pipe", "pipe"], timeout: 3000 }).toString().trim();
     return saved ? { policy: saved, saved: true } : { policy: fallback, saved: false };
   } catch {
-    return { error: "the project's saved settings file (.sdlc/project.json) cannot be read." };
+    return { error: "project-file" };
+  }
+}
+
+/** The git top folder that setup-policy.mjs would write into, when it is not the project folder itself. */
+function enclosingRoot(projectDir) {
+  try {
+    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: projectDir, stdio: ["ignore", "pipe", "ignore"], timeout: 2000 }).toString().trim();
+    return top && realpathSync(top) !== realpathSync(projectDir) ? top : null;
+  } catch {
+    return null;
   }
 }
 
 /**
- * Can a workflow start here under this policy? The workflow's own run-start
- * check decides (plugin/scripts/driver-model-check.mjs, the pipeline's router):
- * the model the helpers run on must be set before the chat starts. Asking the
- * same script means the hook and the workflow can never disagree.
+ * Why a workflow cannot start here, or null when it can; `policy` is the one
+ * it will run with. Each cause is the workflow's own: its policy file must
+ * read; a folder with no saved choice must be the folder the choice is saved
+ * for (never an enclosing project); and, except under vendor (where the
+ * workflow skips it), its run-start check (driver-model-check.mjs, the
+ * pipeline's router) must pass. Asking the same scripts means the hook and the
+ * workflow can never disagree.
  */
-export function prerequisites({ projectDir, policy, env = process.env }) {
+export function startProblem({ projectDir, fallback, auth, env = process.env }) {
+  const found = workflowPolicy({ projectDir, fallback });
+  if (found.error) return { problem: { cause: "project-file" } };
+  if (!found.saved) {
+    const root = enclosingRoot(projectDir);
+    if (root) return { problem: { cause: "enclosing", root } };
+  }
+  if (auth === "vendor") return { problem: null, policy: found.policy, saved: found.saved };
+  let needed;
   try {
-    execFileSync(process.execPath, [DRIVER_MODEL_CHECK, "--project-root", projectDir, "--policy", policy], { cwd: projectDir, env, stdio: ["ignore", "pipe", "pipe"], timeout: 4000 });
-    return { ok: true };
+    needed = execFileSync(process.execPath, [DRIVER_MODEL_CHECK, "--project-root", projectDir, "--policy", found.policy, "--print-only"], { cwd: projectDir, env, stdio: ["ignore", "pipe", "pipe"], timeout: 3000 }).toString().trim();
   } catch {
-    return { ok: false, why: "the chat was started without the setting that tells the workflow's helpers which model to run on." };
+    return { problem: { cause: "not-built" } };
+  }
+  try {
+    execFileSync(process.execPath, [DRIVER_MODEL_CHECK, "--project-root", projectDir, "--policy", found.policy], { cwd: projectDir, env, stdio: ["ignore", "pipe", "pipe"], timeout: 3000 });
+    return { problem: null, policy: found.policy, saved: found.saved };
+  } catch {
+    const have = String(env.CLAUDE_CODE_SUBAGENT_MODEL ?? "").trim();
+    return { problem: have ? { cause: "mismatch", have, needed } : { cause: "unset", needed } };
   }
 }
 
-/** Saves `policy` for the project when none is saved, as /mmo:setup's scripted path does; never overwrites. */
+/** Saves `policy` for the project when none is saved, as /mmo:setup's scripted path does; never overwrites, never into an enclosing project. */
 export function saveWorkflowPolicy({ projectDir, policy }) {
   const found = workflowPolicy({ projectDir, fallback: policy });
-  if (found.error) throw new Error(found.error);
+  if (found.error) throw new Error("the project's saved workflow settings cannot be read");
   if (found.saved) return { policy: found.policy, written: false };
-  execFileSync(process.execPath, [SETUP_POLICY, `--policy=${policy}`], { cwd: projectDir, stdio: ["ignore", "pipe", "pipe"], timeout: 4000 });
+  if (enclosingRoot(projectDir)) throw new Error("the folder is inside another project");
+  execFileSync(process.execPath, [SETUP_POLICY, `--policy=${policy}`], { cwd: projectDir, stdio: ["ignore", "pipe", "pipe"], timeout: 3000 });
   return { policy, written: true };
 }

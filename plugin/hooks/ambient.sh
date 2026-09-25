@@ -24,7 +24,7 @@ if ! command -v node >/dev/null 2>&1; then
   # Say it once per machine, at a session start, and stay quiet afterwards.
   if [ "$event" = "session-start" ] && [ ! -f "$home/node-missing-said" ]; then
     mkdir -p "$home" 2>/dev/null && : > "$home/node-missing-said" 2>/dev/null
-    printf '%s' '{"systemMessage":"mmo ambient mode is on but node was not found on PATH, so it is doing nothing. Plain Claude Code is unaffected."}'
+    printf '%s' '{"systemMessage":"Cost-saving mode is on but cannot run here (Node.js was not found), so it is doing nothing. Everything else works as normal."}'
   fi
   exit 0
 fi

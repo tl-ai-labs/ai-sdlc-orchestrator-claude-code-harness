@@ -284,20 +284,24 @@ export async function handleAmbientTool(name: string, rawArgs: unknown, deps: Am
       : await jobs.startJob({ tool: name, args, stamp, projectDir: deps.projectDir, callWorker, reachable });
     return reply(out, out.status === "refused");
   }
+  // Every other tool needs the stamp a plugin hook adds: without it the hooks did not see the call (ambient
+  // mode off, a helper outside the chat, a broken hook), so it fails closed. The batch write and lookup took
+  // unstamped calls until the independent review of 25 Sep showed the batch write getting around a typed
+  // brownfield run's write contract, where the hook now refuses every zero-touch tool.
+  if (!stamp || typeof (stamp as { session_id?: unknown }).session_id !== "string") {
+    return reply({ status: "refused", reason: "this call carries no session stamp, so the plugin's hooks are not running" }, true);
+  }
   if (name === "write_files") {
     // An optimization, not a delegation: the thinker's own files, written and tested in one call, on both sides.
     const mod = await import(pathToFileURL(resolve(dirname(JOBS_MODULE), "write-files.mjs")).href);
-    const out = mod.writeFiles({ files: args.files, testCommand: args.test_command, projectDir: deps.projectDir, stamp: stamp ?? null });
+    const out = mod.writeFiles({ files: args.files, testCommand: args.test_command, projectDir: deps.projectDir, stamp });
     return reply(out, out.status === "refused");
   }
   if (name === "lookup") {
-    // An optimization, not a delegation: allowed on both sides of a pair and inside helpers; the stamp only attributes the record.
+    // An optimization, not a delegation: allowed on both sides of a pair and inside helpers.
     const mod = await import(pathToFileURL(LOOKUP_MODULE).href);
-    const out = mod.lookup({ terms: args.terms, paths: args.paths, maxHits: args.max_hits, projectDir: deps.projectDir, stamp: stamp ?? null });
+    const out = mod.lookup({ terms: args.terms, paths: args.paths, maxHits: args.max_hits, projectDir: deps.projectDir, stamp });
     return reply(out, out.status === "refused");
-  }
-  if (!stamp || typeof (stamp as { session_id?: unknown }).session_id !== "string") {
-    return reply({ status: "refused", reason: "this call carries no session stamp, so the plugin's hooks are not running" }, true);
   }
   if (name === "job_result") {
     const ids = Array.isArray(args.job_ids) ? args.job_ids : [];

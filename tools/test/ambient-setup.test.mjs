@@ -114,3 +114,30 @@ test("the routing group sets the helpers' model inside the settings file's env b
     assert.equal(plan({ env: h.env }).find((r) => r.group === "routing").status, "already-set");
   } finally { h.cleanup(); }
 });
+
+test("the routing group never replaces a different model setting already there, and says what the setting affects", { skip: SKIP ?? false }, () => {
+  // Independent review, 25 Sep: an existing CLAUDE_CODE_SUBAGENT_MODEL was silently replaced. Other projects'
+  // saved choices may need it, and it is the default model of every helper agent on the machine.
+  const h = home();
+  try {
+    writeFileSync(h.settings, JSON.stringify({ env: { FOO: "1", CLAUDE_CODE_SUBAGENT_MODEL: "claude-opus-4-7" } }));
+    const r = plan({ env: h.env, apply: ["routing"] }).find((x) => x.group === "routing");
+    assert.equal(r.status, "skipped");
+    assert.match(r.why, /already set to claude-opus-4-7/);
+    assert.deepEqual(JSON.parse(readFileSync(h.settings, "utf8")).env, { FOO: "1", CLAUDE_CODE_SUBAGENT_MODEL: "claude-opus-4-7" }, "untouched");
+    writeFileSync(h.settings, JSON.stringify({}));
+    assert.match(plan({ env: h.env }).find((x) => x.group === "routing").why, /every helper agent/, "the proposal says the setting is the default for every helper agent on this machine");
+  } finally { h.cleanup(); }
+});
+
+test("the routing group targets the model the project in hand needs: its saved choice when it has one", { skip: SKIP ?? false }, () => {
+  const h = home();
+  const project = mkdtempSync(join(tmpdir(), "mmo-setup-project-"));
+  try {
+    mkdirSync(join(project, ".sdlc"));
+    writeFileSync(join(project, ".sdlc", "project.json"), JSON.stringify({ schema_version: 2, default_policy: "opus-plus-flash" }));
+    writeFileSync(h.settings, JSON.stringify({}));
+    const r = plan({ env: h.env, cwd: project }).find((x) => x.group === "routing");
+    assert.match(r.why, /claude-opus-4-7/, "opus-plus-flash's workflows want claude-opus-4-7, not the default policy's model");
+  } finally { h.cleanup(); rmSync(project, { recursive: true, force: true }); }
+});

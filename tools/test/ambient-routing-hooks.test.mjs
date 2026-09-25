@@ -10,7 +10,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -77,12 +77,12 @@ test("a clear job starts its workflow: Opus is told which one, in plain words fo
     assert.match(c, /estimated/, "the cost-recording mode is chosen, so the person is not asked");
     assert.match(c, /Keep the plugin, command names and model names out of what you say to the person/);
     assert.doesNotMatch(c, /ToolSearch/, "a chat that becomes a workflow gets no chat-savings note");
-    // Guard A: until the workflow starts, nothing that changes files or starts a helper may run.
-    const write = await run("pre-write", { session_id: "c1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "a.js"), content: "x" } }, s);
+    // Guard A (the catch-all pre-any hook): until the workflow starts, nothing that changes files or starts a helper may run.
+    const write = await run("pre-any", { session_id: "c1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "a.js"), content: "x" } }, s);
     assert.ok(denied(write) && /Start the workflow first/.test(reason(write)), write.stdout);
-    const bash = await run("pre-bash", { session_id: "c1", cwd: s.repo, tool_name: "Bash", tool_input: { command: "npm test" } }, s);
+    const bash = await run("pre-any", { session_id: "c1", cwd: s.repo, tool_name: "Bash", tool_input: { command: "npm test" } }, s);
     assert.ok(denied(bash), bash.stdout);
-    const agent = await run("pre-agent", { session_id: "c1", cwd: s.repo, tool_name: "Agent", tool_input: { subagent_type: "general-purpose", prompt: "x" } }, s);
+    const agent = await run("pre-any", { session_id: "c1", cwd: s.repo, tool_name: "Agent", tool_input: { subagent_type: "general-purpose", prompt: "x" } }, s);
     assert.ok(denied(agent), agent.stdout);
     // Guard B: only the routed workflow may start.
     assert.ok(denied(await skill(s, "c1", "mmo:refactor", "x")), "another workflow is refused");
@@ -90,7 +90,7 @@ test("a clear job starts its workflow: Opus is told which one, in plain words fo
     assert.equal(start.stdout, "", "the routed workflow starts");
     assert.ok(pipeline(s, "c1"), "from here the chat is a workflow run: zero-touch stands down");
     assert.equal(projectPolicy(s), "opus-plus-flash-v38", "a folder with no saved policy gets the default, so the workflow does not stop to ask");
-    assert.equal((await run("pre-write", { session_id: "c1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "b.js"), content: "x" } }, s)).stdout, "", "Guard A ends when the workflow starts");
+    assert.equal((await run("pre-any", { session_id: "c1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "b.js"), content: "x" } }, s)).stdout, "", "Guard A ends when the workflow starts");
   } finally { s.cleanup(); }
 });
 
@@ -114,7 +114,7 @@ test("a typed command is never touched: it starts as on 0.7.7, and nothing is ro
     assert.equal((await run("prompt-expansion", { session_id: "t1", cwd: s.repo, command_name: "mmo:refactor", expansion_type: "slash_command" }, s)).stdout, "");
     assert.equal(context(await prompt(s, "t1", "/mmo:refactor extract the date helpers")), "", "no route, no note");
     assert.equal((await skill(s, "t1", "mmo:refactor", "extract the date helpers")).stdout, "", "a typed command runs as a Skill call on 2.1.282, and it is allowed");
-    assert.equal((await run("pre-write", { session_id: "t1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "a.js"), content: "x" } }, s)).stdout, "");
+    assert.equal((await run("pre-any", { session_id: "t1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "a.js"), content: "x" } }, s)).stdout, "");
   } finally { s.cleanup(); }
 });
 
@@ -212,7 +212,7 @@ test("a route not taken ends with its prompt: the next message is judged afresh 
   try {
     assert.match(context(await prompt(s, "s1", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/);
     await prompt(s, "s1", "actually, what does the login controller do?");
-    assert.equal((await run("pre-write", { session_id: "s1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "a.js"), content: "x" } }, s)).stdout, "");
+    assert.equal((await run("pre-any", { session_id: "s1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "a.js"), content: "x" } }, s)).stdout, "");
     assert.ok(denied(await skill(s, "s1", "mmo:bugfix", "x")), "the old route is gone");
   } finally { s.cleanup(); }
 });
@@ -236,5 +236,209 @@ test("setup, policy, revert, pass and the generic brownfield command are never s
       assert.ok(denied(await skill(s, "n1", name)), name);
     }
     assert.equal((await skill(s, "n1", "some-other-plugin:thing")).stdout, "", "other plugins' skills are not ours to judge");
+  } finally { s.cleanup(); }
+});
+
+test("inside a workflow run, typed or started by routing, every zero-touch tool is refused (the batch write would get around the write contract)", { skip: SKIP ?? false }, async () => {
+  // Independent review, 25 Sep: in a typed brownfield run with zero-touch on, write_files was stamped and allowed
+  // and overwrote a file the run's write contract keeps off limits. 0.7.7 has no such tool; a run must not either.
+  const s = sandbox("existing");
+  try {
+    const tool = (sid, name, input) => run("pre-mmo-tool", { session_id: sid, cwd: s.repo, tool_name: `mcp__plugin_mmo_model-dispatch__${name}`, tool_input: input }, s);
+    await run("prompt-expansion", { session_id: "r1", cwd: s.repo, command_name: "mmo:bugfix", expansion_type: "slash_command" }, s);
+    for (const [name, input] of [["write_files", { files: [{ path: "src/billing.js", content: "x" }] }], ["lookup", { terms: ["x"] }], ["write_files_from_specs", { files: [] }], ["job_result", { job_ids: [] }]]) {
+      const r = await tool("r1", name, input);
+      assert.ok(denied(r), `${name} in a typed run: ${r.stdout}`);
+      assert.equal(r.json?.hookSpecificOutput?.updatedInput, undefined, "never stamped");
+    }
+    await prompt(s, "r2", "fix the /login endpoint returning 500 on missing password");
+    assert.equal((await skill(s, "r2", "mmo:bugfix", "x")).stdout, "");
+    assert.ok(denied(await tool("r2", "write_files", { files: [{ path: "src/a.js", content: "x" }] })), "and in a routed run");
+  } finally { s.cleanup(); }
+});
+
+// ─── Independent review, 25 Sep: the causes a workflow cannot start, the start hook's timing, guard gaps ───
+
+test("a workflow that cannot start says the real cause and the fix that works for it", { skip: SKIP ?? false }, async () => {
+  const unset = sandbox("existing");
+  try {
+    const c = context(await prompt(unset, "k1", "fix the /login endpoint returning 500 on missing password", { CLAUDE_CODE_SUBAGENT_MODEL: undefined }));
+    assert.match(c, /--apply=routing/, "a missing setting: the one-time setting fixes it");
+  } finally { unset.cleanup(); }
+  const other = sandbox("existing");
+  try {
+    mkdirSync(join(other.repo, ".sdlc"));
+    writeFileSync(join(other.repo, ".sdlc", "project.json"), JSON.stringify({ schema_version: 2, default_policy: "opus-plus-flash" }));
+    const c = context(await prompt(other, "k2", "fix the /login endpoint returning 500 on missing password"));
+    assert.doesNotMatch(c, /"mmo:bugfix"/, "this project's saved choice wants another helpers' model than this chat has");
+    assert.doesNotMatch(c, /--apply=routing/, "the one-time setting cannot fix that: it would already say already-set");
+    assert.match(c, /saved/);
+  } finally { other.cleanup(); }
+  const broken = sandbox("existing");
+  try {
+    mkdirSync(join(broken.repo, ".sdlc"));
+    writeFileSync(join(broken.repo, ".sdlc", "project.json"), "{not json");
+    const c = context(await prompt(broken, "k3", "fix the /login endpoint returning 500 on missing password"));
+    assert.doesNotMatch(c, /"mmo:bugfix"|--apply=routing/);
+    assert.match(c, /\.sdlc\/project\.json/);
+  } finally { broken.cleanup(); }
+  const vendor = sandbox("existing", { routing_defaults: { policy: "opus-plus-flash-v38", auth: "vendor" } });
+  try {
+    const c = context(await prompt(vendor, "k4", "fix the /login endpoint returning 500 on missing password", { CLAUDE_CODE_SUBAGENT_MODEL: undefined }));
+    assert.match(c, /"mmo:bugfix"/, "under vendor the workflow skips its helpers'-model check, so routing does too");
+    assert.match(c, /cost recording "vendor"/);
+  } finally { vendor.cleanup(); }
+});
+
+test("a folder inside another project with no saved choice never gets one written into the outer project", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("new");
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: s.repo });
+    writeFileSync(join(s.repo, "notes.txt"), "x");
+    execFileSync("git", ["add", "notes.txt"], { cwd: s.repo });
+    const app = join(s.repo, "app");
+    mkdirSync(app);
+    const inner = { home: s.home, repo: app };
+    const c = context(await run("prompt", { session_id: "e1", cwd: app, prompt: "build me a todo app with a React frontend" }, inner));
+    assert.doesNotMatch(c, /"mmo:greenfield"/);
+    assert.match(c, /inside another project/);
+    assert.ok(!existsSync(join(s.repo, ".sdlc")) && !existsSync(join(app, ".sdlc")), "nothing written anywhere");
+  } finally { s.cleanup(); }
+});
+
+test("a start is confirmed after the command ran even if the start hook never finished: the workflow is never left blocked", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing");
+  try {
+    await prompt(s, "q1", "fix the /login endpoint returning 500 on missing password");
+    // pre-skill timed out (Claude Code lets the call run); only the after-hook sees the command start.
+    await run("post-skill", { session_id: "q1", cwd: s.repo, tool_name: "Skill", tool_input: { skill: "mmo:bugfix", args: "x" }, tool_response: { success: true } }, s);
+    assert.ok(pipeline(s, "q1"));
+    assert.equal((await run("pre-agent", { session_id: "q1", cwd: s.repo, tool_name: "Agent", tool_input: { subagent_type: "mmo:orchestrator", prompt: "x" } }, s)).stdout, "", "the workflow's own agent runs");
+    assert.equal((await run("pre-any", { session_id: "q1", cwd: s.repo, tool_name: "Bash", tool_input: { command: "npm test" } }, s)).stdout, "");
+  } finally { s.cleanup(); }
+});
+
+test("Guard A covers every tool that can change something, helpers included; tools that change nothing still run", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing");
+  try {
+    await prompt(s, "h1", "fix the /login endpoint returning 500 on missing password");
+    const any = (payload) => run("pre-any", { session_id: "h1", cwd: s.repo, ...payload }, s);
+    for (const tool_name of ["Write", "Edit", "Bash", "NotebookEdit", "Agent", "mcp__github__create_or_update_file", "mcp__plugin_mmo_model-dispatch__execute_stage"]) {
+      assert.ok(denied(await any({ tool_name, tool_input: {} })), `${tool_name} while the workflow waits to start`);
+    }
+    assert.ok(denied(await any({ tool_name: "Write", agent_id: "helper-1", tool_input: { file_path: join(s.repo, "a.js"), content: "x" } })), "a helper that was already running too");
+    for (const tool_name of ["Read", "Glob", "Grep", "ToolSearch", "TodoWrite", "Skill"]) {
+      assert.equal((await any({ tool_name, tool_input: {} })).stdout, "", `${tool_name} changes nothing`);
+    }
+    // Guard B: a helper cannot start the workflow for the chat, and a leading slash is the same command.
+    assert.ok(denied(await run("pre-skill", { session_id: "h1", cwd: s.repo, agent_id: "helper-1", tool_name: "Skill", tool_input: { skill: "mmo:bugfix" } }, s)));
+    assert.ok(!pipeline(s, "h1"));
+    assert.ok(denied(await skill(s, "h1", "/mmo:refactor", "x")), "/mmo:refactor is mmo:refactor");
+    assert.equal((await skill(s, "h1", "/mmo:bugfix", "x")).stdout, "", "and /mmo:bugfix starts the routed workflow");
+    assert.ok(pipeline(s, "h1"));
+  } finally { s.cleanup(); }
+});
+
+test("Opus's own starts follow the folder rule too: a new app only in an empty folder, a project job only in a project", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing", { routing_unsure: "auto" });
+  try {
+    await prompt(s, "f1", "hello");
+    assert.ok(denied(await skill(s, "f1", "mmo:greenfield")), "no new-app build inside an existing project");
+    assert.ok(!pipeline(s, "f1"));
+  } finally { s.cleanup(); }
+  const n = sandbox("new", { routing_unsure: "auto" });
+  try {
+    await prompt(n, "f2", "hello");
+    assert.ok(denied(await skill(n, "f2", "mmo:bugfix", "x")), "no bug-fix workflow in an empty folder");
+    assert.ok(!pipeline(n, "f2"));
+  } finally { n.cleanup(); }
+});
+
+test("any plain agreement accepts an offer; anything else is a no, recorded, and Opus is told to leave it", { skip: SKIP ?? false }, async () => {
+  const { isPlainYes } = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "route-flow.mjs"));
+  for (const yes of ["yes", "Yes, please", "yes, go ahead", "go for it", "yep, do it", "okay, run it", "sure thing", "Yes!", "ok go", "please do", "let's do it", "sounds good"]) {
+    assert.ok(isPlainYes(yes), yes);
+  }
+  for (const no of ["yes but only look at the controller", "yes, and also refactor the parser", "no", "not yet", "yes? what does it do", "thanks", "hmm", "go away", "do the refactor instead"]) {
+    assert.ok(!isPlainYes(no), no);
+  }
+  const s = sandbox("existing");
+  try {
+    await prompt(s, "y1", "teh logn page 500s sort it out");
+    assert.ok(denied(await skill(s, "y1", "mmo:bugfix", "the login page returns 500")));
+    assert.match(context(await prompt(s, "y1", "Yes, please")), /"mmo:bugfix"/, "a polite yes is a yes");
+    const t = sandbox("existing");
+    try {
+      await prompt(t, "y2", "teh logn page 500s sort it out");
+      assert.ok(denied(await skill(t, "y2", "mmo:bugfix", "x")));
+      const no = context(await prompt(t, "y2", "no, just look at it"));
+      assert.match(no, /did not agree/);
+      assert.doesNotMatch(no, /"mmo:bugfix"/);
+    } finally { t.cleanup(); }
+  } finally { s.cleanup(); }
+});
+
+test("a typed command without the plugin's prefix is still a typed run: zero-touch stands down, nothing is routed or noted", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing");
+  try {
+    await run("prompt-expansion", { session_id: "sf1", cwd: s.repo, command_name: "bugfix", expansion_type: "slash_command" }, s);
+    assert.equal(context(await prompt(s, "sf1", "/bugfix the login page returns 500")), "");
+    assert.ok(pipeline(s, "sf1"));
+    assert.equal(context(await prompt(s, "sf2", "/refactor extract the date helpers")), "", "the typed line alone is enough");
+    assert.ok(pipeline(s, "sf2"));
+  } finally { s.cleanup(); }
+});
+
+test("/clear starts a fresh conversation: an earlier run, route, offer or started work no longer counts", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing");
+  try {
+    await run("prompt-expansion", { session_id: "cl1", cwd: s.repo, command_name: "mmo:refactor", expansion_type: "slash_command" }, s);
+    await run("post-write", { session_id: "cl1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "a.js"), content: "x" }, tool_response: { type: "create" } }, s);
+    await run("session-start", { session_id: "cl1", cwd: s.repo, source: "clear" }, s);
+    assert.ok(!pipeline(s, "cl1"));
+    assert.match(context(await prompt(s, "cl1", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/);
+  } finally { s.cleanup(); }
+});
+
+test("the control arm of a measurement changes nothing: no agent refusal, no model lock", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing", { lock_model: true });
+  try {
+    const env = { MMO_AMBIENT_ARM: "control" };
+    assert.equal((await run("pre-agent", { session_id: "ca1", cwd: s.repo, tool_name: "Agent", tool_input: { subagent_type: "mmo:architect", prompt: "x" } }, s, env)).stdout, "");
+    assert.equal((await run("pre-model-switch", { session_id: "ca1", cwd: s.repo, to_model: "claude-sonnet-5", requested_model: "sonnet" }, s, env)).stdout, "");
+  } finally { s.cleanup(); }
+});
+
+test("what the person can see never names the plugin, a command, a settings path or a model the chat is not already on", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing", { lock_model: true });
+  try {
+    const lock = await run("pre-model-switch", { session_id: "pn1", cwd: s.repo, to_model: "claude-sonnet-5", requested_model: "sonnet" }, s);
+    const text = lock.json?.hookSpecificOutput?.permissionDecisionReason ?? "";
+    assert.ok(text.length > 0, "the lock still refuses");
+    assert.doesNotMatch(text, /mmo|ambient|\.json|lock_model|claude-/i);
+    const shim = readFileSync(SHIM, "utf8");
+    assert.doesNotMatch(shim.match(/systemMessage[^}]*/)?.[0] ?? "", /mmo|ambient/i, "the start-up line when Node.js is missing");
+    const note = context(await prompt(s, "pn2", "hello there"));
+    assert.match(note, /Keep the plugin, command names and model names out of what you say to the person/, "the chat note carries the wording rule too");
+  } finally { s.cleanup(); }
+});
+
+test("started work means files inside the project changed since the chat began, however they changed; a write elsewhere is not work here", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing");
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: s.repo });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "add", "package.json"], { cwd: s.repo });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: s.repo });
+    writeFileSync(join(s.repo, "old.js"), "x");
+    execFileSync("git", ["add", "old.js"], { cwd: s.repo });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "two"], { cwd: s.repo });
+    await run("session-start", { session_id: "ws1", cwd: s.repo, source: "startup" }, s);
+    // A write outside the project is not work on it.
+    await run("post-bash", { session_id: "ws1", cwd: s.repo, tool_name: "Bash", tool_input: { command: `git log > ${join(s.dir, "log.txt")}` }, tool_response: { stdout: "", stderr: "" } }, s);
+    assert.match(context(await prompt(s, "ws1", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/);
+    // A delete through Bash (no path the Bash parser counts as written) is still work: the project changed.
+    await run("session-start", { session_id: "ws2", cwd: s.repo, source: "startup" }, s);
+    rmSync(join(s.repo, "old.js"));
+    assert.doesNotMatch(context(await prompt(s, "ws2", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/);
   } finally { s.cleanup(); }
 });

@@ -9,7 +9,7 @@
  * A short follow-up ("yes", "continue") carries the previous label forward, so
  * an episode is not split by a one-word reply.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,9 +43,32 @@ export function labelPrompt(prompt, previous = null, rules = loadRules()) {
   return { label: "other", inherited: false };
 }
 
-/** A prompt that types an mmo command makes the session a pipeline session. */
+/**
+ * The plugin's own command names, read from its commands folder, so this list
+ * can never drift from what the plugin ships.
+ */
+const COMMANDS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "commands");
+export const PLUGIN_COMMANDS = (() => {
+  try { return new Set(readdirSync(COMMANDS_DIR).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3))); } catch { return new Set(); }
+})();
+
+/**
+ * A command name, as a typed line or an expansion reports it, that is one of
+ * the plugin's own: "mmo:bugfix", "/mmo:bugfix" or, typed without the prefix
+ * where Claude Code allows it, "bugfix" (independent review, 25 Sep). Reading
+ * another plugin's same-named command this way only makes zero-touch stand
+ * down, the safe side.
+ */
+export function isPluginCommandName(name) {
+  const m = /^\/?(?:mmo:)?([a-z][a-z-]*)$/i.exec(String(name ?? "").trim());
+  return Boolean(m) && PLUGIN_COMMANDS.has(m[1].toLowerCase());
+}
+
+/** A prompt that types one of the plugin's commands makes the session a pipeline session. */
 export function isPipelineCommand(prompt) {
-  return typeof prompt === "string" && /^\s*\/mmo:[a-z-]+/i.test(prompt);
+  if (typeof prompt !== "string") return false;
+  const m = /^\s*(\/[\w:-]+)/.exec(prompt);
+  return Boolean(m) && isPluginCommandName(m[1]);
 }
 
 /**

@@ -29,6 +29,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, sha256 } from "./lib/config.mjs";
 import { ensureDir, mmoHome } from "./lib/paths.mjs";
+import { workflowPolicy } from "./lib/route-flow.mjs";
 
 const DRIVER_MODEL_CHECK = resolve(dirname(fileURLToPath(import.meta.url)), "..", "driver-model-check.mjs");
 
@@ -45,8 +46,13 @@ export function workflowDriverModel(policy, cwd = process.cwd()) {
   }
 }
 
-export function proposals(config, mode = "observe") {
-  const driver = workflowDriverModel(config.routing_defaults?.policy ?? "opus-plus-flash-v38");
+export function proposals(config, mode = "observe", cwd = process.cwd()) {
+  // The model the workflows here will check for: the project's saved choice when it has one (read as the
+  // workflow reads it), else the routing default. Independent review, 25 Sep: targeting the default alone
+  // said "already set" to a project whose saved choice needs another model, forever.
+  const found = workflowPolicy({ projectDir: cwd, fallback: config.routing_defaults?.policy ?? "opus-plus-flash-v38" });
+  const policy = found.policy ?? config.routing_defaults?.policy ?? "opus-plus-flash-v38";
+  const driver = workflowDriverModel(policy, cwd);
   return {
     mode: { file: "ambient", set: { mode }, why: `turns ambient mode to "${mode}" for this account (observe records what each rule would do and changes nothing)` },
     cache: { file: "claude", set: { promptCacheTtl: "1h", subagentPromptCacheTtl: "1h" }, why: "a pause longer than five minutes otherwise re-writes the whole context at the cache-write price; on a subscription the main chat already gets one hour, this also covers metered logins and subagents. One-hour writes cost more per token, so keep this only if the on/off numbers say it pays" },
@@ -55,11 +61,22 @@ export function proposals(config, mode = "observe") {
     routing: driver
       ? {
           file: "claude",
-          set: (current) => ({ env: { ...(current.env && typeof current.env === "object" && !Array.isArray(current.env) ? current.env : {}), CLAUDE_CODE_SUBAGENT_MODEL: driver } }),
-          why: `lets zero-touch start full workflows: before starting, they check that their helpers run on ${driver} (the default policy's model), and Claude Code reads this setting only when a chat starts`,
+          set: (current) => ({ env: { ...envOf(current), CLAUDE_CODE_SUBAGENT_MODEL: driver } }),
+          // Never replace a different value: other projects' saved choices may need it (independent review, 25 Sep).
+          skip: (current) => {
+            const have = envOf(current).CLAUDE_CODE_SUBAGENT_MODEL;
+            return have && have !== driver
+              ? `CLAUDE_CODE_SUBAGENT_MODEL is already set to ${have}; this project's workflows (${policy}) need ${driver}. Not replaced: other projects may need ${have}, and it is the default model of every helper agent on this machine. Change it yourself if you want ${driver}.`
+              : null;
+          },
+          why: `lets zero-touch start full workflows here: before starting, they check that their helpers run on ${driver} (${policy}). Claude Code reads this setting only when a chat starts, and it becomes the default model of every helper agent on this machine`,
         }
       : { unavailable: "the workflows' model check could not run (build the plugin's server first: node plugin/scripts/verify-setup.mjs --fix)" },
   };
+}
+
+function envOf(settings) {
+  return settings.env && typeof settings.env === "object" && !Array.isArray(settings.env) ? settings.env : {};
 }
 
 function readJsonOrNull(file) {
@@ -73,17 +90,19 @@ function readJsonOrNull(file) {
 }
 
 /** Returns the list of changes; writes only when `apply` names the group. */
-export function plan({ env = process.env, apply = [], mode = "observe", now = new Date() } = {}) {
+export function plan({ env = process.env, apply = [], mode = "observe", now = new Date(), cwd = process.cwd() } = {}) {
   const home = env.HOME ?? homedir();
   const files = { claude: join(home, ".claude", "settings.json"), ambient: join(mmoHome(env), "ambient.json") };
   const { config } = loadConfig({ env });
   const out = [];
   const pending = {};
-  for (const [group, p] of Object.entries(proposals(config, mode))) {
+  for (const [group, p] of Object.entries(proposals(config, mode, cwd))) {
     if (p.unavailable) { out.push({ group, file: files.claude, status: "skipped", why: p.unavailable }); continue; }
     const file = files[p.file];
     const current = readJsonOrNull(file);
     if (current === null) { out.push({ group, file, status: "skipped", why: "the file exists but is not valid JSON; it was left untouched" }); continue; }
+    const skipped = p.skip?.(current);
+    if (skipped) { out.push({ group, file, status: "skipped", why: skipped }); continue; }
     // A proposal may depend on what the file holds already (routing merges into the env block).
     const set = typeof p.set === "function" ? p.set(current) : p.set;
     const changes = Object.entries(set).filter(([k, v]) => JSON.stringify(current[k]) !== JSON.stringify(v)).map(([k, v]) => ({ key: k, from: current[k] ?? null, to: v }));

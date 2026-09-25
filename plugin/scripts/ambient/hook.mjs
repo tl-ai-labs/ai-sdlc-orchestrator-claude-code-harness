@@ -27,7 +27,7 @@ import { decide, handoverNet, posteriorMean, pricesFor } from "./lib/cost-rule.m
 import { appendEvent, setEventAgent } from "./lib/events.mjs";
 import { measuredExtraRequests, recordLanding } from "./lib/evidence.mjs";
 import { isReleased } from "./lib/released.mjs";
-import { isPipelineCommand, labelPrompt, wantsFullOutput } from "./lib/labels.mjs";
+import { isPipelineCommand, isPluginCommandName, labelPrompt, wantsFullOutput } from "./lib/labels.mjs";
 import { buildOutline } from "./lib/outline.mjs";
 import { hasConsent } from "./lib/consent.mjs";
 import { clearPartial, isPartial, markPartial } from "./lib/partial-view.mjs";
@@ -37,7 +37,7 @@ import { classifyRunner, parseFileDump, rangeLineCount } from "./lib/shell-parse
 import { lastTurnFacts } from "./lib/transcript.mjs";
 import { repoKind } from "./lib/repo-kind.mjs";
 import { folderKind, routeMessage, ROUTABLE_JOBS } from "./lib/route.mjs";
-import { askReason, cannotStartInstruction, dropOffer, dropRoute, isPlainYes, NOT_NOW_REASON, prerequisites, readOffer, readRoute, saveWorkflowPolicy, startFirstReason, startInstruction, workflowPolicy, workflowsParagraph, writeOffer, writeRoute } from "./lib/route-flow.mjs";
+import { askReason, cannotStartInstruction, declinedInstruction, dropOffer, KEEP_OUT, dropRoute, isPlainYes, NOT_NOW_REASON, readOffer, readRoute, saveWorkflowPolicy, startFirstReason, startInstruction, startProblem, workflowsParagraph, writeOffer, writeRoute } from "./lib/route-flow.mjs";
 // edit-fill.mjs and offers.mjs pull in the apply script and the value rule.
 // They are loaded only by the rare call that needs them: loading them on every
 // tool call pushed the ordinary-call overhead from about 50 ms past the 80 ms
@@ -177,12 +177,38 @@ function routingOn(ctx) {
 }
 
 /**
- * The chat has changed files (a Write, an Edit, the batch write, or a Bash
- * command that writes). A job-shaped message after that is a follow-up to the
- * work in hand, never a new workflow (offline audit, 25 Sep).
+ * The project's git state (HEAD and `git status`), as one fingerprint, or null
+ * outside a repository or when git is slow. Compared with the one taken when
+ * the chat began, it shows ANY change to the project, however it was made (a
+ * delete, a patch, a formatter), which no list of write commands can
+ * (independent review, 25 Sep).
+ */
+function gitState(dir) {
+  try {
+    const opts = { cwd: dir, stdio: ["ignore", "pipe", "ignore"], timeout: 3000, maxBuffer: 8 << 20 };
+    let head = "";
+    try { head = execFileSync("git", ["rev-parse", "HEAD"], opts).toString().trim(); } catch { /* a repository with no commit yet */ }
+    const status = execFileSync("git", ["status", "--porcelain"], opts).toString();
+    return createHash("sha256").update(head + "\n" + status).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The chat has started work on the project: it wrote a file inside the
+ * project (Write, Edit, the batch write, a Bash command that writes), or the
+ * project's git state moved since the chat began. A job-shaped message after
+ * that is a follow-up to the work in hand, never a new workflow.
  */
 function workStarted(ctx) {
-  return hasSessionMarker(ctx, "work_started");
+  if (hasSessionMarker(ctx, "work_started")) return true;
+  let base = "";
+  try { base = readFileSync(sessionMarker(ctx, "git_baseline"), "utf8").trim(); } catch { /* no baseline: the markers decide */ }
+  if (!base) return false;
+  const now = gitState(ctx.projectDir);
+  if (now && now !== base) { markWorkStarted(ctx); return true; }
+  return false;
 }
 function markWorkStarted(ctx) {
   if (hasSessionMarker(ctx, "work_started")) return;
@@ -190,33 +216,51 @@ function markWorkStarted(ctx) {
   appendEvent(ctx.sid, "session.work_started", {});
 }
 
-/**
- * Starts a routed workflow: the policy it will run with must pass the
- * workflow's own run-start check; a folder with no saved policy gets the
- * routing default (as /mmo:setup's scripted path writes it); then the chat
- * becomes a workflow run and zero-touch stands down, as for a typed command.
- * Returns null when started, else why it cannot start.
- */
-function startWorkflow(ctx, route) {
-  try {
-    const found = workflowPolicy({ projectDir: ctx.projectDir, fallback: ctx.config.routing_defaults.policy });
-    if (found.error) return found.error;
-    const pre = prerequisites({ projectDir: ctx.projectDir, policy: found.policy });
-    if (!pre.ok) return pre.why;
-    const saved = saveWorkflowPolicy({ projectDir: ctx.projectDir, policy: found.policy });
-    writeRoute(ctx.sid, { ...route, status: "started" });
-    setSessionMarker(ctx, "pipeline");
-    appendEvent(ctx.sid, "session.pipeline", { via: "route" });
-    appendEvent(ctx.sid, "route.started", { job: route.job, via: route.via, policy: saved.policy, policy_written: saved.written });
-    return null;
-  } catch (err) {
-    return `its setup could not be checked (${String(err?.message ?? err).slice(0, 120)}).`;
-  }
+/** The chat becomes a workflow run: zero-touch stands down for the rest of it, as for a typed command. */
+function markStarted(ctx, route) {
+  writeRoute(ctx.sid, { ...route, status: "started" });
+  setSessionMarker(ctx, "pipeline");
+  appendEvent(ctx.sid, "session.pipeline", { via: "route" });
+  appendEvent(ctx.sid, "route.started", { job: route.job, via: route.via });
 }
 
-/** Guard A: while a routed workflow waits for its start, nothing that changes files or starts a helper may run. */
+/**
+ * Starts a workflow. A route the prompt hook made was already checked there,
+ * so here the chat is marked first and only then is the policy saved: the
+ * start hook stays cheap, and a slow save can never leave a started workflow
+ * blocked by Guard A (independent review, 25 Sep). A start the model made by
+ * itself ("auto") is checked here, as the prompt hook would have. A failed
+ * save is recorded, not fatal: the workflow's own policy step then says so.
+ * Returns null when started, else the problem.
+ */
+function startWorkflow(ctx, route, { checked }) {
+  if (!checked) {
+    const { problem } = startProblem({ projectDir: ctx.projectDir, fallback: ctx.config.routing_defaults.policy, auth: ctx.config.routing_defaults.auth });
+    if (problem) return problem;
+  }
+  markStarted(ctx, route);
+  try {
+    const saved = saveWorkflowPolicy({ projectDir: ctx.projectDir, policy: ctx.config.routing_defaults.policy });
+    appendEvent(ctx.sid, "route.policy", { policy: saved.policy, written: saved.written });
+  } catch (err) {
+    appendEvent(ctx.sid, "route.policy_not_saved", { why: String(err?.message ?? err).slice(0, 120) });
+  }
+  return null;
+}
+
+/**
+ * Tools that change nothing: they may run while a routed workflow waits for
+ * its start. Everything else, every other MCP server's tools included, waits.
+ */
+const CHANGES_NOTHING = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "ToolSearch", "TodoWrite", "TodoRead", "TaskList", "TaskGet", "WebFetch", "WebSearch", "Skill", "AskUserQuestion", "ListMcpResourcesTool", "ReadMcpResourceTool"]);
+
+/**
+ * Guard A (the catch-all pre-any hook): while a routed workflow waits for its
+ * start, nothing that can change files or start work runs, helpers already
+ * running included. The Skill call itself is Guard B's.
+ */
 function blockUntilStarted(ctx) {
-  if (ctx.pipeline || ctx.agent) return false;
+  if (ctx.pipeline || CHANGES_NOTHING.has(String(ctx.input.tool_name ?? ""))) return false;
   const route = readRoute(ctx.sid);
   if (route?.status !== "pending") return false;
   appendEvent(ctx.sid, "route.tool_blocked", { tool: String(ctx.input.tool_name ?? "") });
@@ -494,6 +538,13 @@ const handlers = {
       effort: effortOf(ctx.input), repo_kind: repoKind(ctx.projectDir),
     });
     sweepOldSessions(ctx);
+    // Where the project stood when this conversation began (workStarted compares against it).
+    const source = ctx.input.source ?? "startup";
+    if (source === "startup" || source === "clear" || !hasSessionMarker(ctx, "git_baseline")) {
+      const state = gitState(ctx.projectDir);
+      if (state) setSessionMarker(ctx, "git_baseline", state);
+      else dropSessionMarker(ctx, "git_baseline");
+    }
     // The start-of-chat note (which worker tools exist and how they are
     // reached) is sent at the chat's first ordinary prompt, by the prompt
     // handler, never here: at session start nobody can know yet whether the
@@ -501,7 +552,14 @@ const handlers = {
     // of ambient mode (it runs exactly as on 0.7.6). A compaction drops the
     // note from the context, so a chat that already had it gets it again
     // here; after /clear the next prompt decides again.
-    if (ctx.input.source === "clear") dropSessionMarker(ctx, "note_sent");
+    if (ctx.input.source === "clear") {
+      // A fresh conversation: nothing earlier counts. The note is re-sent, and a workflow run, a pending route
+      // or offer, and started work all belong to the conversation /clear ended (independent review, 25 Sep).
+      for (const name of ["note_sent", "pipeline", "work_started"]) dropSessionMarker(ctx, name);
+      dropRoute(ctx.sid);
+      dropOffer(ctx.sid);
+      ctx.pipeline = false;
+    }
     if (ctx.input.source === "compact" && hasSessionMarker(ctx, "note_sent") && !ctx.pipeline && ctx.config.mode === "on" && arm.arm === "on") {
       emit({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: sessionNote(ctx) } });
     }
@@ -567,23 +625,25 @@ const handlers = {
         if (offer && isPlainYes(text)) {
           route = { job: offer.job, args: offer.args ?? "", via: "yes" };
         } else {
-          if (offer) appendEvent(ctx.sid, "route.offer_declined", { job: offer.job });
+          if (offer) {
+            appendEvent(ctx.sid, "route.offer_declined", { job: offer.job });
+            lines.push(declinedInstruction(offer.job));
+          }
           const r = routeMessage(text, folderKind(ctx.projectDir));
           if (r.job) route = { job: r.job, args: r.args, via: "rules" };
           else appendEvent(ctx.sid, "route.none", { reason: r.reason });
         }
         if (route) {
           // Never tell Opus to start a workflow that its own run-start check would stop.
-          const found = workflowPolicy({ projectDir: ctx.projectDir, fallback: ctx.config.routing_defaults.policy });
-          const pre = found.error ? { ok: false, why: found.error } : prerequisites({ projectDir: ctx.projectDir, policy: found.policy });
-          if (pre.ok) {
+          const { problem } = startProblem({ projectDir: ctx.projectDir, fallback: ctx.config.routing_defaults.policy, auth: ctx.config.routing_defaults.auth });
+          if (!problem) {
             writeRoute(ctx.sid, { ...route, status: "pending", prompt_id: ctx.input.prompt_id ?? null });
             appendEvent(ctx.sid, "route.decided", { job: route.job, via: route.via });
             lines.push(startInstruction({ ...route, auth: ctx.config.routing_defaults.auth }));
             routed = true;
           } else {
-            appendEvent(ctx.sid, "route.cannot_start", { job: route.job });
-            lines.push(cannotStartInstruction(route.job, pre.why));
+            appendEvent(ctx.sid, "route.cannot_start", { job: route.job, cause: problem.cause });
+            lines.push(cannotStartInstruction(route.job, problem));
           }
         }
       }
@@ -605,26 +665,31 @@ const handlers = {
     // Guard B. Every command start, typed or model-started, is a Skill call
     // (probed live on Claude Code 2.1.282). Zero-touch off, the control arm,
     // or a typed / started workflow: nothing to decide, as on 0.7.7.
-    const name = String(ctx.input.tool_input?.skill ?? "");
+    const name = String(ctx.input.tool_input?.skill ?? "").trim().replace(/^\//, "");
     if (!/^mmo:/.test(name)) return;
     if (ctx.config.mode !== "on" || ctx.arm !== "on" || ctx.pipeline) return;
     const job = name.slice("mmo:".length);
     const deny = (why) => emit({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } });
+    // A helper agent never starts the chat's workflow: the person asked the chat, not the helper.
+    if (ctx.agent) { appendEvent(ctx.sid, "route.refused", { job, by: "helper" }); return void deny(NOT_NOW_REASON); }
     const route = readRoute(ctx.sid);
     if (route?.status === "pending") {
       if (route.job !== job) return void deny(startFirstReason(route.job));
-      const why = startWorkflow(ctx, route);
-      if (why) deny(cannotStartInstruction(job, why));
+      const problem = startWorkflow(ctx, route, { checked: true });
+      if (problem) deny(cannotStartInstruction(job, problem));
       return;
     }
-    if (ctx.agent || ctx.config.routing !== "on" || !ROUTABLE_JOBS.has(job) || workStarted(ctx)) {
-      appendEvent(ctx.sid, "route.refused", { job });
+    // A start Opus made by itself follows the same rules as a recognised one:
+    // workflows on, a routable job, a chat that has not started work, and the folder rule.
+    const folderFits = (folderKind(ctx.projectDir) === "new") === (job === "greenfield");
+    if (ctx.config.routing !== "on" || !ROUTABLE_JOBS.has(job) || workStarted(ctx) || !folderFits) {
+      appendEvent(ctx.sid, "route.refused", { job, folder_fits: folderFits });
       return void deny(NOT_NOW_REASON);
     }
     const args = typeof ctx.input.tool_input?.args === "string" ? ctx.input.tool_input.args.replace(/\s+/g, " ").trim().slice(0, 300) : "";
     if (ctx.config.routing_unsure === "auto") {
-      const why = startWorkflow(ctx, { job, args, via: "model" });
-      if (why) deny(cannotStartInstruction(job, why));
+      const problem = startWorkflow(ctx, { job, args, via: "model" }, { checked: false });
+      if (problem) deny(cannotStartInstruction(job, problem));
       return;
     }
     writeOffer(ctx.sid, { job, args });
@@ -632,9 +697,25 @@ const handlers = {
     deny(askReason(job));
   },
 
+  "pre-any"(ctx) {
+    // Guard A: one catch-all, so every tool that can change something waits
+    // for a routed workflow's start, whoever calls it (blockUntilStarted).
+    blockUntilStarted(ctx);
+  },
+
+  "post-skill"(ctx) {
+    // The routed workflow's command really ran. Its start is marked here too,
+    // so a start hook that never finished (Claude Code lets the call through
+    // on a hook timeout) cannot leave the workflow blocked by Guard A.
+    const name = String(ctx.input.tool_input?.skill ?? "").trim().replace(/^\//, "");
+    const route = readRoute(ctx.sid);
+    if (ctx.agent || route?.status !== "pending" || name !== `mmo:${route.job}`) return;
+    startWorkflow(ctx, route, { checked: true });
+  },
+
   "prompt-expansion"(ctx) {
     const name = String(ctx.input.command_name ?? "");
-    if (/^\/?mmo:/.test(name) && !ctx.pipeline) {
+    if (isPluginCommandName(name) && !ctx.pipeline) {
       setSessionMarker(ctx, "pipeline");
       appendEvent(ctx.sid, "session.pipeline", { via: "expansion" });
     }
@@ -656,14 +737,14 @@ const handlers = {
     const asked = canonicalModel(ctx.input.requested_model);
     const leaves = Boolean(thinker) && to !== thinker && asked !== thinker;
     appendEvent(ctx.sid, "model.switch_request", { to, leaves_thinker: leaves, locked: ctx.config.lock_model === true });
-    if (leaves && ctx.config.lock_model === true && ctx.config.mode === "on" && !ctx.pipeline) {
+    if (leaves && ctx.config.lock_model === true && ctx.config.mode === "on" && ctx.arm === "on" && !ctx.pipeline) {
+      // The person reads this: plain words, no plugin, settings path or model name (25 Sep).
       emit({
         hookSpecificOutput: {
           hookEventName: "PreModelSwitch",
           permissionDecision: "deny",
           permissionDecisionReason:
-            `This project runs on ${thinker} (mmo ambient policy, lock_model: true). ` +
-            "Set lock_model to false in ~/.mmo-ambient/ambient.json to allow switching.",
+            "This chat stays on its current model: a setting locks it. To switch, ask me to turn the model lock off, then switch again.",
         },
       });
     }
@@ -682,12 +763,12 @@ const handlers = {
   },
 
   "pre-agent"(ctx) {
-    if (blockUntilStarted(ctx)) return;
     const type = String(ctx.input.tool_input?.subagent_type ?? "");
     if (!type.startsWith("mmo:")) return;
     // The five mmo agents belong to the typed pipeline. In ordinary chat the
     // model picking one up on its own starts a gated run nobody asked for.
-    const blocked = !ctx.pipeline && !ctx.agent;
+    // The control arm of a measurement changes nothing, this guard included.
+    const blocked = !ctx.pipeline && !ctx.agent && ctx.arm === "on";
     appendEvent(ctx.sid, "agent.mmo-ambient_request", { agent: type, blocked: blocked && ctx.config.mode === "on" });
     if (blocked && ctx.config.mode === "on") {
       emit({
@@ -770,7 +851,6 @@ const handlers = {
   },
 
   async "pre-write"(ctx) {
-    if (blockUntilStarted(ctx)) return;
     const p = ctx.input.tool_input?.file_path;
     if (typeof p !== "string") return;
     noteTestFile(ctx, p);
@@ -794,7 +874,6 @@ const handlers = {
   },
 
   async "pre-bash"(ctx) {
-    if (blockUntilStarted(ctx)) return;
     const command = ctx.input.tool_input?.command;
     // A file written through Bash (sed -i, a redirect, a heredoc, a script) is
     // still a file written. One test-file write in four arrives this way, and a
@@ -881,7 +960,7 @@ const handlers = {
   async "post-bash"(ctx) {
     const resp = ctx.input.tool_response;
     const command = ctx.input.tool_input?.command;
-    if (bashWrittenPaths(command).length) markWorkStarted(ctx);
+    if (bashWrittenPaths(command).some((p) => insideDir(absOf(ctx, p), ctx.projectDir))) markWorkStarted(ctx);
     const lines = [noteOnce(ctx), await newFilesFromBash(ctx)];
     // A failing test run that was piped through tail or head arrives HERE, as a
     // success. Notice it from its output; never touch that output. (A rule that
@@ -919,7 +998,12 @@ const handlers = {
   async "pre-mmo-tool"(ctx) {
     const name = ambientToolName(ctx.input.tool_name);
     if (!name) return;
-    if (blockUntilStarted(ctx)) return;
+    // Inside a workflow run (typed, or started by routing) zero-touch has no tools: 0.7.7 has none, and the batch
+    // write would get around a brownfield run's write contract (independent review, 25 Sep). Never stamped here.
+    if (ctx.pipeline) {
+      appendEvent(ctx.sid, "tool.ambient_refused", { tool: name, reason: "pipeline-session" });
+      return void emit({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `${name} is not available inside a workflow run. Carry on with the workflow's own steps.` } });
+    }
     if (name === "write_files") {
       // The batch write is the thinker's OWN typing, on both sides: the partial-view guard and the
       // landed-file rule apply to each path exactly as they do to a Write.
@@ -985,7 +1069,6 @@ const handlers = {
   },
 
   async "pre-edit"(ctx) {
-    if (blockUntilStarted(ctx)) return;
     const ti = ctx.input.tool_input ?? {};
     noteTestFile(ctx, ti.file_path);
     // An ordinary Edit of a landed file before any passing run is the wrong verdict for that job. A marker
@@ -1091,9 +1174,9 @@ function consentSentence(ctx) {
 
 /** The start-of-chat note: the worker tools by their full names, the consent status, and how the plugin decides. Under 1,200 characters. */
 function sessionNote(ctx) {
-  // Routing on: the note also says how full workflows start (lib/route-flow.mjs).
-  const workflows = ctx.config.routing === "on" ? "\n" + workflowsParagraph() : "";
-  return chatNote(ctx) + workflows;
+  // Routing on: the note also says how full workflows start (lib/route-flow.mjs), ending with the wording
+  // rule; routing off: the wording rule alone. Each is bounded apart from the chat note.
+  return chatNote(ctx) + "\n" + (ctx.config.routing === "on" ? workflowsParagraph() : KEEP_OUT);
 }
 
 function chatNote(ctx) {
