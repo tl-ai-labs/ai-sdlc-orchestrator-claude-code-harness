@@ -133,8 +133,12 @@ test("hook: the plugin's own job tools get stamped; start tools are refused wher
     assert.equal(control.json.hookSpecificOutput.permissionDecision, "deny");
     const follow = await run("pre-mmo-tool", call("c", "job_result", { job: "j1" }), s, { MMO_AMBIENT_ARM: "control" });
     assert.equal(follow.json.hookSpecificOutput.updatedInput._mmo.arm, "control", "a running job may always be collected or undone");
+    // Until 26 Sep no new worker job could start while the chat was off the thinker. The savings rules now act on
+    // any model (priced at that model), so a chat switched to Sonnet 5 still gets its start tool stamped.
     await run("post-model-switch", { session_id: "off", cwd: s.repo, to_model: "claude-sonnet-5" }, s);
-    assert.equal((await run("pre-mmo-tool", call("off", "write_files_from_specs"), s)).json.hookSpecificOutput.permissionDecision, "deny", "no NEW worker job while the chat is off the thinker");
+    const offThinker = (await run("pre-mmo-tool", call("off", "write_files_from_specs"), s)).json.hookSpecificOutput;
+    assert.equal(offThinker.permissionDecision, undefined, "a chat on another model may still start a worker job");
+    assert.equal(offThinker.updatedInput._mmo.session_id, "off", "and it is stamped like any other");
     assert.equal((await run("pre-mmo-tool", { session_id: "s1", cwd: s.repo, tool_name: "mcp__model-dispatch__execute_with_model", tool_input: {} }, s)).out, "");
   } finally { s.cleanup(); }
 });

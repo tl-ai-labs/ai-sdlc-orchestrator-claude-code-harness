@@ -73,6 +73,9 @@ test("the mode group turns ambient mode on for the account, and a receipt trusts
   try {
     plan({ env: h.env, apply: ["mode"], mode: "on" });
     assert.equal(loadConfig({ env: h.env }).config.mode, "on");
+    // The model lock is opt-in since 26 Sep; this account turns it on, so a project file trying to unlock it is a loosening.
+    const account = join(h.env.MMO_HOME, "ambient.json");
+    writeFileSync(account, JSON.stringify({ ...JSON.parse(readFileSync(account, "utf8")), lock_model: true }));
     const project = join(h.dir, "repo");
     mkdirSync(join(project, ".sdlc"), { recursive: true });
     writeFileSync(join(project, ".sdlc", "ambient.json"), JSON.stringify({ lock_model: false }));

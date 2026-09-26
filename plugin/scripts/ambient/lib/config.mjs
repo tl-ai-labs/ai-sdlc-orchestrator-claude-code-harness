@@ -13,13 +13,15 @@
  * It is applied in full only when its sha256 is listed in
  * <MMO_HOME>/receipts.json, a user-level file a repository cannot write.
  * Without a receipt it may only TIGHTEN: lower the mode, close cells, add
- * never-delegate paths, switch a valve off, switch workflow routing off or
- * back to asking. Every other key is ignored.
+ * never-delegate paths, switch a valve off, switch workflow routing off.
+ * Every other key is ignored.
  *
  * Routing (docs/ambient-mode.md, "Routing"): `routing` on|off starts the
- * /mmo: workflow a chat message asks for; `routing_unsure` ask|auto says what
- * happens when Opus, not the rules, recognises one; `routing_defaults` holds
- * the policy and cost mode a routed workflow starts with.
+ * /mmo: workflow a chat message asks for, recognised by the rules only;
+ * `routing_defaults` holds the policy and cost mode a routed workflow starts
+ * with. The `routing_unsure` ask|auto switch (what happens when the chat's own
+ * model, not the rules, thinks a request is a job) was removed on 26 Sep 2026
+ * (a project decision): such a request is an ordinary chat, and an old value is ignored.
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -29,7 +31,6 @@ import { mmoHome } from "./paths.mjs";
 
 export const MODES = ["off", "observe", "on"];
 export const ROUTING = ["off", "on"];
-export const ROUTING_UNSURE = ["ask", "auto"];
 /** A policy name as the plugin ships them: it is passed to a script as one argument. */
 const POLICY_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const MAX_CONFIG_BYTES = 64 * 1024;
@@ -90,10 +91,8 @@ export function applyTightenOnly(base, project) {
   if (project.lock_model === true) out.lock_model = true;
   // Cheaper-model jobs OFF is a tightening (the reading rules stay on): the like-for-like plain side of a pair.
   if (project.delegation === "off") out.delegation = "off";
-  // Routing can only be switched off, or from starting at once back to asking: a repository never starts
-  // a paid workflow on someone's machine by itself.
+  // Routing can only be switched off: a repository never starts a paid workflow on someone's machine by itself.
   if (project.routing === "off") out.routing = "off";
-  if (project.routing_unsure === "ask") out.routing_unsure = "ask";
   if (Array.isArray(project.closed_cells)) {
     out.closed_cells = uniqueStrings([...out.closed_cells, ...project.closed_cells]);
   }
@@ -153,7 +152,6 @@ export function loadConfig({ projectDir, env = process.env, defaultFile = DEFAUL
   if (!MODES.includes(config.mode)) config.mode = "off";
   // A value the plugin does not know means the safe default, never a guess.
   if (!ROUTING.includes(config.routing)) config.routing = "off";
-  if (!ROUTING_UNSURE.includes(config.routing_unsure)) config.routing_unsure = "ask";
   if (!isPlain(config.routing_defaults)) config.routing_defaults = {};
   if (!POLICY_NAME.test(String(config.routing_defaults.policy ?? ""))) config.routing_defaults.policy = "opus-plus-flash-v38";
   if (!["estimated", "vendor"].includes(config.routing_defaults.auth)) config.routing_defaults.auth = "estimated";

@@ -25,9 +25,30 @@
  * costs more than the file does.
  */
 
-export function pricesFor(config, model, env = process.env) {
+/**
+ * The price card for `model`, by the name as Claude Code writes it: exact, then
+ * without a context tag ("claude-opus-5-5[1m]"), then without a date suffix
+ * ("claude-haiku-4-5-20251001"). Callers pass the thinker only when the chat's
+ * model is not known yet (no reply so far).
+ *
+ * 26 Sep 2026 (option 3: the savings rules act on whatever model the person
+ * picks): a KNOWN model with no card used to be priced as the thinker (Opus
+ * 5), so on Opus 5.5, Fable or Sonnet 4.6 every decision used wrong prices. It
+ * now gets no card, and every caller then makes no decision (the read valve
+ * skips with "no-price-card", a hand-off has no verdict). The table
+ * (`cost.prices_usd_per_mtok`) carries every model the picker offers; a test
+ * keeps it equal to the dispatch server's dated list where both know a model.
+ */
+export function priceCard(config, model) {
   const table = config?.cost?.prices_usd_per_mtok ?? {};
-  const card = table[model] ?? table[config?.thinker] ?? null;
+  if (typeof model !== "string" || !model) return null;
+  const untagged = model.replace(/\[[^\]]*\]$/, "").trim();
+  const undated = untagged.replace(/-\d{8}$/, "");
+  return table[model] ?? table[untagged] ?? table[undated] ?? null;
+}
+
+export function pricesFor(config, model, env = process.env) {
+  const card = priceCard(config, model);
   if (!card) return null;
   let tier = config.cost.cache_tier;
   if (tier !== "5m" && tier !== "1h") {

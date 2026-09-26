@@ -104,8 +104,10 @@ test("refused before anything leaves: no stamp, control arm, off the thinker, no
     grantConsent({ projectDir: w.repo, vendor: "google", env: w.env });
     assert.match((await w.start({ callWorker: undefined })).reason, /no worker door/);
     mkdirSync(join(w.home, "sessions", "s1"), { recursive: true });
+    // Until 26 Sep a chat off the thinker model could start no job. The savings rules now act on whatever model the
+    // person picked (the maths prices that model), so the model alone never refuses a job.
     writeFileSync(join(w.home, "sessions", "s1", "off_thinker"), "");
-    assert.match((await w.start()).reason, /not on the policy's thinker/);
+    assert.match((await w.start({ callWorker: undefined })).reason, /no worker door/, "past the model check, stopped by the next one; nothing started");
     rmSync(join(w.home, "sessions", "s1", "off_thinker"));
     // Closing Flash's cell alone would hand the job to Sonnet (open on JS/TS); both closed, the thinker keeps it.
     writeFileSync(join(w.home, "ambient.json"), JSON.stringify({ mode: "on", closed_cells: ["bugfix_code|js_ts|flash|completion", "bugfix_code|js_ts|sonnet|completion"], jobs: { block_ms: 0, landing: "manual" } }));

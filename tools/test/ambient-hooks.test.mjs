@@ -351,6 +351,8 @@ test("file-dump valve refuses by default, only counts when switched off, and let
 test("model lock refuses a switch away from the thinker, allows the thinker, and can be switched off", async () => {
   const s = sandbox();
   try {
+    // The lock is opt-in since 26 Sep (option 3: the savings rules act on any model), so this chat turns it on.
+    writeFileSync(join(s.home, "ambient.json"), JSON.stringify({ lock_model: true }));
     const sw = (to) => ({ session_id: "s1", cwd: s.repo, from_model: "claude-opus-5", to_model: to, requested_model: to });
     const denied = await run("pre-model-switch", sw("claude-sonnet-5"), s);
     assert.equal(denied.json?.hookSpecificOutput?.hookEventName, "PreModelSwitch");
@@ -360,7 +362,7 @@ test("model lock refuses a switch away from the thinker, allows the thinker, and
     writeFileSync(join(s.home, "ambient.json"), JSON.stringify({ lock_model: false }));
     assert.equal((await run("pre-model-switch", sw("claude-sonnet-5"), s)).stdout, "");
     await run("post-model-switch", sw("claude-sonnet-5"), s);
-    assert.ok(events(s.home, "s1").some((e) => e.type === "session.off_thinker"), "a session off the thinker is marked for exclusion");
+    assert.ok(events(s.home, "s1").some((e) => e.type === "session.off_thinker"), "a session off the thinker is marked: its savings are priced at that model");
   } finally { s.cleanup(); }
 });
 
@@ -535,6 +537,18 @@ test("a prompt is a machine notice only when it starts with one of the app's own
     await run("prompt", { session_id: "s1", cwd: s.repo, prompt: "<system-reminder>x</system-reminder>" }, s);
     const typed = events(s.home, "s1").filter((e) => e.type === "prompt").map((e) => e.typed !== false);
     assert.deepEqual(typed, [true, false, false]);
+  } finally { s.cleanup(); }
+});
+
+test("a chat on another model keeps the cheaper-model hand-offs: the model alone never refuses a start tool (26 Sep)", async () => {
+  const s = sandbox();
+  try {
+    await chatNote("s1", s);
+    mkdirSync(join(s.home, "sessions", "s1"), { recursive: true });
+    writeFileSync(join(s.home, "sessions", "s1", "off_thinker"), "");
+    const tool = await run("pre-mmo-tool", { session_id: "s1", cwd: s.repo, prompt_id: "p1", tool_name: "mcp__plugin_mmo_model-dispatch__write_files_from_specs", tool_input: { files: ["a.js"] } }, s);
+    assert.doesNotMatch(String(tool.json?.hookSpecificOutput?.permissionDecisionReason ?? ""), /off-thinker/, "not refused for the model");
+    assert.ok(!events(s.home, "s1").some((e) => e.type === "tool.ambient_refused" && e.reason === "off-thinker"));
   } finally { s.cleanup(); }
 });
 

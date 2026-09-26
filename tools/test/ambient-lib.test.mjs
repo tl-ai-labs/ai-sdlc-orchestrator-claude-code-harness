@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const LIB = join(ROOT, "plugin", "scripts", "ambient", "lib");
 const { loadConfig, applyTightenOnly, sha256 } = await import(join(LIB, "config.mjs"));
+// The price-list comparison needs the built dispatch server; see tools/test/lib/server-built.mjs.
+const { serverBuilt } = await import(join(ROOT, "tools", "test", "lib", "server-built.mjs"));
 const { netValueUsd, decide, posteriorMean, pricesFor, handoverNet } = await import(join(LIB, "cost-rule.mjs"));
 const { buildOutline, coverage, findDeclarations } = await import(join(LIB, "outline.mjs"));
 const { labelPrompt, loadRules, isPipelineCommand, wantsFullOutput, LABEL_WINDOW_CHARS } = await import(join(LIB, "labels.mjs"));
@@ -29,14 +31,16 @@ function tmp() {
 
 // ---------- settings ----------
 
-test("the shipped default is mode off, names the fixed lineup and locks the model", () => {
+test("the shipped default is mode off, names the fixed lineup and leaves the model picker free", () => {
   const t = tmp();
   try {
     const { config, sources } = loadConfig({ projectDir: t.dir, env: { MMO_HOME: t.dir } });
     assert.equal(config.mode, "off");
     assert.equal(config.thinker, "claude-opus-5");
     assert.deepEqual(config.workers, { flash: "gemini-3.8-flash", sonnet: "claude-sonnet-5", default: "flash" });
-    assert.equal(config.lock_model, true);
+    // Off since 26 Sep (option 3): the lock existed to keep the chat on the thinker so the savings rules could act;
+    // they now act on whatever model the person picks, priced at that model, so nothing needs the lock by default.
+    assert.equal(config.lock_model, false);
     assert.deepEqual(sources, ["defaults"]);
   } finally { t.cleanup(); }
 });
@@ -48,8 +52,9 @@ test("an unverified project file can only tighten; with a user-level receipt it 
     const repo = join(t.dir, "repo");
     mkdirSync(home);
     mkdirSync(join(repo, ".sdlc"), { recursive: true });
-    // The developer's own file switches the cat/sed rule off; the repository's file tries to switch it back on.
-    writeFileSync(join(home, "ambient.json"), JSON.stringify({ mode: "observe", valves: { file_dump: { act: false } } }));
+    // The developer's own file switches the cat/sed rule off and locks the model (off by default since 26 Sep);
+    // the repository's file tries to switch the rule back on and the lock off.
+    writeFileSync(join(home, "ambient.json"), JSON.stringify({ mode: "observe", lock_model: true, valves: { file_dump: { act: false } } }));
     const hostile = JSON.stringify({
       mode: "on", lock_model: false, thinker: "attacker-model", cost_of_bad_result_usd: 0,
       cost: { margin_usd: -100 }, valves: { file_dump: { act: true }, read: { enabled: false } },
@@ -155,7 +160,42 @@ test("the cache price follows the login: one-hour writes on a subscription, five
   const { config } = loadConfig({ env: { MMO_HOME: "/nonexistent" } });
   assert.equal(pricesFor(config, "claude-opus-5", {}).w, 10 / 1e6);
   assert.equal(pricesFor(config, "claude-opus-5", { CLAUDE_CODE_USE_VERTEX: "1" }).w, 6.25 / 1e6);
-  assert.equal(pricesFor(config, "some-unknown-model", {}).r, 0.5 / 1e6, "an unknown model is priced as the thinker");
+  // Until 26 Sep an unknown model was priced as the thinker (Opus 5), so on Opus 5.5, Fable or Sonnet 4.6 every
+  // decision used the wrong prices. A model with no card is now not priced at all: no decision on a guessed price.
+  assert.equal(pricesFor(config, "some-unknown-model", {}), null, "a model with no price card is never priced as another model");
+});
+
+test("every Claude model the picker offers has its own price card, and the names the transcript uses resolve to it", () => {
+  const { config } = loadConfig({ env: { MMO_HOME: "/nonexistent" } });
+  // platform.claude.com/docs/en/about-claude/pricing, read 26 Sep 2026: input / 5m write / 1h write / cache read / output.
+  const opus55 = pricesFor(config, "claude-opus-5-5", {});
+  assert.deepEqual([opus55.in, opus55.w, opus55.r, opus55.out].map((x) => +(x * 1e6).toFixed(4)), [4, 8, 0.2, 20], "Opus 5.5 at its own prices (1h write on a subscription)");
+  assert.equal(pricesFor(config, "claude-fable-5-1", {}).r, 0.25 / 1e6, "Fable 5.1 reads its cache at 0.025x input");
+  assert.equal(pricesFor(config, "claude-sonnet-4-6", {}).out, 15 / 1e6);
+  assert.equal(pricesFor(config, "claude-opus-5-5[1m]", {}).out, 20 / 1e6, "a 1M-context tag is the same model");
+  assert.equal(pricesFor(config, "claude-haiku-4-5-20251001", {}).out, 5 / 1e6, "a dated id is the same model");
+  for (const m of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-fable-5", "claude-fable-5-1"]) {
+    assert.ok(pricesFor(config, m, {}), `${m} has a card`);
+  }
+});
+
+test("the savings maths uses the same prices as the dispatch server's dated list for every model both know", { skip: serverBuilt() ?? false }, async () => {
+  const { PRICE_LIST } = await import(join(ROOT, "plugin", "mcp", "model-dispatch", "dist", "prices.js"));
+  const { config } = loadConfig({ env: { MMO_HOME: "/nonexistent" } });
+  const table = config.cost.prices_usd_per_mtok;
+  const onlyHere = [];
+  for (const [model, card] of Object.entries(table)) {
+    const periods = PRICE_LIST[model];
+    if (!periods) { onlyHere.push(model); continue; }
+    const now = periods[periods.length - 1];
+    assert.deepEqual(
+      [card.input, card.cache_write_5m, card.cache_write_1h, card.cache_read, card.output],
+      [now.input, now.input_cache_write, now.input_cache_write_1h, now.input_cached, now.output],
+      `${model} matches the server's list`,
+    );
+  }
+  // Every model the savings maths prices is on the server's list too (Opus 5.5 was added there on 26 Sep).
+  assert.deepEqual(onlyHere, []);
 });
 
 // ---------- outline ----------
@@ -297,10 +337,12 @@ test("requests after a context reset do not count, and excluded sessions report 
   // Leaving the main model AFTER the action: the action happened on the main model and still counts.
   const leftLater = summarise([...base, { ts: "2026-09-22T10:00:09.000Z", type: "session.off_thinker" }], { w, r, requestTimes });
   assert.equal(leftLater.entries.length, 1);
-  // A chat that is off the main model with nothing counted while on it adds nothing.
+  // An action on another model that cannot be priced (no model named, no price source) is left out, never
+  // priced as the main model; the chat itself still counts (26 Sep: the rules act on any model).
   const off = summarise([base[0], { ts: "2026-09-22T10:00:00.500Z", type: "session.off_thinker" }, base[1], base[2]], { w, r, requestTimes });
   assert.equal(off.saved_usd, 0);
-  assert.equal(off.counted, false);
+  assert.equal(off.entries.length, 0);
+  assert.equal(off.left_out, 1);
   const control = summarise([{ ...base[0], arm: "control" }, base[1]], { w, r, requestTimes });
   assert.equal(control.saved_usd, 0);
 });
@@ -357,8 +399,9 @@ test("labels: a prompt that starts by asking to build something is a feature eve
   assert.equal(labelPrompt("the parser throws an exception on empty input, please fix").label, "bugfix");
 });
 
-test("the ledger leaves out only the time a chat spent off the main model, not the whole chat", () => {
+test("the ledger prices each saving at the model the chat was on when it was made; an unpriced model is left out", () => {
   const w = 10e-6, r = 0.5e-6;
+  const fable = { w: 20e-6, r: 0.25e-6 };
   const at = (n) => `2026-09-22T10:00:${String(n).padStart(2, "0")}.000Z`;
   const events = [
     { ts: at(0), type: "session.start", arm: "on" },
@@ -368,12 +411,18 @@ test("the ledger leaves out only the time a chat spent off the main model, not t
     { ts: at(5), type: "valve.act", act_id: "on", valve: "read", tokens_full: 9000, tokens_kept: 1000 },
   ];
   const requestTimes = [at(3), at(6), at(7)];
-  const out = summarise(events, { w, r, requestTimes });
-  assert.equal(out.counted, true, "a chat that came back to the main model counts again");
-  assert.deepEqual(out.entries.map((e) => e.act_id), ["on"], "the action taken while off the main model is left out");
-  assert.ok(Math.abs(out.saved_usd - 8000 * (w + r * 2)) < 1e-12);
-  const never = summarise(events.slice(0, 3), { w, r, requestTimes });
-  assert.equal(never.saved_usd, 0, "a chat still off the main model adds nothing");
+  const priceOf = (m) => (m === "claude-fable-5-1" ? fable : null);
+  const out = summarise(events, { w, r, requestTimes, priceOf });
+  assert.equal(out.counted, true);
+  assert.deepEqual(out.entries.map((e) => e.act_id), ["off", "on"], "the action on Fable counts too, since the rules now act there");
+  const off = out.entries.find((e) => e.act_id === "off");
+  assert.ok(Math.abs(off.saved_usd - 8000 * (fable.w + fable.r * 3)) < 1e-12, "priced at Fable's cache prices, not the main model's");
+  assert.ok(Math.abs(out.entries.find((e) => e.act_id === "on").saved_usd - 8000 * (w + r * 2)) < 1e-12);
+  const noPrices = summarise(events, { w, r, requestTimes });
+  assert.deepEqual(noPrices.entries.map((e) => e.act_id), ["on"], "without a price for Fable its action is left out, never priced as the main model");
+  assert.equal(noPrices.left_out, 1);
+  const unknown = summarise(events, { w, r, requestTimes, priceOf: () => null });
+  assert.equal(unknown.left_out, 1, "a model with no price card is left out");
 });
 
 test("a placeholder entry Claude Code writes for an interrupted turn is not a model", () => {

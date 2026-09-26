@@ -18,7 +18,7 @@
  * thinker, which does the work itself as it would have without the plugin.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { applyJob, stageJob, undoJob, jobDir } from "./apply.mjs";
@@ -40,7 +40,7 @@ import { acquireJobLock, releaseJobLock } from "./lib/job-lock.mjs";
 import { expectedCharsPerFile, recordChecks, recordHandoverRequests, recordLanding, recordTypedChars } from "./lib/evidence.mjs";
 import { releaseFile } from "./lib/released.mjs";
 import { loadSeeds, pickWorker } from "./lib/offers.mjs";
-import { ensureDir, mmoHome, safeId, sessionDir } from "./lib/paths.mjs";
+import { ensureDir, mmoHome, safeId } from "./lib/paths.mjs";
 import { repoKey } from "./lib/repo-stats.mjs";
 import { egressManifest, existsInSnapshot, readDenyGlobs, readFromSnapshot, sha256, takeSnapshot } from "./lib/snapshot.mjs";
 import { fileKindOf } from "./lib/triggers.mjs";
@@ -134,7 +134,8 @@ export async function startJob({ tool, args, stamp, projectDir, callWorker, reac
   if (!stamp || typeof stamp.session_id !== "string") return refuse("this call carries no session stamp, so the plugin's hooks are not running; nothing was sent");
   if (stamp.arm !== "on" || stamp.mode !== "on") return refuse(`worker jobs are not active in this session (arm ${stamp.arm}, mode ${stamp.mode})`);
   const sid = stamp.session_id;
-  if (existsSync(join(sessionDir(sid, env), "off_thinker"))) return refuse("the chat is not on the policy's thinker model; no new worker job starts until it is back");
+  // A chat off the thinker model used to start no job here. Since 26 Sep (option 3) the hook prices the model the
+  // chat is on, so the model alone never refuses a start.
   if (typeof callWorker !== "function") return refuse("no worker door is configured on this machine");
 
   const { config } = loadConfig({ projectDir, env });
@@ -734,7 +735,8 @@ export async function startScout({ args, stamp, projectDir, callWorker, reachabl
   if (!stamp || typeof stamp.session_id !== "string") return refuse("this call carries no session stamp, so the plugin's hooks are not running; nothing was sent");
   if (stamp.arm !== "on" || stamp.mode !== "on") return refuse(`worker jobs are not active in this session (arm ${stamp.arm}, mode ${stamp.mode})`);
   const sid = stamp.session_id;
-  if (existsSync(join(sessionDir(sid, env), "off_thinker"))) return refuse("the chat is not on the policy's thinker model; no new worker job starts until it is back");
+  // A chat off the thinker model used to start no job here. Since 26 Sep (option 3) the hook prices the model the
+  // chat is on, so the model alone never refuses a start.
   if (typeof callWorker !== "function") return refuse("no worker door is configured on this machine");
   const { config } = loadConfig({ projectDir, env });
   if (config.mode !== "on") return refuse(`ambient mode is ${config.mode}`);

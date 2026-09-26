@@ -35,7 +35,7 @@ For a demo pair, `MMO_AMBIENT_ARM=on` or `MMO_AMBIENT_ARM=control` forces the ar
 | File-dump valve | `PreToolUse` on `Bash` | `cat`, `sed -n 'A,Bp'`, `head` or `tail` printing one large repo file, with no pipe or redirect, is refused with the outline and a pointer to `Read` with a range. Running the same command again prints the file. | acts (`"act": true` since 0.8.2: the model in this app prints files with `cat` far more than it uses `Read`) |
 | Bundled lookup | the `lookup` tool (model-chosen, named in the start-of-chat note) | One call, up to eight literal search strings, optional path patterns: every matching line comes back with the exact `Read offset/limit` that shows it and the declaration it sits in (the read valve's own outline builder), capped at `max_hits` (default 40, at most 60) and 8,000 characters. Replaces a grep plus a read per file with one round trip; each use is recorded (`lookup.used`) and counted as an action. Searches the git repository only (tracked and untracked); secret-bearing and hard-denied files are never searched or named; outside a repository it refuses. The same on both sides of a pair. | acts in mode `on` |
 | Batch write (both sides) | the `write_files` tool (model-chosen, named in the start-of-chat note on both sides) | The thinker's OWN files, many in one call, with its test command: the plugin writes them into the project (paths checked like a landing, atomic writes, never a secret or hard-denied file) and runs the tests in the same call. One request instead of one per file. No worker: an optimization, not a delegation, so it runs with delegation off and inside helper agents. It exists for parity: a hand-over lands many files in one request, and without this a pair would credit delegation with a saving that is really batching (23 Sep). The partial-view guard and the landed-file rule apply to each path as to a `Write`; the files it creates count for the new-files and tests moments. Recorded as `write_files.used`, counted as an action. | acts in mode `on` |
-| Model lock | `PreModelSwitch` | With `lock_model: true`, a switch away from the policy's thinker model is refused with a one-line reason. | acts in mode `on` |
+| Model lock | `PreModelSwitch` | With `lock_model: true` (off by default since 26 Sep 2026), a switch away from the policy's thinker model is refused with a one-line reason. The savings rules no longer need it: they act on any model, priced at that model. | acts in mode `on` |
 | Typed-only agents | `PreToolUse` on `Agent` | The five `mmo:` agents run only in a session where someone typed a `/mmo:` command. | acts in mode `on` |
 | Enforced hand-over | `PreToolUse` on `Write`, `Bash`, `Edit` and the batch write | The thinker does not type what a worker types cheaper. A by-hand write of NEW code files, NEW test files, or the same edit repeated in yet another file, whose typing is above this chat's break-even (about 800 characters with Flash, 2,000 with Sonnet), is refused with the hand-over tool's full name; below it, it runs. The typing measured is the text of the call itself: the Write's content, the Bash command, the batch write's files, the replacement times the files git still finds the old text in. Never a trap: a file whose job failed, or was refused by the gate as too small, is released and typed by the thinker; a file refused twice goes through the third time, logged; no worker reachable or the cell closed, nothing is refused; never on the rules-only side, in the control arm, in observe mode or in a pipeline session. Why (23 Sep): twelve pairs showed that asking does not work; told in the note and in a line at the right moment, the thinker typed everything itself. Off with `offers.enforce_handover: false`. | acts in mode `on` |
 | The two lines that remain | `PostToolUse` on `Read`, `Bash`; `PostToolUseFailure` on `Bash` | The scout, offered once when the reads so far cost more than a scout job would (the chat's size against the worker reading its byte budget), and the bug fix, offered once when a test the chat wrote fails. Nothing else is asked about. | acts in mode `on` |
@@ -91,7 +91,7 @@ cost  = 2 * C * r  +  spec * out  +  (typed + spec + context) * w_in  +  typed *
 saved = (F-K)*(w + r*n_a)  -  SUM over follow-ups [ X_j*(w + r*n_j) + C_j*r ]
 ```
 
-`n` is the count of real later requests in the same context. A full re-read in a large context comes out negative and is reported as a loss. Sessions that left the thinker model, typed a pipeline command, or ran in the control arm add nothing to the saved total.
+`n` is the count of real later requests in the same context. A full re-read in a large context comes out negative and is reported as a loss. Sessions that typed a pipeline command or ran in the control arm add nothing to the saved total. Each action is priced at the cache prices of the model the chat was on when it was made (since 26 Sep 2026; before, every action off the thinker model was left out); an action on a model with no price card is left out and counted in `left_out`, never priced as another model.
 
 **Census.** Before building on a task mix, measure it, at no cost:
 
@@ -125,7 +125,7 @@ Layers, weakest first: shipped defaults (`plugin/config/ambient.default.json`), 
 
 A project file is attacker input: anyone who can land a commit can edit it. It applies in full only when its SHA-256 is listed in `~/.mmo-ambient/receipts.json`, a file a repository cannot write. Without a receipt it may only **tighten**: lower the mode, switch a valve off, close cells, add `never_delegate_paths`. Every other key is ignored.
 
-The fixed lineup is part of the settings: thinker `claude-opus-5`, and `workers` maps each worker to its model (`flash`: `gemini-3.8-flash`, `sonnet`: `claude-sonnet-5`) and names the `default` one, which only breaks a tie (see Picking the worker). If a session is not on the thinker anyway (lock off, `--model` at launch), reads keep getting smaller, no new worker job starts, and the session stays out of the savings numbers.
+The fixed lineup is part of the settings: thinker `claude-opus-5`, and `workers` maps each worker to its model (`flash`: `gemini-3.8-flash`, `sonnet`: `claude-sonnet-5`) and names the `default` one, which only breaks a tie (see Picking the worker). **Any chat model (since 26 Sep 2026):** the rules act on whatever model the person picks. Every decision (a read outline, a hand-off, an offer) is priced at the model the chat is on, read from `cost.prices_usd_per_mtok`, which carries every model the picker offers (Opus 5.5, Opus 5, Opus 4.8, Opus 4.7, Sonnet 5, Sonnet 4.6, Haiku 4.5, Fable 5 and 5.1; official prices, read 26 Sep 2026, and kept equal to the dispatch server's dated list by a test). A model with no card gets no decision at all, never another model's prices. Before 26 Sep a chat off the thinker kept only the read outlines, started no worker job, and priced everything as Opus 5.
 
 ## Worker jobs: what is built
 
@@ -213,7 +213,7 @@ With ambient mode on, an ordinary chat message that asks for one of the eight `/
 
 **What the person sees.** Nothing in zero-touch's own words names the plugin, a command or a model:
 - **A clear request** ("fix the /login endpoint returning 500"): one plain line, "Running this as a full bug-fix workflow.", then the workflow's own steps and approvals. Two of the workflow's own setup questions are answered from the switches instead of asked: the cost-recording mode (`routing_defaults.auth`), and, for a new app, the brief (the person's message is the brief, written in the Project Brief layout). The saved policy is the project's own, or `routing_defaults.policy` for a folder with none. Every phase, gate and approval is the workflow's own.
-- **An unclear one Opus recognises** (typos, casual wording): Opus asks once in plain words, "This looks like a job for the full bug-fix workflow (reproduce, fix, test, review). Shall I run it?", and it runs only on a plain yes.
+- **An unclear request** (typos, casual wording, anything the rules do not recognise): an ordinary chat with the generic orchestrator. No question is asked and no workflow starts on the chat model's guess (26 Sep 2026). Until then the chat's model could offer the workflow ("Shall I run it?") or, with `routing_unsure: auto`, start it; that switch is gone and an old value is ignored.
 - **Anything else:** an ordinary chat.
 
 Nothing has to be set first. A workflow's helpers name their model in the plugin's own agent files, so the first chat after install can start one, and switching the chat to another model does not move them.
@@ -226,13 +226,12 @@ Only renaming the plugin would change those rows, and a rename changes every typ
 
 ### The switches
 
-All three are in `~/.mmo-ambient/ambient.json`. A project's own `.sdlc/ambient.json` can only switch routing off or back to `ask`, never on or to `auto`.
+Both are in `~/.mmo-ambient/ambient.json`. A project's own `.sdlc/ambient.json` can only switch routing off, never on. (A third switch, `routing_unsure` ask / auto, was removed on 26 Sep 2026: only the rules start a workflow.)
 
 | Setting | Values | Default |
 |---|---|---|
 | `mode` | off / observe / on | off: the plugin behaves exactly as 0.7.7 |
 | `routing` | on / off | on (acts only with `mode` on). Off: no workflow is ever started from chat |
-| `routing_unsure` | ask / auto | ask. Auto: an unclear request Opus recognises starts without the question |
 | `routing_defaults` | `{policy, auth}` | `opus-plus-flash-v38`, `estimated`: what a routed workflow starts with |
 
 ### Recognition (`lib/route.mjs`)
@@ -284,10 +283,9 @@ Every workflow start, typed or model-started, reaches the hooks as a `PreToolUse
 4. **Guard B** (`pre-skill`), for a `mmo:` Skill call (a leading `/` is the same command):
    - **Allowed:** a typed command (already a workflow run) and the routed workflow.
    - **Refused:** a helper agent starting the chat's workflow, any other command (setup, policy, revert, pass, the generic brownfield), a second workflow, a workflow in a chat that has started work, and one the folder rule forbids.
-   - **An unclear request Opus recognises:** in `ask` mode it is refused with the plain question to ask and kept as an offer. The offer is answered by the person's next typed message, whenever it comes, because the question is the last thing asked. Only a reply made entirely of agreement words ("yes", "Yes, please", "go for it", "okay, run it") accepts it. Anything else ends it, and Opus is told to carry on and offer again only if asked. In `auto` mode it starts.
+   - **A start the chat makes by itself** (no route from the rules): always refused with "Full workflows start only when the plugin recognises the request or the person types the command. Carry on with your own tools." Since 26 Sep 2026 there is no offer and no plain-yes step.
 5. **Starting.**
    - A route made by the prompt hook was already checked there, so the chat is marked a workflow run first. The policy is then saved, only for a folder with none, as `/mmo:setup`'s scripted path saves it: never overwritten, and never into an enclosing project.
-   - A start Opus made in `auto` mode is checked at that moment.
    - The after-hook (`post-skill`) marks the start too, so a start hook that timed out cannot leave the workflow blocked.
 6. **When a workflow cannot start,** nothing starts and Opus tells the person the real cause, with the fix for that cause:
 
@@ -326,7 +324,7 @@ From 0.8.3 ambient mode sits on top of 0.7.7 (0.7.6 plus one policy per run, not
 - the start-of-chat note goes out at the chat's first prompt that is not a `/mmo:` command, never at session start;
 - from the `/mmo:` prompt on, every rule stands down;
 - the pipeline's own agents get their explicit 0.7.7 tool lists.
-- One change with the mode on, in ordinary chat only: Opus may start just the workflow zero-touch recognised or the person agreed to (Guard B), where 0.7.7 lets it start any. Which workflow may start changes; how a workflow runs does not.
+- One change with the mode on, in ordinary chat only: the chat may start just the workflow the rules recognised (Guard B), where 0.7.7 lets it start any. Which workflow may start changes; how a workflow runs does not.
 - Inside a workflow run every zero-touch tool is refused, and never stamped, so the batch write can never get around a brownfield run's write contract.
 
 The pipeline's own hooks (the write contract, the foreground-helpers guard, telemetry) keep 0.7.7's settings, with no short timeout. Claude Code lets a tool call through when its guard hook times out.
@@ -369,7 +367,12 @@ Live in the desktop app, 25 Sep 2026 (before the helpers' model was pinned):
 - **With the setting**, the same message in a new chat started the new-app workflow at the first attempt. It ran 0.7.7's own steps (brief questions, the plan screen, requirements) up to Gate 1, at about $0.17 estimated.
 - **The pin check:** with the chat on Sonnet 5 and nothing set, a helper whose agent file names Opus 5 ran on Opus 5.
 
-The pinned version has not yet run a routed workflow live.
+Live on the pinned version, 26 Sep 2026, nothing set on the machine:
+- **New app, chat on Sonnet 5:** the workflow started from a plain message; its run-start check printed "the driver agents run on claude-opus-5, named in this plugin's agent files"; the plan showed Opus 5 for the thinking and Flash 3.8 for the typing; requirements were written and the run stopped at Gate 1.
+- **Bug fix, chat on Opus 5.5:** the chat loaded the brownfield rulebook by its skill name, read the project's saved policy (`opus-plus-flash-v38`), ran the pre-check, and the discovery helper ran on Opus 5 without touching the source.
+- **Bug fix, chat on Sonnet 4.6:** the chat could not open the rulebook (the brownfield commands point at it by a repository path, a bug since 19 Aug 2026, logged) and worked without it. Fix designed, not built.
+
+The two 26 Sep changes (rules only; savings rules on any model) are tested offline and have not yet run live.
 
 Run live on the zero-touch branch, 22–23 Sep 2026: paired chats with the plugin's own hooks on and real workers (Flash through Google, Sonnet through the Claude login). Pair 12 (one pair, receivables brief): $12.50 with hand-overs against $15.59 without (−19.8%); pair 11 lost (+52.8%) and taught the design-file rule. On 0.8.3 (the same code on top of 0.7.6's pipeline) nothing has run live yet.
 

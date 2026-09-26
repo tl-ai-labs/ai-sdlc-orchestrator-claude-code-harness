@@ -207,8 +207,9 @@ const STEP_TEXT = {
   "tool.ambient_refused": (e) => `A cheaper-model job was refused, because ${why(e.reason)}`,
   "write.partial_view_denied": () => "Blocked an overwrite of a file the main model had only seen as an outline",
   "model.switch_request": (e) => e.leaves_thinker && e.locked ? "Model switch blocked by the project's lock" : null,
-  "session.off_thinker": (e) => `The chat is on ${e.model ?? "another model"}, not the main model: nothing counts until it is back`,
-  "model.back_on_thinker": () => "Back on the main model: counting again",
+  // Since 26 Sep (option 3) the savings rules act on any model and each saving is priced at the model it was made on.
+  "session.off_thinker": (e) => `The chat is on ${e.model ?? "another model"}: savings are priced at that model's rates`,
+  "model.back_on_thinker": () => "Back on the main model",
   "session.pipeline": () => "A /mmo: command was typed: the plugin stood down",
   "job.verified": (e) => e.ran ? (e.passed ? "The tests passed on the cheaper model's change in a scratch copy, before the main model was told" : "The tests failed on the cheaper model's change in a scratch copy; sent back to the worker") : "No test command was declared, so nothing was verified before the hand-back",
   "write_files.used": (e) => `Wrote ${e.files} file${e.files === 1 ? "" : "s"} in one call, no worker${e.tests_ran ? `, and ran the tests: ${e.tests_passed ? "passed" : "failed"}` : ""}`,
@@ -217,7 +218,7 @@ const STEP_TEXT = {
 };
 const JOB_OF_TOOL = { fix_from_analysis: "bugfix_code", repeat_edit_across_files: "repeat_edit", write_files_from_specs: "boilerplate", write_tests_from_cases: "tests", scout_repo: "scout" };
 
-function readSession(dir, id, config, prices) {
+function readSession(dir, id, config, prices, priceOf) {
   const file = join(dir, id, "events.jsonl");
   if (!existsSync(file)) return null;
   const events = parseEvents(readFileSync(file, "utf8"));
@@ -226,7 +227,7 @@ function readSession(dir, id, config, prices) {
   // A re-opened chat (source "resume") is priced from this record's own start; the
   // requests before it are the chat's earlier history, covered by the earlier record.
   const cost = sessionCost(start.transcript_path, config, { since: start.source === "resume" ? start.ts : null });
-  const ledger = summarise(events, { w: prices.w, r: prices.r, requestTimes: cost.request_times.length ? cost.request_times : null });
+  const ledger = summarise(events, { w: prices.w, r: prices.r, priceOf, requestTimes: cost.request_times.length ? cost.request_times : null });
   const workerUsd = events.filter((e) => e.type === "job.ready" || e.type === "job.failed").reduce((s, e) => s + (e.worker_cost_usd ?? 0), 0);
   // Only what a person typed is a prompt; a queued system notice is logged with typed:false.
   const prompts = events.filter((e) => e.type === "prompt" && e.typed !== false);
@@ -267,12 +268,14 @@ function readSession(dir, id, config, prices) {
 export function buildData({ env = process.env, pair = null, now = new Date() } = {}) {
   const { config } = loadConfig({ env });
   const prices = pricesFor(config, config.thinker, env) ?? { w: 0, r: 0, tier: "unknown" };
+  // Another model's cache prices, for savings made while the chat was on it (null when it has no card).
+  const priceOf = (model) => { const p = pricesFor(config, model, env); return p ? { w: p.w, r: p.r } : null; };
   const dir = join(mmoHome(env), "sessions");
   let ids = [];
   try { ids = readdirSync(dir).filter((n) => statSync(join(dir, n)).isDirectory()); } catch { /* nothing recorded yet */ }
   // A record where nobody typed a prompt is not a chat: a re-opened chat that was only
   // looked at, or a window opened and closed. It is neither listed nor a side of a pair.
-  const sessions = ids.map((id) => readSession(dir, id, config, prices)).filter((s) => s && s.touches > 0).sort((a, b) => (a.started_at < b.started_at ? 1 : -1));
+  const sessions = ids.map((id) => readSession(dir, id, config, prices, priceOf)).filter((s) => s && s.touches > 0).sort((a, b) => (a.started_at < b.started_at ? 1 : -1));
 
   const counted = sessions.filter((s) => s.side === "on" && s.ledger_counted);
   const thinker = sessions.reduce((s, x) => s + x.thinker_usd, 0);

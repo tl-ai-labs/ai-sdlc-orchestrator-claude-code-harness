@@ -8,8 +8,9 @@
  *
  * A route belongs to the prompt it was made for: it is pending until the
  * Skill call that starts the workflow, and it is dropped at the next prompt.
- * An offer (an unclear request Opus recognised, in "ask" mode) lasts exactly
- * one reply: a plain yes turns it into a route, anything else ends it.
+ * Only the rules make a route (26 Sep 2026): an unclear request is never
+ * offered or started on the chat model's guess; it stays an ordinary chat with
+ * the generic orchestrator. The earlier "ask" / "auto" offers are gone.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -39,32 +40,11 @@ export const PLAIN = {
 /** One wording everywhere; it informs, it does not order (the chat note's own rule), and it is exact. */
 export const KEEP_OUT = "Keep the plugin, command names and model names out of what you say to the person.";
 
-/**
- * A reply that accepts an offer: every word is a word of agreement, and at
- * least one of them says yes. "Yes, please", "go for it", "okay, run it" are
- * yes; "yes but only the controller", a question, or anything else is a no.
- */
-const AFFIRM = new Set(["yes", "y", "yeah", "yea", "yep", "yup", "sure", "ok", "okay", "k", "go", "alright", "absolutely", "definitely", "do", "run", "start", "proceed", "please", "lets", "let's", "sounds"]);
-const AGREEMENT = new Set([...AFFIRM, "ahead", "for", "it", "thing", "good", "great", "fine", "that", "thanks", "thank", "you"]);
-export function isPlainYes(text) {
-  const t = String(text ?? "").toLowerCase().trim();
-  if (!t || t.includes("?")) return false;
-  const words = t.replace(/[.,!;:()"]/g, " ").split(/\s+/).filter(Boolean);
-  return words.length > 0 && words.length <= 8 && words.every((w) => AGREEMENT.has(w)) && words.some((w) => AFFIRM.has(w));
-}
-
-/** After an offer the person did not accept. */
-export function declinedInstruction(job) {
-  return `The person did not agree to run the full ${PLAIN[job].name}: carry on as an ordinary chat, and offer it again only if they ask for it. ${KEEP_OUT}`;
-}
-
-/** The instruction that starts a routed workflow. `via` is "rules" or "yes". */
-export function startInstruction({ job, args, via, auth }) {
+/** The instruction that starts a routed workflow (the rules recognised the request). */
+export function startInstruction({ job, args, auth }) {
   const plain = PLAIN[job];
   const call = args ? `skill "mmo:${job}", args ${JSON.stringify(args)}` : `skill "mmo:${job}" (no arguments)`;
-  const lead = via === "yes"
-    ? `The person agreed to run this as the full ${plain.name}.`
-    : `The person's message asks for a full ${plain.name}.`;
+  const lead = `The person's message asks for a full ${plain.name}.`;
   const line = job === "greenfield" ? "Running this as a full new-app build." : `Running this as a full ${plain.name}.`;
   const brief = job === "greenfield"
     ? " Their message is the brief to build from: in the brief step, write it into ./brief.md in the Project Brief layout instead of offering the example briefs, and ask only for what that layout needs and the message does not say."
@@ -81,26 +61,20 @@ export function startFirstReason(job) {
   return `Start the workflow first: the person asked for the full ${PLAIN[job].name}. Call the Skill tool with skill "mmo:${job}" now; other tools are blocked until it starts. ${KEEP_OUT}`;
 }
 
-/** Guard B's refusal in "ask" mode: the person must agree first. */
-export function askReason(job) {
-  const plain = PLAIN[job];
-  return (
-    `Before this workflow starts, the person must agree. Ask them in one plain sentence, for example: ` +
-    `"This looks like a job for the full ${plain.name} (${plain.steps}). Shall I run it?" ` +
-    `${KEEP_OUT} If they reply yes, the workflow is started for you; otherwise carry on as an ordinary chat.`
-  );
-}
+/**
+ * Guard B's refusal for a workflow the chat tried to start by itself. Since 26 Sep only the rules (or a typed
+ * command) start one, whatever the chat's model thinks the request is; the chat does the work itself instead.
+ */
+export const NOT_NOW_REASON = "Full workflows start only when the plugin recognises the request or the person types the command. Carry on with your own tools.";
 
-/** Guard B's refusal for a workflow the chat may not start now. */
-export const NOT_NOW_REASON = "Workflows start in this chat only when the person asks for one. Carry on with your own tools.";
-
-/** The chat note's paragraph on workflows (only while routing is on). */
+/**
+ * The chat note's paragraph on workflows (only while routing is on). It informs and names no command: the chat
+ * has nothing to start, because the plugin starts a recognised workflow itself (rules only, 26 Sep).
+ */
 export function workflowsParagraph() {
   return (
-    "Full workflows: when the person asks for a new app (empty folder), a bug fix, a new or extended feature, a refactor, tests, docs " +
-    "or a dependency upgrade and none has started, call the Skill tool with mmo:greenfield, mmo:bugfix, mmo:feature-new, " +
-    "mmo:feature-extend, mmo:refactor, mmo:test, mmo:docs or mmo:deps, args = the request in one line (none for a new app). " +
-    "The plugin starts it or says to ask the person first. " + KEEP_OUT
+    "Full workflows: a new app, a bug fix, a feature, a refactor, tests, docs or a dependency upgrade is started by the plugin " +
+    "itself when a message clearly asks for one; everything else is handled here as ordinary work. " + KEEP_OUT
   );
 }
 
@@ -135,7 +109,6 @@ export function cannotStartInstruction(job, problem) {
 // ─── Route state (one chat) ─────────────────────────────────────────────
 
 const ROUTE = "route.json";
-const OFFER = "route-offer.json";
 
 function readJson(file) {
   try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; }
@@ -148,12 +121,6 @@ export function writeRoute(sid, route) {
 }
 export function dropRoute(sid) { try { rmSync(join(sessionDir(sid), ROUTE), { force: true }); } catch { /* already gone */ } }
 
-export function readOffer(sid) { return readJson(join(sessionDir(sid), OFFER)); }
-export function writeOffer(sid, offer) {
-  ensureSessionDir(sid);
-  writeFileSync(join(sessionDir(sid), OFFER), JSON.stringify({ ...offer, at: new Date().toISOString() }), { mode: 0o600 });
-}
-export function dropOffer(sid) { try { rmSync(join(sessionDir(sid), OFFER), { force: true }); } catch { /* already gone */ } }
 
 // ─── Setup the workflow itself checks ───────────────────────────────────
 

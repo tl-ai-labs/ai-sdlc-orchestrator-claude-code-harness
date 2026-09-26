@@ -36,8 +36,8 @@ import { recordValve, repoKey, valveCounts } from "./lib/repo-stats.mjs";
 import { classifyRunner, parseFileDump, rangeLineCount } from "./lib/shell-parse.mjs";
 import { lastTurnFacts } from "./lib/transcript.mjs";
 import { repoKind } from "./lib/repo-kind.mjs";
-import { folderKind, routeMessage, ROUTABLE_JOBS } from "./lib/route.mjs";
-import { askReason, cannotStartInstruction, declinedInstruction, dropOffer, KEEP_OUT, dropRoute, isPlainYes, NOT_NOW_REASON, readOffer, readRoute, saveWorkflowPolicy, startFirstReason, startInstruction, startProblem, workflowsParagraph, writeOffer, writeRoute } from "./lib/route-flow.mjs";
+import { folderKind, routeMessage } from "./lib/route.mjs";
+import { cannotStartInstruction, KEEP_OUT, dropRoute, NOT_NOW_REASON, readRoute, saveWorkflowPolicy, startFirstReason, startInstruction, startProblem, workflowsParagraph, writeRoute } from "./lib/route-flow.mjs";
 // edit-fill.mjs and offers.mjs pull in the apply script and the value rule.
 // They are loaded only by the rare call that needs them: loading them on every
 // tool call pushed the ordinary-call overhead from about 50 ms past the 80 ms
@@ -229,19 +229,15 @@ function markStarted(ctx, route) {
 }
 
 /**
- * Starts a workflow. A route the prompt hook made was already checked there,
- * so here the chat is marked first and only then is the policy saved: the
- * start hook stays cheap, and a slow save can never leave a started workflow
- * blocked by Guard A (independent review, 25 Sep). A start the model made by
- * itself ("auto") is checked here, as the prompt hook would have. A failed
- * save is recorded, not fatal: the workflow's own policy step then says so.
- * Returns null when started, else the problem.
+ * Starts a workflow. Every route is made by the prompt hook and was already
+ * checked there (only the rules route since 26 Sep; the model's own "auto"
+ * starts, which were checked here, are gone), so the chat is marked first and
+ * only then is the policy saved: the start hook stays cheap, and a slow save
+ * can never leave a started workflow blocked by Guard A (independent review,
+ * 25 Sep). A failed save is recorded, not fatal: the workflow's own policy
+ * step then says so.
  */
-function startWorkflow(ctx, route, { checked }) {
-  if (!checked) {
-    const { problem } = startProblem({ projectDir: ctx.projectDir, fallback: ctx.config.routing_defaults.policy, auth: ctx.config.routing_defaults.auth });
-    if (problem) return problem;
-  }
+function startWorkflow(ctx, route) {
   markStarted(ctx, route);
   try {
     const saved = saveWorkflowPolicy({ projectDir: ctx.projectDir, policy: ctx.config.routing_defaults.policy });
@@ -249,7 +245,6 @@ function startWorkflow(ctx, route, { checked }) {
   } catch (err) {
     appendEvent(ctx.sid, "route.policy_not_saved", { why: String(err?.message ?? err).slice(0, 120) });
   }
-  return null;
 }
 
 /**
@@ -382,7 +377,9 @@ async function considerOffer(ctx, trigger, files = []) {
   const spoken = "offer.spoken." + trigger.kind.replace(/[^a-z_]/g, "");
   if (hasMarker(ctx, spoken)) return null;
   const { drawOffer, pickWorker } = await import("./lib/offers.mjs");
-  const standDown = standDownReason(ctx) ?? (!delegationOn(ctx) ? "delegation-off" : null) ?? (hasSessionMarker(ctx, "off_thinker") ? "off-thinker" : null);
+  // Not on the thinker model is no longer a reason to stand down (26 Sep, option 3): the rules price the model the
+  // chat is on (pricesFor), so an offer or a hand-off is made only where it pays on THAT model.
+  const standDown = standDownReason(ctx) ?? (!delegationOn(ctx) ? "delegation-off" : null);
   const pick = pickWorker(ctx.config, trigger.job, fileKindOf(files));
   const cell = pick.cell;
   const base = { trigger: trigger.kind, job: trigger.job, count: trigger.count, worker: pick.worker ?? undefined, cell: cell.cellKey, cell_state: cell.state, p_pays: cell.P, saving_basis: cell.saving_basis };
@@ -558,10 +555,9 @@ const handlers = {
     // here; after /clear the next prompt decides again.
     if (ctx.input.source === "clear") {
       // A fresh conversation: nothing earlier counts. The note is re-sent, and a workflow run, a pending route
-      // or offer, and started work all belong to the conversation /clear ended (independent review, 25 Sep).
+      // and started work all belong to the conversation /clear ended (independent review, 25 Sep).
       for (const name of ["note_sent", "pipeline", "work_started"]) dropSessionMarker(ctx, name);
       dropRoute(ctx.sid);
-      dropOffer(ctx.sid);
       ctx.pipeline = false;
     }
     if (ctx.input.source === "compact" && hasSessionMarker(ctx, "note_sent") && !ctx.pipeline && ctx.config.mode === "on" && arm.arm === "on") {
@@ -618,25 +614,16 @@ const handlers = {
     const lines = [];
     let routed = false;
     if (typed && !pipeline) {
-      // A route or an offer belongs to one prompt: a new prompt ends both, so
-      // nothing stays blocked and a stale offer can never be accepted later.
-      const offer = readOffer(ctx.sid);
+      // A route belongs to one prompt: a new prompt ends it, so nothing stays blocked.
       const stale = readRoute(ctx.sid);
       if (stale?.status === "pending") { dropRoute(ctx.sid); appendEvent(ctx.sid, "route.dropped", { job: stale.job }); }
-      if (offer) dropOffer(ctx.sid);
       if (routingOn(ctx) && !workStarted(ctx)) {
+        // Only the rules route (26 Sep): a request they do not recognise is an ordinary chat, never an
+        // offer and never the chat model's guess.
         let route = null;
-        if (offer && isPlainYes(text)) {
-          route = { job: offer.job, args: offer.args ?? "", via: "yes" };
-        } else {
-          if (offer) {
-            appendEvent(ctx.sid, "route.offer_declined", { job: offer.job });
-            lines.push(declinedInstruction(offer.job));
-          }
-          const r = routeMessage(text, folderKind(ctx.projectDir));
-          if (r.job) route = { job: r.job, args: r.args, via: "rules" };
-          else appendEvent(ctx.sid, "route.none", { reason: r.reason });
-        }
+        const r = routeMessage(text, folderKind(ctx.projectDir));
+        if (r.job) route = { job: r.job, args: r.args, via: "rules" };
+        else appendEvent(ctx.sid, "route.none", { reason: r.reason });
         if (route) {
           // Never tell Opus to start a workflow that its own run-start check would stop.
           const { problem } = startProblem({ projectDir: ctx.projectDir, fallback: ctx.config.routing_defaults.policy, auth: ctx.config.routing_defaults.auth });
@@ -679,26 +666,13 @@ const handlers = {
     const route = readRoute(ctx.sid);
     if (route?.status === "pending") {
       if (route.job !== job) return void deny(startFirstReason(route.job));
-      const problem = startWorkflow(ctx, route, { checked: true });
-      if (problem) deny(cannotStartInstruction(job, problem));
+      startWorkflow(ctx, route);
       return;
     }
-    // A start Opus made by itself follows the same rules as a recognised one:
-    // workflows on, a routable job, a chat that has not started work, and the folder rule.
-    const folderFits = (folderKind(ctx.projectDir) === "new") === (job === "greenfield");
-    if (ctx.config.routing !== "on" || !ROUTABLE_JOBS.has(job) || workStarted(ctx) || !folderFits) {
-      appendEvent(ctx.sid, "route.refused", { job, folder_fits: folderFits });
-      return void deny(NOT_NOW_REASON);
-    }
-    const args = typeof ctx.input.tool_input?.args === "string" ? ctx.input.tool_input.args.replace(/\s+/g, " ").trim().slice(0, 300) : "";
-    if (ctx.config.routing_unsure === "auto") {
-      const problem = startWorkflow(ctx, { job, args, via: "model" }, { checked: false });
-      if (problem) deny(cannotStartInstruction(job, problem));
-      return;
-    }
-    writeOffer(ctx.sid, { job, args });
-    appendEvent(ctx.sid, "route.offered", { job });
-    deny(askReason(job));
+    // No route: the chat is starting a workflow on its own guess. Only the rules (or a typed command, handled
+    // above as a pipeline session) start one since 26 Sep, so this is always refused and the chat carries on.
+    appendEvent(ctx.sid, "route.refused", { job, by: "chat" });
+    deny(NOT_NOW_REASON);
   },
 
   "pre-any"(ctx) {
@@ -714,7 +688,7 @@ const handlers = {
     const name = String(ctx.input.tool_input?.skill ?? "").trim().replace(/^\//, "");
     const route = readRoute(ctx.sid);
     if (ctx.agent || route?.status !== "pending" || name !== `mmo:${route.job}`) return;
-    startWorkflow(ctx, route, { checked: true });
+    startWorkflow(ctx, route);
   },
 
   "prompt-expansion"(ctx) {
@@ -1027,7 +1001,7 @@ const handlers = {
         if (reason) return void emit({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
       }
     }
-    const standDown = standDownReason(ctx) ?? (!delegationOn(ctx) ? "delegation-off" : null) ?? (hasSessionMarker(ctx, "off_thinker") ? "off-thinker" : null);
+    const standDown = standDownReason(ctx) ?? (!delegationOn(ctx) ? "delegation-off" : null);
     if (isStartTool(name) && standDown) {
       appendEvent(ctx.sid, "tool.ambient_refused", { tool: name, reason: standDown });
       return void emit({

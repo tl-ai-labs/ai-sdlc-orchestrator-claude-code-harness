@@ -118,47 +118,46 @@ test("a typed command is never touched: it starts as on 0.7.7, and nothing is ro
   } finally { s.cleanup(); }
 });
 
-test("ask (the default): an unclear request is started only after the person agrees in plain words", { skip: SKIP ?? false }, async () => {
+// ─── Rules only (26 Sep 2026) ───
+// Until 26 Sep an unclear request the chat's own model recognised was offered ("Shall I run the full bug-fix
+// workflow?") or, with routing_unsure: auto, started at once. Both rested on the chat model's guess, so the result
+// changed with the model the person picked. Now a workflow starts only when the rules recognise the request or the
+// person types the command; anything else is an ordinary chat with the generic orchestrator.
+
+test("an unclear request is never started or offered: no question, no workflow, the chat carries on", { skip: SKIP ?? false }, async () => {
   const s = sandbox("existing");
   try {
-    const first = context(await prompt(s, "a1", "teh logn page 500s sort it out"));
-    assert.doesNotMatch(first, /"mmo:bugfix"/, "the rules are not sure, so nothing is routed");
-    assert.match(first, /Skill tool/, "the chat note tells Opus how full workflows start");
-    const workflows = first.slice(first.indexOf("Full workflows:"));
-    assert.ok(first.includes("Full workflows:") && workflows.length < 600, `the workflows paragraph stays short: ${workflows.length} chars`);
-    assert.ok(!/\b(must|always|never|you should|immediately)\b/i.test(workflows), "it informs, it does not order, like the note it joins");
+    assert.doesNotMatch(context(await prompt(s, "a1", "teh logn page 500s sort it out")), /"mmo:bugfix"/, "the rules are not sure, so nothing is routed");
     const tried = await skill(s, "a1", "mmo:bugfix", "the login page returns 500");
-    assert.ok(denied(tried), "Opus may not start it on its own");
-    assert.match(reason(tried), /must agree/);
-    assert.match(reason(tried), /bug-fix workflow/);
-    assert.match(reason(tried), /Keep the plugin, command names and model names out of what you say to the person/);
-    const yes = context(await prompt(s, "a1", "yes"));
-    assert.match(yes, /agreed/);
-    assert.match(yes, /"mmo:bugfix"/);
-    assert.match(yes, /the login page returns 500/, "the description Opus offered goes with it");
-    assert.equal((await skill(s, "a1", "mmo:bugfix", "the login page returns 500")).stdout, "");
-    assert.ok(pipeline(s, "a1"));
+    assert.ok(denied(tried), "the chat may not start a workflow on its own guess");
+    assert.doesNotMatch(reason(tried), /agree|Shall I|ask them/i, "and is not told to ask the person");
+    assert.match(reason(tried), /Carry on/);
+    assert.doesNotMatch(context(await prompt(s, "a1", "yes")), /"mmo:bugfix"/, "a later yes starts nothing: there was no offer");
+    assert.ok(!pipeline(s, "a1"));
+    assert.ok(!existsSync(join(s.home, "sessions", "a1", "route-offer.json")), "no offer is ever kept");
   } finally { s.cleanup(); }
 });
 
-test("ask: anything but a plain yes is a no, and the offer lasts one reply", { skip: SKIP ?? false }, async () => {
+test("the chat note says full workflows are started by the plugin itself, names no command and invites no start", { skip: SKIP ?? false }, async () => {
   const s = sandbox("existing");
   try {
-    await prompt(s, "a2", "teh logn page 500s sort it out");
-    assert.ok(denied(await skill(s, "a2", "mmo:bugfix", "the login page returns 500")));
-    assert.doesNotMatch(context(await prompt(s, "a2", "yes but only look at the controller")), /"mmo:bugfix"/);
-    assert.doesNotMatch(context(await prompt(s, "a2", "yes")), /"mmo:bugfix"/, "the offer expired with the reply that did not accept it");
-    assert.ok(!pipeline(s, "a2"));
+    const note = context(await prompt(s, "a3", "hello there"));
+    const i = note.indexOf("Full workflows");
+    assert.ok(i >= 0, "the note mentions full workflows");
+    const workflows = note.slice(i);
+    assert.ok(workflows.length < 400, `the workflows paragraph stays short: ${workflows.length} chars`);
+    assert.doesNotMatch(workflows, /mmo:|Skill tool/, "no command names and no invitation to call one");
+    assert.ok(!/\b(must|always|never|you should|immediately)\b/i.test(workflows), "it informs, it does not order, like the note it joins");
   } finally { s.cleanup(); }
 });
 
-test("auto: an unclear request Opus recognises starts at once", { skip: SKIP ?? false }, async () => {
+test("an old routing_unsure setting is ignored: auto no longer starts anything", { skip: SKIP ?? false }, async () => {
   const s = sandbox("existing", { routing_unsure: "auto" });
   try {
     await prompt(s, "u1", "teh logn page 500s sort it out");
-    assert.equal((await skill(s, "u1", "mmo:bugfix", "the login page returns 500")).stdout, "");
-    assert.ok(pipeline(s, "u1"));
-    assert.equal(projectPolicy(s), "opus-plus-flash-v38");
+    assert.ok(denied(await skill(s, "u1", "mmo:bugfix", "the login page returns 500")));
+    assert.ok(!pipeline(s, "u1"));
+    assert.equal(projectPolicy(s), null, "nothing was written");
   } finally { s.cleanup(); }
 });
 
@@ -173,20 +172,17 @@ test("workflows off: nothing is routed and Opus may not start one; the chat-savi
   } finally { s.cleanup(); }
 });
 
-test("a project folder can switch workflows off or back to asking, never on or to auto", { skip: SKIP ?? false }, async () => {
-  const s = sandbox("existing", { routing_unsure: "auto" });
+test("a project folder can switch workflows off, never on", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing");
   try {
     mkdirSync(join(s.repo, ".sdlc"));
-    writeFileSync(join(s.repo, ".sdlc", "ambient.json"), JSON.stringify({ routing_unsure: "ask" }));
-    await prompt(s, "p1", "teh logn page 500s sort it out");
-    assert.ok(denied(await skill(s, "p1", "mmo:bugfix", "x")), "the folder tightened auto to ask");
     writeFileSync(join(s.repo, ".sdlc", "ambient.json"), JSON.stringify({ routing: "off" }));
     assert.doesNotMatch(context(await prompt(s, "p2", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/);
   } finally { s.cleanup(); }
   const t = sandbox("existing", { routing: "off" });
   try {
     mkdirSync(join(t.repo, ".sdlc"));
-    writeFileSync(join(t.repo, ".sdlc", "ambient.json"), JSON.stringify({ routing: "on", routing_unsure: "auto" }));
+    writeFileSync(join(t.repo, ".sdlc", "ambient.json"), JSON.stringify({ routing: "on" }));
     assert.doesNotMatch(context(await prompt(t, "p3", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/, "a folder cannot switch workflows on");
   } finally { t.cleanup(); }
 });
@@ -229,7 +225,7 @@ test("with no helper setting at all, a clear job starts: the workflows' helpers 
 });
 
 test("setup, policy, revert, pass and the generic brownfield command are never started by the model", { skip: SKIP ?? false }, async () => {
-  const s = sandbox("existing", { routing_unsure: "auto" });
+  const s = sandbox("existing");
   try {
     await prompt(s, "n1", "hello");
     for (const name of ["mmo:setup", "mmo:policy", "mmo:revert", "mmo:pass", "mmo:brownfield"]) {
@@ -344,43 +340,29 @@ test("Guard A covers every tool that can change something, helpers included; too
   } finally { s.cleanup(); }
 });
 
-test("Opus's own starts follow the folder rule too: a new app only in an empty folder, a project job only in a project", { skip: SKIP ?? false }, async () => {
-  const s = sandbox("existing", { routing_unsure: "auto" });
+test("the chat's own starts are refused in any folder, even where the job would fit", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing");
   try {
     await prompt(s, "f1", "hello");
-    assert.ok(denied(await skill(s, "f1", "mmo:greenfield")), "no new-app build inside an existing project");
+    assert.ok(denied(await skill(s, "f1", "mmo:bugfix", "x")), "a project job in a project: still not the chat's call");
+    assert.ok(denied(await skill(s, "f1", "mmo:greenfield")), "a new-app build in a project");
     assert.ok(!pipeline(s, "f1"));
   } finally { s.cleanup(); }
-  const n = sandbox("new", { routing_unsure: "auto" });
+  const n = sandbox("new");
   try {
     await prompt(n, "f2", "hello");
-    assert.ok(denied(await skill(n, "f2", "mmo:bugfix", "x")), "no bug-fix workflow in an empty folder");
+    assert.ok(denied(await skill(n, "f2", "mmo:greenfield")), "a new-app build in an empty folder: still not the chat's call");
     assert.ok(!pipeline(n, "f2"));
   } finally { n.cleanup(); }
 });
 
-test("any plain agreement accepts an offer; anything else is a no, recorded, and Opus is told to leave it", { skip: SKIP ?? false }, async () => {
-  const { isPlainYes } = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "route-flow.mjs"));
-  for (const yes of ["yes", "Yes, please", "yes, go ahead", "go for it", "yep, do it", "okay, run it", "sure thing", "Yes!", "ok go", "please do", "let's do it", "sounds good"]) {
-    assert.ok(isPlainYes(yes), yes);
+test("the offer machinery is gone: nothing asks, keeps or accepts an offer", async () => {
+  const flow = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "route-flow.mjs"));
+  for (const name of ["isPlainYes", "askReason", "declinedInstruction", "readOffer", "writeOffer", "dropOffer"]) {
+    assert.equal(flow[name], undefined, name);
   }
-  for (const no of ["yes but only look at the controller", "yes, and also refactor the parser", "no", "not yet", "yes? what does it do", "thanks", "hmm", "go away", "do the refactor instead"]) {
-    assert.ok(!isPlainYes(no), no);
-  }
-  const s = sandbox("existing");
-  try {
-    await prompt(s, "y1", "teh logn page 500s sort it out");
-    assert.ok(denied(await skill(s, "y1", "mmo:bugfix", "the login page returns 500")));
-    assert.match(context(await prompt(s, "y1", "Yes, please")), /"mmo:bugfix"/, "a polite yes is a yes");
-    const t = sandbox("existing");
-    try {
-      await prompt(t, "y2", "teh logn page 500s sort it out");
-      assert.ok(denied(await skill(t, "y2", "mmo:bugfix", "x")));
-      const no = context(await prompt(t, "y2", "no, just look at it"));
-      assert.match(no, /did not agree/);
-      assert.doesNotMatch(no, /"mmo:bugfix"/);
-    } finally { t.cleanup(); }
-  } finally { s.cleanup(); }
+  const { ROUTING_UNSURE } = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "config.mjs"));
+  assert.equal(ROUTING_UNSURE, undefined, "no routing_unsure switch");
 });
 
 test("a typed command without the plugin's prefix is still a typed run: zero-touch stands down, nothing is routed or noted", { skip: SKIP ?? false }, async () => {
@@ -394,7 +376,7 @@ test("a typed command without the plugin's prefix is still a typed run: zero-tou
   } finally { s.cleanup(); }
 });
 
-test("/clear starts a fresh conversation: an earlier run, route, offer or started work no longer counts", { skip: SKIP ?? false }, async () => {
+test("/clear starts a fresh conversation: an earlier run, route or started work no longer counts", { skip: SKIP ?? false }, async () => {
   const s = sandbox("existing");
   try {
     await run("prompt-expansion", { session_id: "cl1", cwd: s.repo, command_name: "mmo:refactor", expansion_type: "slash_command" }, s);
