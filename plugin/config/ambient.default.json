@@ -15,7 +15,7 @@
     "default": "flash"
   },
   "control": {
-    "share": 0.5
+    "share": 0
   },
   "valves": {
     "read": {

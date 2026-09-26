@@ -380,11 +380,12 @@ async function considerOffer(ctx, trigger, files = []) {
   // Not on the thinker model is no longer a reason to stand down (26 Sep, option 3): the rules price the model the
   // chat is on (pricesFor), so an offer or a hand-off is made only where it pays on THAT model.
   const standDown = standDownReason(ctx) ?? (!delegationOn(ctx) ? "delegation-off" : null);
-  const pick = pickWorker(ctx.config, trigger.job, fileKindOf(files));
+  // The scout reads, it types nothing, so its pick is not limited by the chat's typing price.
+  const pick = pickWorker(ctx.config, trigger.job, fileKindOf(files), undefined, { chatModel: trigger.kind === "reads_fan_out" ? null : chatModelOf(ctx) });
   const cell = pick.cell;
   const base = { trigger: trigger.kind, job: trigger.job, count: trigger.count, worker: pick.worker ?? undefined, cell: cell.cellKey, cell_state: cell.state, p_pays: cell.P, saving_basis: cell.saving_basis };
   if (standDown || cell.state === "closed") {
-    if (!hasMarker(ctx, "offer.noted." + trigger.kind)) { setMarker(ctx, "offer.noted." + trigger.kind); appendEvent(ctx.sid, "offer.not_eligible", { ...base, reason: standDown ?? "cell-closed" }); }
+    if (!hasMarker(ctx, "offer.noted." + trigger.kind)) { setMarker(ctx, "offer.noted." + trigger.kind); appendEvent(ctx.sid, "offer.not_eligible", { ...base, reason: standDown ?? (!pick.worker && pick.never_pays?.length ? "never-pays" : "cell-closed") }); }
     return null;
   }
   const rule = trigger.kind === "reads_fan_out" ? scoutRule(ctx, pick, trigger.count) : { ...handoverRule(ctx, pick, 0), net: 1 };
@@ -426,7 +427,7 @@ async function enforceHandover(ctx, { kind, paths, chars, retryHint }) {
   const abs = paths.map((p) => absOf(ctx, p));
   if (abs.some((a) => isReleased(ctx.sid, a))) { appendEvent(ctx.sid, "typing.allowed", { kind, why: "released", files: paths.length, chars }); return null; }
   const { pickWorker } = await import("./lib/offers.mjs");
-  const pick = pickWorker(ctx.config, k.job, fileKindOf(paths));
+  const pick = pickWorker(ctx.config, k.job, fileKindOf(paths), undefined, { chatModel: chatModelOf(ctx) });
   if (!pick.worker || pick.cell.state === "closed") return null;
   const rule = handoverRule(ctx, pick, chars);
   if (!(rule.net > 0)) return null;
@@ -436,6 +437,15 @@ async function enforceHandover(ctx, { kind, paths, chars, retryHint }) {
   appendEvent(ctx.sid, "typing.refused", { kind, tool: k.tool, worker: pick.worker, files: paths.length, chars, break_even_chars: rule.breakEvenChars, net_usd: rule.net });
   const n = (x) => Number(x).toLocaleString("en-US");
   return `[mmo] Not typed by you: ${n(chars)} characters of ${k.what}. Above ${n(rule.breakEvenChars)} characters a worker types this for about a third of the price, so in this chat it goes to the worker. Hand ${paths.length === 1 ? "this file" : "these files"} and all the ${k.what} still to come to ${toolRef(k.tool)} ${k.how}, in one call; the worker types them, code checks each, the tests run in a copy, the files land. Below the break-even you type it yourself; a job the worker cannot do comes back to you. ${consentSentence(ctx)} ${retryHint}`;
+}
+
+/**
+ * The model this chat is priced at: the one that answered its last turn, else the policy's thinker (a chat with
+ * no answer yet). Every typing pick passes it to pickWorker, so a worker that cannot pay at this model's prices is
+ * never weighed, and the stamp carries it so the server prices the same model (26 Sep, option 3).
+ */
+function chatModelOf(ctx) {
+  return lastTurnFacts(ctx.input.transcript_path).model ?? ctx.config.thinker;
 }
 
 function scoutRule(ctx, pick, readsSoFar) {
@@ -529,7 +539,8 @@ function noteTestFile(ctx, filePath) {
 
 const handlers = {
   "session-start"(ctx) {
-    const arm = drawArm(ctx.sid, num(ctx.config.control?.share, 0.5));
+    // Fallback 0, as in arm.mjs and the shipped default: with no share set, every chat gets zero-touch.
+    const arm = drawArm(ctx.sid, num(ctx.config.control?.share, 0));
     if (["clear", "compact"].includes(ctx.input.source)) appendEvent(ctx.sid, "context.reset", { cause: ctx.input.source });
     appendEvent(ctx.sid, "session.start", {
       arm: arm.arm, forced: arm.forced, control_share: arm.control_share,
@@ -1016,12 +1027,13 @@ const handlers = {
     let breakEvenChars = null;
     let contextTokens = null;
     let cacheTier = null;
-    try { cacheTier = pricesFor(ctx.config, lastTurnFacts(ctx.input.transcript_path).model ?? ctx.config.thinker)?.tier ?? null; } catch { /* unpriced chat */ }
+    const chatModel = chatModelOf(ctx);
+    try { cacheTier = pricesFor(ctx.config, chatModel)?.tier ?? null; } catch { /* unpriced chat */ }
     const declared = declaredPathsOf(name, ctx.input.tool_input);
     if (declared) {
       try {
         const { pickWorker } = await import("./lib/offers.mjs");
-        const pick = pickWorker(ctx.config, JOB_OF_START_TOOL[name], fileKindOf(declared));
+        const pick = pickWorker(ctx.config, JOB_OF_START_TOOL[name], fileKindOf(declared), undefined, { chatModel: chatModelOf(ctx) });
         const rule = handoverRule(ctx, pick, 0);
         breakEvenChars = rule.breakEvenChars;
         contextTokens = lastTurnFacts(ctx.input.transcript_path).contextTokens ?? null;
@@ -1030,7 +1042,7 @@ const handlers = {
     emit({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        updatedInput: stampInput(ctx.input.tool_input, { sessionId: ctx.sid, promptId: ctx.input.prompt_id, arm: ctx.arm, mode: ctx.config.mode, agent: ctx.agent, breakEvenChars, contextTokens, cacheTier }),
+        updatedInput: stampInput(ctx.input.tool_input, { sessionId: ctx.sid, promptId: ctx.input.prompt_id, arm: ctx.arm, mode: ctx.config.mode, agent: ctx.agent, breakEvenChars, contextTokens, cacheTier, model: chatModel }),
       },
     });
   },
@@ -1330,7 +1342,7 @@ async function main() {
   const ctx = { input, sid, cwd, projectDir, config, sources, agent, subagent: Boolean(agent) };
   setEventAgent(agent);
   try {
-    ctx.arm = (readArm(sid) ?? drawArm(sid, num(config.control?.share, 0.5))).arm;
+    ctx.arm = (readArm(sid) ?? drawArm(sid, num(config.control?.share, 0))).arm;
     ctx.pipeline = hasSessionMarker(ctx, "pipeline");
     ctx.fullOutputTurn = hasSessionMarker(ctx, "full_output_turn");
     await handler(ctx);

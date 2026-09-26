@@ -75,7 +75,7 @@ test("every offer line is one factual line that names its tool by its full name,
 
 test("the stamp carries session and arm, keeps the original input, and cannot be forged from inside the chat", () => {
   const out = stampInput({ files: ["a.ts"], _mmo: { arm: "on", session_id: "forged" } }, { sessionId: "real", promptId: "p1", arm: "control", mode: "on" });
-  assert.deepEqual(out, { files: ["a.ts"], _mmo: { session_id: "real", prompt_id: "p1", arm: "control", mode: "on", agent: null, break_even_chars: null, context_tokens: null, cache_tier: null } });
+  assert.deepEqual(out, { files: ["a.ts"], _mmo: { session_id: "real", prompt_id: "p1", arm: "control", mode: "on", agent: null, break_even_chars: null, context_tokens: null, cache_tier: null, model: null } });
   assert.equal(ambientToolName("mcp__plugin_mmo_model-dispatch__fix_from_analysis"), "fix_from_analysis");
   assert.equal(ambientToolName("mcp__model-dispatch__job_result"), "job_result");
   assert.equal(ambientToolName("mcp__model-dispatch__execute_with_model"), null, "the typed pipeline's tools are not ambient tools");
@@ -103,6 +103,29 @@ test("a job kind whose cell is closed is never offered; bug-fix code on Go is cl
   assert.deepEqual([pickWorker(config, "bugfix_code", "go").worker, pickWorker(config, "bugfix_code", "python").worker], ["sonnet", "flash"]);
 });
 
+/**
+ * 26 Sep (option 3): the chat may be on any model, and a worker whose typing costs at least what the chat's own
+ * typing costs can never pay, whatever the evidence says about its quality. It is dropped before the pick, so a
+ * worker that does pay is still tried, and named in `never_pays`. Before this, a Sonnet 5 chat could hand a Go bug
+ * fix to the Sonnet worker ($2 in + $10 out per million against the chat's own $10 out) and pay more, not less.
+ */
+test("a worker that types at the chat's own price or more is never picked", () => {
+  const { config } = loadConfig({ env: { MMO_HOME: "/nonexistent" } });
+  const pick = (kind, chatModel) => pickWorker(config, "bugfix_code", kind, undefined, { chatModel });
+  // Opus 5 ($25 out): both workers cost less per character, so nothing changes.
+  assert.deepEqual([pick("go", "claude-opus-5").worker, pick("go", "claude-opus-5").never_pays], ["sonnet", []]);
+  // Sonnet 5 ($10 out): the Sonnet worker is dropped; Flash is closed on Go, so the chat keeps a Go bug fix...
+  assert.deepEqual([pick("go", "claude-sonnet-5").worker, pick("go", "claude-sonnet-5").never_pays], [null, ["sonnet"]]);
+  assert.ok(!pick("go", "claude-sonnet-5").considered.some((c) => c.worker === "sonnet"), "a worker that cannot pay is not weighed at all");
+  // ...and a Python one still goes to Flash ($0.75 + $3.75).
+  assert.equal(pick("python", "claude-sonnet-5").worker, "flash");
+  // Haiku 4.5 ($5 out): Flash still pays per character; Sonnet does not.
+  assert.deepEqual([pick("python", "claude-haiku-4-5").worker, pick("python", "claude-haiku-4-5").never_pays], ["flash", ["sonnet"]]);
+  // No chat model, or one with no price card: nothing is dropped, never a decision on another model's prices.
+  assert.deepEqual(pickWorker(config, "bugfix_code", "go").never_pays, []);
+  assert.deepEqual(pick("go", "claude-mystery-9").never_pays, []);
+});
+
 test("hook: the bug-fix line appears only after the session wrote a test file AND a test run failed", async () => {
   const s = sandbox();
   try {
@@ -123,8 +146,11 @@ test("hook: the plugin's own job tools get stamped; start tools are refused wher
   try {
     const call = (sid, tool, input = { files: ["a.ts"] }) => ({ session_id: sid, cwd: s.repo, prompt_id: "p9", tool_name: "mcp__plugin_mmo_model-dispatch__" + tool, tool_input: input });
     const ok = await run("pre-mmo-tool", call("s1", "fix_from_analysis", { files: ["a.ts"], _mmo: { arm: "on", session_id: "forged" } }), s);
-    const { break_even_chars, context_tokens, cache_tier, ...fixed } = ok.json.hookSpecificOutput.updatedInput._mmo;
+    const { break_even_chars, context_tokens, cache_tier, model, ...fixed } = ok.json.hookSpecificOutput.updatedInput._mmo;
     assert.ok(cache_tier === null || cache_tier === "5m" || cache_tier === "1h");
+    // The model the hook priced the chat at rides on the stamp, so the server's own gate prices the same model
+    // (26 Sep); with no transcript to read it from, that is the policy's thinker, as the hook assumed.
+    assert.equal(model, "claude-opus-5");
     assert.deepEqual({ ...ok.json.hookSpecificOutput.updatedInput, _mmo: fixed }, { files: ["a.ts"], _mmo: { session_id: "s1", prompt_id: "p9", arm: "on", mode: "on", agent: null } });
     assert.ok(break_even_chars === null || break_even_chars > 0, "the gate's numbers ride on the stamp; null only when the chat cannot be priced");
     assert.ok(context_tokens === null || context_tokens > 0);

@@ -2,8 +2,8 @@
  * The worker-job runner. One start call walks a fixed sequence, and every step
  * can end the job with a plain reason:
  *
- *   stamp -> session still on the thinker -> worker and cell for the job's
- *   language (value rule per worker + per-session draw)
+ *   stamp -> worker and cell for the job's language, among the workers that
+ *   can pay at the chat's own model (value rule per worker + per-session draw)
  *   -> 429 breaker -> consent -> one-job-per-repo lock -> snapshot -> brief
  *   -> egress manifest -> ONE worker call -> strict parse -> text-only checks
  *   -> staged change -> result (bounded diff + how to land it)
@@ -163,7 +163,10 @@ export async function startJob({ tool, args, stamp, projectDir, callWorker, reac
   // weighed on its own evidence for this language (see pickWorker), and only
   // workers the chat policy can really call are weighed at all.
   const fileKind = fileKindOf(built.declared);
-  const pick = pickWorker(config, job, fileKind, loadSeeds(), { reachable, env });
+  // The chat's own model, as the hook priced it (26 Sep, option 3: every decision is priced at the model the chat
+  // is on). A stamp from an older hook names none; the thinker's prices were the only ones then.
+  const chatModel = typeof stamp.model === "string" && stamp.model ? stamp.model : config.thinker;
+  const pick = pickWorker(config, job, fileKind, loadSeeds(), { reachable, env, chatModel });
 
   // THE GATE (build spec v1.2 row 5; corrected 23 Sep after pair 11). The cost rule decides here, at
   // the tool call, and nothing else forces a hand-over. Expected typing is the declared files times
@@ -181,7 +184,7 @@ export async function startJob({ tool, args, stamp, projectDir, callWorker, reac
   // The stamp carrying a break-even is how the hook says this chat can be judged at all; an
   // older hook sends none and nothing is gated, as before. Only then is it worth rebuilding.
   if (Number.isFinite(stampBreakEven) && stampBreakEven > 0 && specChars !== null && specChars > 0) {
-    const prices = pricesFor(config, config.thinker, env);
+    const prices = pricesFor(config, chatModel, env);
     const card = pick.model ? config.jobs?.worker_prices_usd_per_mtok?.[pick.model] : null;
     const rates = card ? { in: card.input / 1e6, out: card.output / 1e6 } : null;
     const C = Number(stamp.context_tokens) > 0 ? Number(stamp.context_tokens) : Number(config.cost?.unknown_context_tokens) || 100000;
@@ -201,7 +204,7 @@ export async function startJob({ tool, args, stamp, projectDir, callWorker, reac
     if (expected < breakEven) {
       const n = (x) => Math.round(x).toLocaleString("en-US");
       const agentOf = typeof stamp.agent === "string" && stamp.agent ? stamp.agent : undefined;
-      appendEvent(sid, "job.refused_gate", { agent: agentOf, tool, files: built.declared.length, expected_chars: expected, per_file_chars: Math.round(perFile), size_from: sizeFrom, break_even_chars: Math.round(breakEven), spec_chars: specChars ?? undefined, judged_on: judgedOn, context_tokens: stamp.context_tokens ?? undefined }, env);
+      appendEvent(sid, "job.refused_gate", { agent: agentOf, tool, worker: pick.worker ?? undefined, priced_at: chatModel, files: built.declared.length, expected_chars: expected, per_file_chars: Math.round(perFile), size_from: sizeFrom, break_even_chars: Math.round(breakEven), spec_chars: specChars ?? undefined, judged_on: judgedOn, context_tokens: stamp.context_tokens ?? undefined }, env);
       // Too small to pay: the thinker types these itself, and the hook must let it.
       for (const rel of built.declared) { try { releaseFile(sid, resolve(projectDir, rel), env); } catch { /* the refusal stands either way */ } }
       const why = judgedOn === "specs"
@@ -224,9 +227,11 @@ export async function startJob({ tool, args, stamp, projectDir, callWorker, reac
   appendEvent(sid, "job.eligible", {
     agent, tool, worker: pick.worker ?? undefined, file_kind: fileKind, cell: cell.cellKey, cell_state: cell.state, p_pays: cell.P, probability, delegate,
     files: built.declared.length, considered: pick.considered, unreachable: pick.unreachable.length ? pick.unreachable : undefined,
+    never_pays: pick.never_pays?.length ? pick.never_pays : undefined,
   }, env);
   if (!delegate) {
     const why = pick.worker !== null ? "this session keeps this kind of job with the thinker (drawn once per session); do it yourself"
+      : pick.never_pays?.length && !pick.considered.length ? `no worker can pay for typing in this chat: at ${chatModel}'s prices every worker's typing costs as much as yours (${pick.never_pays.map((w) => config.workers[w]).join(", ")}); do it yourself`
       : pick.unreachable.length ? `no worker that pays for this job can be called: the chat policy has no text-only model for ${pick.unreachable.map((w) => config.workers[w]).join(", ")}, and the others do not pay here; do it yourself`
       : "the evidence says this kind of job does not pay with a worker here; do it yourself";
     return refuse(why, { cell: cell.cellKey });

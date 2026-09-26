@@ -8,6 +8,10 @@
  *
  * MMO_AMBIENT_ARM=on|control forces an arm (a demo pair). A forced session is
  * marked `forced`, which keeps it out of any randomised estimate.
+ *
+ * A missing or unreadable share means 0 (since 26 Sep; it was 0.5): a control-arm
+ * chat gets no zero-touch at all, so the fallback must never switch the feature
+ * off for real users. Measuring is opt-in: a settings file sets control.share.
  */
 import { randomInt } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -30,7 +34,7 @@ export function readArm(sessionId, env = process.env) {
 export function drawArm(sessionId, controlShare, env = process.env, draw = () => randomInt(0, 1_000_000) / 1_000_000) {
   const existing = readArm(sessionId, env);
   if (existing) return existing;
-  const share = Number.isFinite(controlShare) ? Math.min(Math.max(controlShare, 0), 1) : 0.5;
+  const share = Number.isFinite(controlShare) ? Math.min(Math.max(controlShare, 0), 1) : 0;
   const forced = ARMS.includes(env.MMO_AMBIENT_ARM) ? env.MMO_AMBIENT_ARM : null;
   const rec = {
     arm: forced ?? (draw() < share ? "control" : "on"),

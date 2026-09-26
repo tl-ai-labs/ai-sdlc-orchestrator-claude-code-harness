@@ -20,6 +20,8 @@ const { parseWorkerAnswer } = await import(join(A, "lib", "answer-parse.mjs"));
 const { applyJob } = await import(join(A, "apply.mjs"));
 const { localSummary: localSummaryOf } = await import(join(A, "lib", "evidence.mjs"));
 const { acquireJobLock, releaseJobLock } = await import(join(A, "lib", "job-lock.mjs"));
+const { loadConfig } = await import(join(A, "lib", "config.mjs"));
+const { handoverNet, pricesFor } = await import(join(A, "lib", "cost-rule.mjs"));
 
 const SOURCE = "export function parse(s) {\n  return new Date(s);\n}\n";
 const ANALYSIS = {
@@ -933,6 +935,57 @@ test("the gate weighs the specs the thinker really wrote, not an assumed 400 cha
     assert.equal(small.status, "running", JSON.stringify(small));
     const gate = w.events().find((e) => e.type === "job.refused_gate");
     assert.ok(gate && gate.spec_chars > 25000 && gate.judged_on === "specs", "the refusal is on the record, judged on the real specs");
+  } finally { w.cleanup(); }
+});
+
+/**
+ * 26 Sep (option 3): every decision is priced at the model the chat is on. The specs gate rebuilt its break-even
+ * at the thinker's (Opus 5) prices whatever the chat was on, because the stamp never said which model that was.
+ */
+test("the specs gate prices the chat's own model, carried on the stamp", async () => {
+  const w = world();
+  try {
+    const bloated = Array.from({ length: 9 }, (_, i) => ({ path: `src/g${i}.ts`, exports: [`g${i}`], behaviour: "Per DESIGN. " + "detail ".repeat(430) }));
+    writeFileSync(join(w.repo, "DESIGN.md"), "# Design\n" + "a paragraph.\n".repeat(50));
+    const gateFor = async (model) => {
+      const stamp = { ...w.stamp, break_even_chars: 796, context_tokens: 40000, ...(model ? { model } : {}) };
+      const r = await startJob({ tool: "write_files_from_specs", stamp, projectDir: w.repo, env: w.env,
+        callWorker: async () => { throw new Error("a refused job must never reach the worker"); },
+        args: { design_file: "DESIGN.md", specs: bloated } });
+      assert.equal(r.gate, "break-even", JSON.stringify(r));
+      return w.events().filter((e) => e.type === "job.refused_gate").at(-1);
+    };
+    const { config } = loadConfig({ projectDir: w.repo, env: w.env });
+    const expected = (model, gate) => {
+      const card = config.jobs.worker_prices_usd_per_mtok[config.workers[gate.worker]];
+      return handoverNet({ chars: 0, C: 40000, prices: pricesFor(config, model, w.env), worker: { in: card.input / 1e6, out: card.output / 1e6 }, extraRequests: 0, specChars: gate.spec_chars, cpt: 4 }).breakEvenChars;
+    };
+    const opus = await gateFor("claude-opus-5");
+    const haiku = await gateFor("claude-haiku-4-5");
+    assert.equal(opus.priced_at, "claude-opus-5");
+    assert.equal(haiku.priced_at, "claude-haiku-4-5");
+    assert.equal(opus.break_even_chars, expected("claude-opus-5", opus));
+    assert.equal(haiku.break_even_chars, expected("claude-haiku-4-5", haiku), "priced at Haiku 4.5, not at the thinker");
+    assert.ok(haiku.break_even_chars > opus.break_even_chars, "specs are cheaper to write on Haiku, but its typing saves far less");
+    // A stamp from before 26 Sep names no model: the thinker's prices, as then.
+    assert.equal((await gateFor(null)).priced_at, "claude-opus-5");
+  } finally { w.cleanup(); }
+});
+
+test("no worker is sent a job that cannot pay at the chat's own prices", async () => {
+  const w = world();
+  try {
+    // Both workers priced at or above a Sonnet 5 chat's own $10 per million output: no hand-over can ever pay.
+    writeFileSync(join(w.home, "ambient.json"), JSON.stringify({ mode: "on", jobs: { block_ms: 0, landing: "manual",
+      worker_prices_usd_per_mtok: { "gemini-3.8-flash": { input: 3, output: 8 }, "claude-sonnet-5": { input: 2, output: 10 } } } }));
+    const r = await w.start({ stamp: { ...w.stamp, model: "claude-sonnet-5" }, callWorker: async () => { throw new Error("never called"); } });
+    assert.equal(r.status, "refused", JSON.stringify(r));
+    assert.match(r.reason, /claude-sonnet-5/, "the refusal names the model it priced");
+    assert.match(r.reason, /do it yourself/);
+    const eligible = w.events().find((e) => e.type === "job.eligible");
+    assert.deepEqual(eligible.never_pays, ["flash", "sonnet"], "the record says why no worker was weighed");
+    // The same job on an Opus 5 chat is sent as before.
+    assert.equal((await w.start({ stamp: { ...w.stamp, model: "claude-opus-5" } })).status, "running");
   } finally { w.cleanup(); }
 });
 

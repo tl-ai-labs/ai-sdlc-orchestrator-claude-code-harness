@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { createExclusive, ensureSessionDir, sessionDir, ensureDir } from "./paths.mjs";
 import { evaluateCell, seedSavingUsd } from "./value-rule.mjs";
 import { localFor } from "./evidence.mjs";
+import { pricesFor } from "./cost-rule.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SEEDS_FILE = resolve(HERE, "..", "..", "..", "config", "ambient-seeds.json");
@@ -74,11 +75,26 @@ const STATE_RANK = { open: 2, explore: 1, closed: 0 };
  * has no text-only model for; they are listed in `unreachable` so a refusal
  * can name them. With no open or explored cell, `worker` is null and the
  * thinker keeps the job.
+ *
+ * `chatModel` (a typing job's pick, 26 Sep, option 3): the chat may be on any
+ * model, so a worker whose typing costs at least what the chat's own typing
+ * costs (its input plus output price per million, against the chat model's
+ * output price) can never pay, whatever the evidence says about its quality.
+ * Such a worker is dropped before the pick, so a worker that does pay is still
+ * tried, and listed in `never_pays`. On Opus 5, 5.5 and Fable both workers
+ * pay; on Sonnet 5 and Haiku 4.5 the Sonnet worker does not. A chat model with
+ * no price card drops nothing: never a decision on another model's prices.
+ * The scout is not a typing job and passes no `chatModel`.
  */
-export function pickWorker(config, job, fileKind, seeds = loadSeeds(), { reachable, env = process.env } = {}) {
+export function pickWorker(config, job, fileKind, seeds = loadSeeds(), { reachable, env = process.env, chatModel = null } = {}) {
   const lineup = WORKER_KEYS.filter((w) => typeof config.workers?.[w] === "string" && config.workers[w].length > 0);
   const unreachable = reachable ? lineup.filter((w) => !reachable(config.workers[w])) : [];
-  const considered = lineup.filter((w) => !unreachable.includes(w)).map((w) => ({ worker: w, model: config.workers[w], ...cellFor(config, job, fileKind, seeds, w, env) }));
+  const chat = chatModel ? pricesFor(config, chatModel, env) : null;
+  const neverPays = chat ? lineup.filter((w) => {
+    const card = config.jobs?.worker_prices_usd_per_mtok?.[config.workers[w]];
+    return Boolean(card) && chat.out - card.input / 1e6 - card.output / 1e6 <= 0;
+  }) : [];
+  const considered = lineup.filter((w) => !unreachable.includes(w) && !neverPays.includes(w)).map((w) => ({ worker: w, model: config.workers[w], ...cellFor(config, job, fileKind, seeds, w, env) }));
   const preferred = config.workers?.default;
   const ranked = considered.filter((c) => c.state !== "closed").sort((a, b) =>
     STATE_RANK[b.state] - STATE_RANK[a.state] ||
@@ -86,10 +102,10 @@ export function pickWorker(config, job, fileKind, seeds = loadSeeds(), { reachab
     (a.worker === preferred ? -1 : b.worker === preferred ? 1 : 0));
   const summary = considered.map((c) => ({ worker: c.worker, state: c.state, p_pays: c.P, expected_net_usd: c.expected_net_usd }));
   const best = ranked[0];
-  if (best) return { worker: best.worker, model: best.model, cell: best, considered: summary, unreachable };
+  if (best) return { worker: best.worker, model: best.model, cell: best, considered: summary, unreachable, never_pays: neverPays };
   // Nobody pays: report the default worker's cell (or the first weighed) as the closed one.
   const shown = considered.find((c) => c.worker === preferred) ?? considered[0] ?? { cellKey: `${job}|${fileKind}|none|completion`, P: 0, expected_net_usd: 0, saving_basis: "no-worker" };
-  return { worker: null, model: null, cell: { ...shown, state: "closed" }, considered: summary, unreachable };
+  return { worker: null, model: null, cell: { ...shown, state: "closed" }, considered: summary, unreachable, never_pays: neverPays };
 }
 
 /** Returns { shown, propensity, first } — `first` is false when this session already drew for this kind. */

@@ -1,6 +1,6 @@
 /**
  * Zero-touch routing, hand-off half: what the hooks say to Opus and how a
- * route is kept, started, offered and ended (docs/ambient-mode.md, "Routing").
+ * route is kept, started and ended (docs/ambient-mode.md, "Routing").
  *
  * Plain words only: the person never sees the plugin, a command or a model
  * name in anything zero-touch says (25 Sep 2026). Opus is told the

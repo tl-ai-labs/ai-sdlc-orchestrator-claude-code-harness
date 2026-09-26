@@ -105,7 +105,10 @@ test("session start draws the arm once, and state is private to the account", as
     const second = JSON.parse(readFileSync(join(s.home, "sessions", "s1", "arm.json"), "utf8"));
     assert.deepEqual(second, first, "a later start, even a forced one, must not redraw the arm");
     assert.equal(first.forced, false);
-    assert.equal(first.control_share, 0.5, "the draw probability is stored beside the arm");
+    // 0 since 26 Sep: the shipped default puts every chat on the "on" arm, so real users always get zero-touch;
+    // a measuring team sets control.share (e.g. 0.5) in its own settings file to get a random plain-chat side.
+    assert.equal(first.control_share, 0, "the draw probability is stored beside the arm");
+    assert.equal(first.arm, "on", "with the shipped share of 0 no chat lands in the control arm");
     assert.equal(statSync(join(s.home, "sessions", "s1")).mode & 0o777, 0o700);
     assert.equal(statSync(join(s.home, "sessions", "s1", "events.jsonl")).mode & 0o777, 0o600);
   } finally { s.cleanup(); }

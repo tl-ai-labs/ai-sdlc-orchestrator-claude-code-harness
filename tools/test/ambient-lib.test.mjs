@@ -41,7 +41,26 @@ test("the shipped default is mode off, names the fixed lineup and leaves the mod
     // Off since 26 Sep (option 3): the lock existed to keep the chat on the thinker so the savings rules could act;
     // they now act on whatever model the person picks, priced at that model, so nothing needs the lock by default.
     assert.equal(config.lock_model, false);
+    // 0 since 26 Sep: a control-arm chat gets no zero-touch at all, so a non-zero default would silently switch the
+    // feature off for that share of real users. Measuring is opt-in: a settings file sets control.share itself.
+    assert.equal(config.control.share, 0);
     assert.deepEqual(sources, ["defaults"]);
+  } finally { t.cleanup(); }
+});
+
+test("a missing control share means no control arm; a set share still draws, clamped to 0..1", async () => {
+  const { drawArm } = await import(join(LIB, "arm.mjs"));
+  const t = tmp();
+  try {
+    const env = { MMO_HOME: t.dir };
+    // No share at all (a settings file without "control"): every chat is "on", the same as the shipped 0.
+    const none = drawArm("s-none", undefined, env, () => 0);
+    assert.equal(none.arm, "on");
+    assert.equal(none.control_share, 0);
+    // A measuring team's share still draws: a roll under the share lands in control, over it stays on.
+    assert.equal(drawArm("s-half-low", 0.5, env, () => 0.2).arm, "control");
+    assert.equal(drawArm("s-half-high", 0.5, env, () => 0.7).arm, "on");
+    assert.equal(drawArm("s-over", 7, env, () => 0.99).control_share, 1);
   } finally { t.cleanup(); }
 });
 

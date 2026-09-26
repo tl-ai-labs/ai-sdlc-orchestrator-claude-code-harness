@@ -30,7 +30,7 @@ export function isStartTool(name) {
  * gate refuses a job whose expected typing is below the break-even. Null when
  * the hook could not price the chat; the server then does not gate.
  */
-export function stampInput(toolInput, { sessionId, promptId, arm, mode, agent = null, breakEvenChars = null, contextTokens = null, cacheTier = null }) {
+export function stampInput(toolInput, { sessionId, promptId, arm, mode, agent = null, breakEvenChars = null, contextTokens = null, cacheTier = null, model = null }) {
   const base = toolInput && typeof toolInput === "object" && !Array.isArray(toolInput) ? { ...toolInput } : {};
   base._mmo = {
     session_id: sessionId, prompt_id: promptId ?? null, arm, mode, agent: typeof agent === "string" && agent ? agent : null,
@@ -38,6 +38,9 @@ export function stampInput(toolInput, { sessionId, promptId, arm, mode, agent = 
     context_tokens: Number.isFinite(contextTokens) && contextTokens > 0 ? Math.round(contextTokens) : null,
     // The chat's prompt-cache lifetime ("5m" or "1h"): the server never lets a waiting call outlive it.
     cache_tier: cacheTier === "5m" || cacheTier === "1h" ? cacheTier : null,
+    // The model the hook priced this chat at (26 Sep, option 3: the chat may be on any model). The server prices
+    // its own gate and picks its worker at the same model, so the two can never judge the chat on different rates.
+    model: typeof model === "string" && model ? model : null,
   };
   return base;
 }
