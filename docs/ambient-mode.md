@@ -242,6 +242,7 @@ Fixed patterns, no model. Two signals must agree.
 - **A project job** must also name something in the software: a path or file, a code identifier, an HTTP status, an error type, or a word of the trade (bug, test, endpoint, module, …). This is a positive requirement, never a list of exceptions.
 - **A new app:** the app word must head what is built. "A haiku about a bot" is a poem: no preposition may sit between the article and the app word.
 - **A pasted brief** counts only in `/mmo:greenfield`'s own layout (`# Project Brief`), and not when it ends with a question.
+- **Clauses:** a message is cut at "and", "then" or ";" only where a new instruction follows (a verb such as run, add, fix, or one of the eight jobs). Any other part after "and" is still part of what the first clause names (since 26 Sep 2026): "write unit tests for the discount and tax functions in src/cart.js" is one test job about `src/cart.js`. Before that date every "and" cut the message, and such a request was never routed. The "it / this", small-edit and negation checks still read only what comes before the "and", so "fix it and the tests" stays a follow-up. A word that can be a verb or a noun counts as a verb, so an unsure part is cut, and the worst case stays a missed route.
 - **Two jobs** route anyway, because each is part of its own job: a bugfix plus its regression test, and an upgrade plus fixing what the upgrade broke.
 - **Never routed:**
   - questions (a `?` without "can you");
@@ -269,6 +270,8 @@ Then every chat on that machine was replayed through the real hooks, routing on,
 - 0 hook failures. About 55 ms per hook call (95th percentile 76 ms).
 
 The messages stay on that machine.
+
+After the clause change (26 Sep 2026), every distinct message typed on that machine (7,072) was routed by the old and the new rules at $0: exactly one answer changed, a real new-app brief ("Build an inventory and order management REST API in TypeScript with Express: …") that now routes to greenfield; before, the "and" cut it to "Build an inventory", which names no app. No other message moved.
 
 ### The hand-off (`hook.mjs`, `lib/route-flow.mjs`)
 

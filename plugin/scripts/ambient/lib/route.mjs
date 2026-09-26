@@ -77,6 +77,23 @@ const FOLLOW_UP = /^also\b|\bas well\b|\b(?:too|again)$/;
  */
 const SMALL_EDIT = /\b(typos?|spelling|grammar|formatting|indentation|whitespace|lint(?:ing)?|linter|prettier|eslint|import order|comments?|commit messages?)\b/;
 
+/**
+ * Where a message may be cut into clauses: "and", "and then", "then", a comma before those, a semicolon. Kept
+ * as a capture so a part that is not cut off can be joined back exactly as written.
+ */
+const CLAUSE_SEPARATOR = /(\s*(?:,\s*and then|,\s*then|,\s*and|;|\s+and then|\s+then|\s+and)\s+)/;
+
+/**
+ * A part after a separator that opens with one of these verbs is a new instruction, a clause of its own ("fix
+ * the parser and run the tests"). Any other part continues what the clause before it names ("tests for the
+ * discount and tax functions in src/cart.js"; 26 Sep: until then every " and " cut the message, so "… for the
+ * discount" named nothing and a plain test request was never routed). A part that opens one of the eight jobs
+ * is always a clause of its own as well, whatever this list says, so no second job can hide inside an object.
+ * A word that can be a verb or a noun ("test", "change", "return") is treated as a verb: an unsure part is cut,
+ * which is the behaviour before 26 Sep, so the worst case stays a missed route, never a wrong one.
+ */
+const INSTRUCTION = /^(?:(?:also|please|just|then|now)\s+)*(?:add|write|create|build|make|fix|update|upgrade|bump|refactor|document|implement|support|extend|generate|develop|scaffold|bootstrap|introduce|extract|migrate|convert|integrate|debug|diagnose|troubleshoot|investigate|resolve|repair|reproduce|run|rerun|re-run|test|check|verify|ensure|confirm|remove|delete|drop|rename|move|replace|change|split|combine|improve|increase|reduce|optimi[sz]e|clean|deploy|push|commit|merge|rebase|install|uninstall|enable|disable|turn|switch|use|keep|set|wire|hook|connect|expose|handle|return|print|call|explain|describe|summari[sz]e|compare|show|tell|list|review|find|revert|undo|open|close|send|start|stop|restart|give|put|get|let|try|do|go|see|look|read)\b/;
+
 /** An object that starts by negating itself ("fix nothing yet, just explain") asks for no job. */
 const NEGATED_OBJECT = /^(?:nothing|none|no|not|never)\b/;
 
@@ -178,14 +195,21 @@ function stripOpeners(s) {
   return s;
 }
 
-function realObject(object, { software }) {
-  const raw = (object ?? "").trim().toLowerCase();
+/**
+ * Whether an object is a real subject for a job. `own` is the part the first clause names by itself, before any
+ * "and …" joined to it; `whole` includes what was joined (26 Sep). A negation, a pointer at pasted text, or a
+ * subject made only of "it / this / that" is judged on `own`, so joining "and the tests" to "fix it" never
+ * turns a follow-up into a job. Naming the software is judged on `whole`: "the discount and tax functions in
+ * src/cart.js" names a file even though "the discount" alone does not.
+ */
+function realObject(own, whole, { software }) {
+  const raw = (own ?? "").trim().toLowerCase();
   if (NEGATED_OBJECT.test(raw)) return { ok: false, why: "the request negates itself" };
   if (PASTED.test(raw)) return { ok: false, why: "about text in the message (below / above), not the project" };
   const text = raw.replace(/[`'"(),.!?;:]/g, " ");
   const words = text.split(/\s+/).filter(Boolean);
   if (!words.some((w) => !DEICTIC.has(w))) return { ok: false, why: "no subject of its own (it / this / that): a follow-up, not a new job" };
-  if (software && !SOFTWARE.test(raw)) return { ok: false, why: "names nothing in the software (no file, path, error, test, module …)" };
+  if (software && !SOFTWARE.test((whole ?? "").trim().toLowerCase())) return { ok: false, why: "names nothing in the software (no file, path, error, test, module …)" };
   return { ok: true };
 }
 
@@ -194,25 +218,45 @@ function objectHead(object) {
   return String(object ?? "").trim().split(/:|\s(?:for|about|on|of|to|in|into|with|from|by|at|where|that|which|who|when|while|so|because|after|before|since|until)\s/)[0];
 }
 
-/** Every job one clause could be asking for, in JOBS order (one entry per job, its first matching pattern). */
-function clauseJobs(clause) {
+/** Each job pattern with match indices on, so the object's start is known exactly (see clauseJobs). */
+const INDEXED = new Map();
+function indexed(re) {
+  let r = INDEXED.get(re);
+  if (!r) { r = new RegExp(re.source, re.flags.replace("d", "") + "d"); INDEXED.set(re, r); }
+  return r;
+}
+
+/** A colon hands over the subject ("fix this bug: TypeError …"): what follows it is part of the object. */
+function subjectOf(object, text) {
+  const colon = text.indexOf(":");
+  return colon >= 0 ? `${object.slice(0, Math.max(0, object.indexOf(":")))} ${text.slice(colon + 1)}` : object;
+}
+
+/**
+ * Every job one clause could be asking for, in JOBS order (one entry per job, its first matching pattern).
+ * `first` is the clause's first part as written before any "and …" was joined to it (26 Sep); the part of the
+ * object inside it is what the clause names by itself, and the small-edit, follow-up and negation checks read
+ * only that. With nothing joined, `first` is the clause and both views are the same.
+ */
+function clauseJobs(clause, first = clause) {
   const found = [];
   for (const spec of JOBS) {
     for (const re of spec.re) {
-      const m = re.exec(clause);
+      const m = indexed(re).exec(clause);
       if (!m) continue;
       if (clause.split(/\s+/).slice(1, 3).some((w) => AUX.has(w))) break; // the verb is a noun here
       const object = m.groups?.object ?? "";
-      // A colon hands over the subject ("fix this bug: TypeError …"): what follows it is part of the object.
-      const colon = clause.indexOf(":");
-      const subject = colon >= 0 ? `${object.slice(0, Math.max(0, object.indexOf(":")))} ${clause.slice(colon + 1)}` : object;
+      const start = m.indices?.groups?.object?.[0] ?? clause.length;
+      const own = object.slice(0, Math.max(0, first.length - start));
+      const subject = subjectOf(object, clause);
+      const ownSubject = subjectOf(own, first);
       // A new app and a dependency upgrade carry their subject in the pattern itself (the app noun, the version):
       // what follows is context, and for a new app a brief below IS the input. Project jobs check their object.
       const check = spec.objectOptional
         ? { ok: true }
-        : SMALL_EDIT.test(objectHead(object))
+        : SMALL_EDIT.test(objectHead(own))
           ? { ok: false, why: "a small edit (typo, spelling, formatting, lint, a commit message), not a pipeline job" }
-          : realObject(subject || object, { software: spec.software === true });
+          : realObject(ownSubject || own, subject || object, { software: spec.software === true });
       found.push({ job: spec.job, check });
       break;
     }
@@ -256,8 +300,18 @@ export function routeMessage(message, folder) {
   if (sentence?.[2] === "?" && !POLITE.test(lower)) return { job: null, reason: "a question: it ends with a question mark and is not a can-you request" };
   if (FOLLOW_UP.test(lead)) return { job: null, reason: "a follow-up to earlier work (also / as well / too / again), not a new job" };
 
-  const clauses = lead.split(/\s*(?:,\s*and then|,\s*then|,\s*and|;|\s+and then|\s+then|\s+and)\s+/).filter(Boolean);
-  const found = clauseJobs(clauses[0]);
+  // Clauses: a part after "and" / "then" / ";" starts a new clause only when it opens an instruction (a verb, or
+  // one of the eight jobs); any other part is joined back to the clause before it, exactly as written (26 Sep).
+  const parts = lead.split(CLAUSE_SEPARATOR);
+  const clauses = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const part = parts[i];
+    if (!part) continue;
+    if (!clauses.length || INSTRUCTION.test(part) || clauseJobs(part).length) clauses.push({ text: part, first: part });
+    else clauses[clauses.length - 1].text += parts[i - 1] + part;
+  }
+  if (!clauses.length) return { job: null, reason: "no instruction" };
+  const found = clauseJobs(clauses[0].text, clauses[0].first);
   if (!found.length) return { job: null, reason: "no job verb opens the message" };
   const first = pickJob(found, folder);
   if (!first) {
@@ -266,8 +320,8 @@ export function routeMessage(message, folder) {
       : { job: null, reason: "words of a new build in an existing project: not sure which job" };
   }
   if (!first.check.ok) return { job: null, reason: first.check.why };
-  for (const clause of clauses.slice(1)) {
-    const other = pickJob(clauseJobs(clause), folder);
+  for (const { text: clause, first: part } of clauses.slice(1)) {
+    const other = pickJob(clauseJobs(clause, part), folder);
     if (!other || other.job === first.job) continue;
     if (COMPANIONS[first.job]?.test(clause)) continue;
     return { job: null, reason: `two jobs in one message (${first.job} and ${other.job})` };

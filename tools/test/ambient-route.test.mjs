@@ -69,6 +69,15 @@ const ROUTED = [
   ["Build a multi-tenant helpdesk API in TypeScript with Fastify: organisations, tickets, ticket comments and tags", NEW, "greenfield"],
   ["fix the bug where comments are not saved", EXISTING, "bugfix"],
   ["fix 3 failing tests in the parser", EXISTING, "bugfix"],
+  // "and" inside the thing named (26 Sep): a part after "and" that opens no new instruction is still the object.
+  // Until 26 Sep every " and " cut the message, so the first part ("… for the discount") named nothing and these
+  // four were never routed.
+  ["write unit tests for the discount and tax functions in src/cart.js", EXISTING, "test"],
+  ["add unit tests for applyDiscount and addTax in src/cart.js", EXISTING, "test"],
+  ["fix the rounding and overflow bugs in src/money.js", EXISTING, "bugfix"],
+  ["add caching and rate limiting to the users endpoint", EXISTING, "feature-extend"],
+  // "and" starting a clause that is not an instruction keeps the fix whole (the zero-touch demo's bug-fix message).
+  ["fix the bug where parseDate accepts 2026-02-30 and returns 2 March instead of refusing it", EXISTING, "bugfix"],
 ];
 
 const NOT_ROUTED = [
@@ -145,6 +154,13 @@ const NOT_ROUTED = [
   ["thanks mate", NEW, "chat"],
   ["/mmo:greenfield", NEW, "a typed command is handled by Claude Code itself"],
   ["", NEW, "empty"],
+  // "and" (26 Sep): what the first part names is still judged on its own, so joining the rest never turns a
+  // follow-up or a small edit into a job, and a new instruction after "and" is still a clause of its own.
+  ["fix it and the tests", EXISTING, "a follow-up: its own subject is 'it'"],
+  ["add it and the rest to the users endpoint", EXISTING, "a follow-up: its own subject is 'it'"],
+  ["fix the typo and the broken link in src/app.js", EXISTING, "a small edit named first"],
+  ["fix the header and run the tests", EXISTING, "the fix names nothing; running the tests is an instruction of its own"],
+  ["write unit tests for the discount and refactor src/cart.js", EXISTING, "the tests name nothing; the refactor is a second job"],
 ];
 
 test("every job the router can name is a /mmo: command that exists", () => {
