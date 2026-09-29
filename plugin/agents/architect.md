@@ -142,7 +142,14 @@ Opus output (which both reviewers then re-read) cost more than the cheaper worke
 - **Unit budget:** a new file ≈ 15–20 lines, an edit ≈ 10 lines plus one line per site; tests list
   case names, not their assertions. Behavior rules cover what the worker cannot see in the mirror,
   not every edge case you considered.
-- `plan-lint.mjs` prints a `long_plan` note past 500 non-blank lines; aim for ≈ 400.
+- `plan-lint.mjs` prints a `long_plan` note past 500 non-blank lines; aim for ≈ 400 **in the one
+  Write**. The note is informational and never fails the plan: **do not Edit the plan afterwards
+  only to shorten it.** Every Edit turn re-reads your whole context (≈ 150k tokens by then), so a
+  trimming pass costs more than the lines it saves — Large2-A spent 34 turns / $3.86 cutting a
+  plan by ≈ 15 %, Large-A and Large-B $1.2–1.4 each. Edit after the Write only to fix an error.
+- **Verify on an edited file: write the plain command** (`pnpm exec biome check <path>`). Do not
+  probe the formatter at baseline or add line-ending flags — `plan-to-packets.mjs` adds
+  `--line-ending=crlf` itself when the target file has CRLF endings.
 
 **Edit sites: one form only** — the sub-bullets of `- **Edit anchor**` shown above. No `### Edits`
 heading, no `**L59**` / `L59` labels. Put any explanation on the site's own line after `→`, never on a

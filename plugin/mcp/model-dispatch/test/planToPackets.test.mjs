@@ -11,7 +11,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const { parsePlan, parseRef, parseAnchors, editSites, splitVerify, formatCommands, classify, moduleOf, buildPackets, main } = await import(
+const { parsePlan, parseRef, parseAnchors, editSites, splitVerify, formatCommands, crlfAware, classify, moduleOf, buildPackets, main } = await import(
   join(HERE, "..", "..", "..", "scripts", "plan-to-packets.mjs")
 );
 
@@ -435,5 +435,28 @@ test("buildPackets: a File bullet soft-wrapped before **Depends on** keeps its d
   assert.deepEqual(packets[2].depends_on, []);
   assert.ok(warnings.some((w) => /A3: no `\*\*Depends on\*\*` found/.test(w)), warnings.join("\n"));
   assert.ok(!warnings.some((w) => /A[12]: no `\*\*Depends on/.test(w)), warnings.join("\n"));
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("crlfAware adds --line-ending=crlf to biome check/format only; buildPackets applies it to CRLF edit targets (Large-A / Large2-A)", () => {
+  assert.deepEqual(crlfAware(["pnpm exec biome check a.ts", "pnpm exec biome format a.ts", "pnpm exec biome check --line-ending=lf a.ts", "pnpm --filter x exec vitest run a.test.ts"]), [
+    "pnpm exec biome check --line-ending=crlf a.ts",
+    "pnpm exec biome format --line-ending=crlf a.ts",
+    "pnpm exec biome check --line-ending=lf a.ts",
+    "pnpm --filter x exec vitest run a.test.ts",
+  ]);
+  assert.deepEqual(formatCommands(crlfAware(["pnpm exec biome check a.ts"])), ["pnpm exec biome check --write --line-ending=crlf a.ts"]);
+
+  const root = repo();
+  const idx = join(root, "apps/api/src/index.ts");
+  const lf = parsePlan(PLAN);
+  const before = buildPackets(lf, { runId: "r1", intent: "feature-extend", planPath: ".sdlc/runs/r1/change_plan.md", projectRoot: root });
+  assert.deepEqual(before.packets[1].apply.verify, ["pnpm exec biome check apps/api/src/index.ts"], "an LF file keeps the plain command");
+  writeFileSync(idx, readFileSync(idx, "utf8").replace(/\r?\n/g, "\r\n"));
+  const { packets, warnings } = buildPackets(parsePlan(PLAN), { runId: "r1", intent: "feature-extend", planPath: ".sdlc/runs/r1/change_plan.md", projectRoot: root });
+  assert.deepEqual(packets[1].apply.verify, ["pnpm exec biome check --line-ending=crlf apps/api/src/index.ts"]);
+  assert.deepEqual(packets[1].apply.format, ["pnpm exec biome check --write --line-ending=crlf apps/api/src/index.ts"]);
+  assert.deepEqual(packets[0].apply.verify, ["pnpm exec biome check {path}"], "a new file is untouched");
+  assert.ok(!warnings.some((w) => /CRLF/.test(w)), "not a warning: nothing for the orchestrator to touch");
   rmSync(root, { recursive: true, force: true });
 });

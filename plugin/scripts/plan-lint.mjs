@@ -122,7 +122,7 @@ export function lintPlan(text, opts = {}) {
   }
   const planLines = lines.filter((l) => l.trim()).length;
   if (planLines > PLAN_LINE_BUDGET) {
-    notes.push({ line: 0, section: "(whole plan)", kind: "long_plan", detail: `${planLines} non-blank lines (brief form ≈ ${PLAN_LINE_BUDGET}); largest sections: ${[...sectionLines].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([s, c]) => `${s} (${c})`).join(", ")}` });
+    notes.push({ line: 0, section: "(whole plan)", kind: "long_plan", detail: `${planLines} non-blank lines (brief form ≈ ${PLAN_LINE_BUDGET}; informational — do not trim a written plan); largest sections: ${[...sectionLines].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([s, c]) => `${s} (${c})`).join(", ")}` });
   }
   return { ok: violations.length === 0, violations, notes, stats: { fencedBlocks, fencedLines, sections, planLines } };
 }

@@ -339,6 +339,16 @@ export function formatCommands(verifyCmds) {
   return out;
 }
 
+/**
+ * Biome checks line endings, so on a checkout where the file being edited has CRLF endings
+ * (autocrlf on Windows/WSL) `biome check <file>` fails before any edit is made. Large-A had
+ * 11 of 26 packets hand-fixed for this; Large2-A's architect spent 21 turns (≈ $2) finding it.
+ * Derive it here instead: no model turn needed.
+ */
+export function crlfAware(cmds) {
+  return cmds.map((c) => (/\bbiome\s+(check|format)\b/.test(c) && !/--line-ending\b/.test(c) ? c.replace(/\bbiome\s+(check|format)\b/, "biome $1 --line-ending=crlf") : c));
+}
+
 /** Edit lists longer than this are split into chunk packets: Flash's output cap is spent on reasoning first. */
 export const MAX_ANCHORS_PER_PACKET = 5;
 
@@ -504,7 +514,13 @@ export function buildPackets(plan, opts) {
     const verify = bullet(u.body, "Verify");
     const spans = verify ? backticked([verify.head, ...verify.rest].join(" ")) : [];
     const cmds = spans.filter(isCommand);
-    const { scoped, deferred } = splitVerify(cmds, path);
+    const split = splitVerify(cmds, path);
+    const { deferred } = split;
+    let { scoped } = split;
+    if (action === "edit" && projectRoot && lineCount(path) > 0 && readFileSync(resolve(projectRoot, path), "utf8").includes("\r\n")) {
+      // Not a warning: the orchestrator touches packets a warning names, and this one needs nothing.
+      scoped = crlfAware(scoped);
+    }
     const format = formatCommands(scoped);
     if (scoped.length === 0) warnings.push(`${u.id}: no file-scoped Verify command; the server cannot check the worker's output${deferred.length ? " (package-wide commands are deferred)" : ""}`);
 
