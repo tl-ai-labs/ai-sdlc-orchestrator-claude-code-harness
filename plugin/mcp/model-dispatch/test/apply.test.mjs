@@ -23,6 +23,7 @@ const {
   runVerify,
   refinePacket,
   normalizeApply,
+  deriveFormat,
   extractFileContent,
   provenanceScriptPath,
   runApplyLoop,
@@ -422,4 +423,12 @@ test("applyContent runs format commands before provenance, and the receipt descr
   const touched = prov.files_touched.find((f) => f.path === "src/f.ts");
   assert.ok(touched.sha_after.endsWith(createHash("sha256").update("export const a = 1;\n").digest("hex")), "provenance hashes the formatted file");
   rmSync(root, { recursive: true, force: true });
+});
+
+test("normalizeApply derives format from verify when a hand-written packet omits it (Large2-C debug packets)", () => {
+  assert.deepEqual(normalizeApply({ write: true, verify: ["pnpm exec biome check {path}", "pnpm test"] }).format, ["pnpm exec biome check --write {path}"]);
+  assert.deepEqual(normalizeApply({ write: true, verify: ["pnpm exec biome check a.ts"], format: ["x --fix a.ts"] }).format, ["x --fix a.ts"], "an explicit format wins");
+  assert.equal(normalizeApply({ write: true, verify: ["pnpm test"] }).format, undefined);
+  assert.deepEqual(deriveFormat(["npx prettier --check a.ts"]), ["npx prettier --write a.ts"]);
+  assert.equal(deriveFormat(["pnpm exec biome check --write a.ts"]), undefined);
 });

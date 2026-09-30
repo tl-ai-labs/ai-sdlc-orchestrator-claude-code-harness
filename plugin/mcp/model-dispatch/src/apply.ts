@@ -359,12 +359,25 @@ export function refinePacket(packet: TaskPacket, failure: string): TaskPacket {
   };
 }
 
+/** The write form of each verify formatter check (same rule as plan-to-packets' formatCommands). */
+export function deriveFormat(verify: string[] | undefined): string[] | undefined {
+  const out: string[] = [];
+  for (const c of verify ?? []) {
+    if (/\bbiome\s+(check|format)\b/.test(c) && !/--write\b/.test(c)) out.push(c.replace(/\bbiome\s+(check|format)\b/, "biome $1 --write"));
+    else if (/\bprettier\b.*--check\b/.test(c)) out.push(c.replace(/--check\b/, "--write"));
+  }
+  return out.length ? out : undefined;
+}
+
 export function normalizeApply(spec: unknown): ApplySpec | null {
   if (!spec || typeof spec !== "object") return null;
   const s = spec as Record<string, unknown>;
   if (s.write !== true) return null;
   const verify = Array.isArray(s.verify) ? s.verify.filter((v): v is string => typeof v === "string") : undefined;
-  const format = Array.isArray(s.format) ? s.format.filter((v): v is string => typeof v === "string") : undefined;
+  const given = Array.isArray(s.format) ? s.format.filter((v): v is string => typeof v === "string") : undefined;
+  // Packets from plan-to-packets carry `format`; hand-written debug / refinement packets often
+  // omit it, and on Large2-C two of them escalated to Opus over Biome spacing the formatter fixes.
+  const format = given && given.length ? given : deriveFormat(verify);
   return {
     write: true,
     mode: s.mode === "edits" ? "edits" : "content",

@@ -349,6 +349,17 @@ export function crlfAware(cmds) {
   return cmds.map((c) => (/\bbiome\s+(check|format)\b/.test(c) && !/--line-ending\b/.test(c) ? c.replace(/\bbiome\s+(check|format)\b/, "biome $1 --line-ending=crlf") : c));
 }
 
+/**
+ * Biome does not process Markdown / MDX / YAML, so `biome check x.mdx` exits 1 on any content
+ * ("no files were processed"). Large2-C spent 6 worker attempts and 2 hand-written refinement
+ * packets on two docs pages whose only failure was that check. Drop it; other Verify commands stay.
+ */
+export const BIOME_UNSUPPORTED = /\.(mdx?|ya?ml)$/i;
+export function dropUnsupportedBiome(cmds, path) {
+  if (!BIOME_UNSUPPORTED.test(path)) return cmds;
+  return cmds.filter((c) => !/\bbiome\s+(check|format|lint)\b/.test(c));
+}
+
 /** Edit lists longer than this are split into chunk packets: Flash's output cap is spent on reasoning first. */
 export const MAX_ANCHORS_PER_PACKET = 5;
 
@@ -517,12 +528,13 @@ export function buildPackets(plan, opts) {
     const split = splitVerify(cmds, path);
     const { deferred } = split;
     let { scoped } = split;
+    scoped = dropUnsupportedBiome(scoped, path);
     if (action === "edit" && projectRoot && lineCount(path) > 0 && readFileSync(resolve(projectRoot, path), "utf8").includes("\r\n")) {
       // Not a warning: the orchestrator touches packets a warning names, and this one needs nothing.
       scoped = crlfAware(scoped);
     }
     const format = formatCommands(scoped);
-    if (scoped.length === 0) warnings.push(`${u.id}: no file-scoped Verify command; the server cannot check the worker's output${deferred.length ? " (package-wide commands are deferred)" : ""}`);
+    if (scoped.length === 0 && !BIOME_UNSUPPORTED.test(path)) warnings.push(`${u.id}: no file-scoped Verify command; the server cannot check the worker's output${deferred.length ? " (package-wide commands are deferred)" : ""}`);
 
     // `{path}` is single-quoted: the server substitutes it into a shell, and route files carry `$userId`.
     const verifyCmds = multiModel && CODE_FILE.test(path) ? [`node ${JSON.stringify(CHECK_IMPORTS)} '{path}'`, ...scoped] : scoped;

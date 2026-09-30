@@ -247,6 +247,21 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.8.12
+
+| Area | Before | From v0.8.12 |
+|---|---|---|
+| Verify on Markdown, MDX and YAML files | `plan-to-packets` passed a unit's `biome check <file>.mdx` through as its verify. Biome does not process those files and exits 1 on any content, so Large2-C spent 6 worker attempts and 2 hand-written refinement packets on two docs pages that were already correct. | Biome check / format / lint commands are dropped for `.md`, `.mdx`, `.yml` and `.yaml` targets. Any other Verify command on the unit stays, and no warning is raised. |
+| `apply.format` on hand-written packets | Only packets from `plan-to-packets` carried `format`. Debug and refinement packets the orchestrator wrote by hand left it out, so a Biome spacing difference failed verify and escalated to Opus (Large2-C: 2 escalations). | When `format` is absent, the server derives it from the verify commands with the same rule `plan-to-packets` uses (`biome check X` → `biome check --write X`, `prettier --check` → `--write`). An explicit `format` still wins. |
+| Gate 0 file scope | The proposed allowlist covered the files that carry the feature. Large2-D's senior reviewer raised two major findings the run could not act on: the API spec and the MCP tool catalogues were outside the allowlist. | Step 4b proposes the companion files a change needs to be complete as well: the generated API spec and every catalogue of the surface being extended, when discovery finds them. You still edit the list at Gate 0. |
+
+### v0.8.11
+
+| Area | Before | From v0.8.11 |
+|---|---|---|
+| Plan length | The architect trimmed a written plan toward the ≈ 400-line soft target (Large2-A: 34 turns, ≈ $3.86). | The line target applies to the one Write only; `long_plan` is informational. |
+| Biome on CRLF files | `biome check` failed on edit targets with CRLF endings before any edit, and the architect rewrote verify lines by hand (Large2-A: 21 turns, ≈ $2.07). | `plan-to-packets` adds `--line-ending=crlf` to biome verify and format for CRLF edit targets. |
+
 ### v0.8.10
 
 | Area | Before | From v0.8.10 |

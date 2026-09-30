@@ -1,31 +1,40 @@
 # Opus + Flash vs Opus-only — cost study, in plain English
 
-This page records every cost measurement we made on the plugin between 16 and 25 Sep 2026. It covers what each fix changed, what it cost, and what we learned. It is written for anyone on the team, not only people who know the plugin's internals.
+This page records every cost measurement we made on the plugin between 16 and 30 Sep 2026. It covers what each fix changed, what it cost, and what we learned. It is written for anyone on the team, not only people who know the plugin's internals.
 
 The same study as a formatted page: [opus-flash-cost-study.html](opus-flash-cost-study.html) (open it in a browser). The technical plan behind the fixes is [../planning/opus-plus-flash-cost-plan.md](../planning/opus-plus-flash-cost-plan.md).
 
-## The short answer (25 Sep)
+## The short answer (30 Sep, final)
 
-**On the newest plugin versions (0.8.8 and 0.8.9), Opus + Flash is cheaper than Opus-only, by about 20%.**
+**Opus + Flash is usually a little cheaper than Opus-only, about 10% on average, but the saving is small and not guaranteed. On big jobs the two are close to even.**
 
-- We ran three same-version pairs. On the full bill, Opus + Flash was cheaper all three times:
+After the medium-task pairs (below, 16–25 Sep) we tested the same question on three sizes of job, from 28 to 30 Sep. "Work itself" = the run without our own chat:
 
-  | Pair | Opus + Flash | Opus-only | Result |
-  |---|---|---|---|
-  | 0.8.8 (Runs 30 / 31) | $9.79 | $13.98 | Flash 30% cheaper |
-  | 0.8.9 (Runs 32 / 33b) | $9.36 | $9.55 | tie |
-  | 0.8.9 (Runs 34 / 35) | $8.37 | $11.28 | Flash 26% cheaper |
-  | **Average** | **$9.17** | **$11.60** | **Flash ≈ 21% cheaper** |
+| Job size | Pairs | Opus + Flash | Opus-only | Result |
+|---|---|---|---|---|
+| Small (7 files) | 2 | ≈ $8.69 | ≈ $9.70 | Flash ≈ 10% cheaper (second pair a tie) |
+| Medium (14–17 files) | 3 | ≈ $8.14 | ≈ $10.07 | Flash ≈ 19% cheaper |
+| Large (25 files, two different jobs) | 3 | ≈ $15.50 | ≈ $15.03 | about even (Flash won 2 of 3) |
 
-- Counting only the work itself (leaving out chat that happened in the same time window), the averages are $8.14 against $10.07, about 19% less. On that measure Opus-only won the middle pair by a little ($7.37 against $8.15).
-- Caveats:
-  - This rests on three pairs, and two identical runs can differ by about $2.50. Treat 20% as a clear trend, not a final number.
-  - Averaged over **every** run since 23 Sep, the two setups are about even ($12.08 against $12.14). Flash only pulled ahead after the 0.8.8 fixes stopped Opus wasting money around it.
-  - Every measurement uses one task on one existing codebase. We have no results yet for a bigger task or for a project built from scratch.
+- **Flash won 5 of the 8 pairs, 1 was a tie, and Opus-only won 2.** Most wins were by $1–3, which is about the size of normal run-to-run noise.
+- **Large jobs:** the one big Opus-only win (28% cheaper, pair Large2-A/B) was partly unfair. The Flash run went first and hit a file-format problem (Windows line endings) that the Opus-only run never met. Plugin 0.8.11 fixed it, and on the re-run pair Flash was 14% cheaper ($12.64 vs $14.63). Leave that biased pair out and Flash is ≈ 10% cheaper on large jobs too.
+- **Quality was the same on both sides.** Every run passed its tests. Opus-only got more tasks right first time on large jobs (92–96% vs 79–83%) and needed fewer repair rounds. Flash made more small mistakes, but fixing them was still cheaper than having Opus type everything.
+- **Speed:** Flash was faster on small jobs (61–66 min vs 70–96). On large jobs both took 74–85 min, apart from Large-A, where Flash took 102 min.
+- **Practical advice:** Opus + Flash is a fine default and saves a little. If you have no Gemini key, or a Flash outage would hurt, Opus-only costs only slightly more. Don't expect big savings from delegation alone: most of the saving in this study came from removing Opus overhead, which helped both setups.
+
+### Earlier headline (25 Sep, medium task only)
+
+On plugins 0.8.8 and 0.8.9, Opus + Flash was cheaper than Opus-only on all three medium-task pairs (full bill $9.17 vs $11.60 on average, ≈ 21%; work itself $8.14 vs $10.07, ≈ 19%):
+
+| Pair | Opus + Flash | Opus-only | Result |
+|---|---|---|---|
+| 0.8.8 (Runs 30 / 31) | $9.79 | $13.98 | Flash 30% cheaper |
+| 0.8.9 (Runs 32 / 33b) | $9.36 | $9.55 | tie |
+| 0.8.9 (Runs 34 / 35) | $8.37 | $11.28 | Flash 26% cheaper |
 
 ## What was measured
 
-- **The task.** Every run did the same job on the Kaneo codebase (an open-source project-management app): *"add a new public profile page with default profile image"*. Each run changed about 11–17 files: an API endpoint, a web page, tests, and translations. It started with `/mmo:brownfield` and ran start to finish with no human stepping in.
+- **The task.** Up to 25 Sep, every run did the same job on the Kaneo codebase (an open-source project-management app): *"add a new public profile page with default profile image"*. Each run changed about 11–17 files: an API endpoint, a web page, tests, and translations. It started with `/mmo:brownfield` and ran start to finish with no human stepping in. From 28 Sep we added a small job and two large jobs (see *Small, medium and large jobs* below).
 - **The two setups.**
   - **Opus-only**: Claude Opus plans, writes all the code, and reviews it.
   - **Opus + Flash**: Opus plans and reviews, and hands the code-writing to Google's much cheaper Gemini Flash model.
@@ -80,6 +89,31 @@ Think of Opus as an expensive project lead who re-reads the whole project notebo
 | 35 | 25 Sep | 0.8.9 | Opus-only | $11.28 | ≈ $10.20 | 64 | |
 
 Every valid run passed its tests. From Row 4 onwards no run finished with a serious review issue left open; where a reviewer raised one, the run fixed it before finishing.
+
+## Small, medium and large jobs (28–30 Sep)
+
+Same laptop, same 1-hour memory setting, same review steps. Each pair ran the same job twice, once per setup, starting from the same code. "Work itself" leaves out our own chat that landed in the run's time window.
+
+- **Small job:** show a task count and "last updated" on the public project page (7 files).
+- **Large job 1:** a project insights page (about 25 files: API, web page, charts, tests, docs).
+- **Large job 2:** a team workload page showing who is working on what across a workspace (25 files: API endpoint, an AI-assistant tool, web page with 5 parts, tests, translations, docs).
+
+| Run | Date | Plugin | Job | Setup | Full bill | Work itself | Minutes | Note |
+|---|---|---|---|---|---|---|---|---|
+| Small-A | 28 Sep | 0.8.10 | small | Opus + Flash | $9.39 | ≈ $8.31 | 61 | |
+| Small-B | 28 Sep | 0.8.10 | small | Opus-only | $11.71 | ≈ $10.63 | 96 | reviewer caught a real counting bug |
+| Small-C | 28 Sep | 0.8.10 | small | Opus + Flash | $10.09 | ≈ $9.06 | 66 | |
+| Small-D | 28 Sep | 0.8.10 | small | Opus-only | $9.98 | ≈ $8.77 | 70 | pair 2 a tie |
+| Large-A | 28 Sep | 0.8.10 | large 1 | Opus + Flash | $18.64 | ≈ $17.17 | 102 | 11 checks rewritten by hand (line endings) |
+| Large-B | 29 Sep | 0.8.10 | large 1 | Opus-only | $19.31 | ≈ $18.51 | 79 | first attempt stalled; re-run |
+| Large2-A | 29 Sep | 0.8.10 | large 2 | Opus + Flash | $18.70 | ≈ $16.68 | 84 | planner spent ≈ $6 shortening its plan and working around line endings |
+| Large2-B | 29 Sep | 0.8.10 | large 2 | Opus-only | $14.66 | ≈ $11.94 | 85 | 96% right first try |
+| Large2-C | 29 Sep | 0.8.11 | large 2 | Opus + Flash | $13.81 | ≈ $12.64 | 75 | 0.8.11 fixes held |
+| Large2-D | 30 Sep | 0.8.11 | large 2 | Opus-only | $15.26 | ≈ $14.63 | 74 | 92% right first try, 0 repair rounds |
+
+**Pair results (work itself):** Small pair 1 Flash −22%, pair 2 tie · Large 1 Flash −7% · Large 2 pair 1 Opus-only −28% (biased, see Row 20) · Large 2 pair 2 Flash −14%.
+
+Every run passed its tests and security review. Where a reviewer raised a serious issue, the run fixed it, except in Large2-D: two of its three serious issues needed files the run was not allowed to touch (the API spec `openapi.json` and the assistant-tool lists in the docs). That is a gap in the list of allowed files, not a mistake by the run.
 
 ## What we fixed, row by row
 
@@ -213,6 +247,26 @@ This was the turning point.
 - **Second pair:** Opus + Flash **$8.37**, the cheapest run in the study · Opus-only $11.28. Flash wrote all 14 pieces of code in one 50-second batch with no busy errors. Opus-only wrote its 16 pieces one by one, and its page test took 3 tries.
 - **Result:** averaged over both 0.8.9 pairs, Opus + Flash $8.87 against Opus-only $10.42 (15% less).
 
+### Row 19 — plugin 0.8.10 (25 Sep): 1-hour memory is the default everywhere
+
+- **Fix:** every shipped policy, including Opus-only, now keeps Opus's memory for 1 hour, so new users get the setting this study measured.
+- **Runs:** the small job and large job 1 pairs, plus Large2-A/B (table above).
+- **Result:** Flash cheaper on small jobs (≈ 10%) and on large job 1 (≈ 7%). On large job 2, Opus-only was 28% cheaper.
+- **Why Large2-A lost:** two problems, both in the planner (an Opus helper), not in Flash:
+  1. **Trimming the plan.** The planner wrote a full plan and then spent 34 small edits (≈ $3.86) shortening it to hit a suggested length.
+  2. **Line endings.** Some files on this Windows laptop use Windows line endings, which made the formatting check fail. The planner rewrote checks to work around it (≈ $2.07).
+- **Study bias found:** resetting files after a run switches them to Linux line endings. The Flash run always went first in each pair, so only Flash runs ever met the Windows endings.
+
+### Row 20 — plugin 0.8.11 (29 Sep): no plan trimming, line-ending-aware checks
+
+- **Fixes:** the planner writes the plan once and never trims it for length. The task splitter adds the right line-ending setting to the formatting check automatically.
+- **Runs:** Large2-C Opus + Flash ≈ $12.64 (75 min) · Large2-D Opus-only ≈ $14.63 (74 min).
+- **Result:** the fix held (no trimming, no line-ending workarounds). The Flash run cost $4 less than Large2-A, and Flash was **14% cheaper** on this fair pair.
+- **Still wrong (next fixes):**
+  - Flash wasted 6 attempts on a formatting check that can never pass: the formatter skips docs (`.mdx`) files, yet the plan asked it to check one.
+  - Repair steps written by the manager left out the auto-format instruction, so they failed their check.
+  - The allowed-files list for a new API page should include the API spec and the assistant-tool docs.
+
 ## Cost after each stage
 
 | Stage | Opus-only | Opus + Flash | Result |
@@ -231,8 +285,9 @@ This was the turning point.
 | Row 15 (0.8.6) | $14.18 | $15.32 | Opus cheaper by $1.14 |
 | Rows 16–17 (0.8.8) | $13.98 | $9.79 | **Flash 30% cheaper** |
 | Row 18 (0.8.9) | $9.55 / $11.28 | $9.36 / $8.37 | **Flash 15% cheaper on average** |
+| Row 20 (0.8.11), large job 2 | $15.26 | $13.81 | Flash 14% cheaper (work itself) |
 
-\* Opus-only was still running steps meant only for Flash. \*\* 5-minute memory trial.
+\* Opus-only was still running steps meant only for Flash. \*\* 5-minute memory trial. Rows up to 18 are the medium task; Row 20 is a large job, so its dollars are not comparable with the rows above it.
 
 **Since the start:** Opus + Flash went from $26.02 to $8.37 (−68%). Opus-only went from $19.16 to $9.55 at its best (−50%).
 
@@ -253,19 +308,24 @@ This was the turning point.
 3. **Most fixes helped both setups.** Leaner reviewers and no pauses cut Opus-only's cost as much as Flash's, so the target Flash had to beat kept moving.
 4. **Flash pulled ahead only once the hand-over was clean:** exact imports, an import checker, a correct task split, one batch call, and short reports.
 5. **Noise is large.** Identical runs differ by up to $2.50, so a single gap smaller than that means little. Only repeated pairs count.
-6. **Practical rules for measuring:** keep the laptop awake, don't chat with Claude during a run (it lands in the bill), and give both setups the same memory setting.
+6. **Job size doesn't grow the saving.** Flash saved ≈ 10% on small jobs, ≈ 19% on the medium task, and about even on large jobs. On large jobs the Opus planner costs the most, and it is the same Opus on both sides.
+7. **Watch for hidden differences between the two runs in a pair.** A file-format difference (line endings) made one large pair look 28% worse for Flash until we found it.
+8. **Practical rules for measuring:** keep the laptop awake, don't chat with Claude during a run (it lands in the bill), and give both setups the same memory setting.
 
 ## Next
 
+The run phase is finished; more runs would only shift the percentages a little.
+
 | Step | Why |
 |---|---|
-| Repeat on a medium-sized task | Shows whether Flash saves more when there is more code to write. |
-| Measure a project built from scratch (`/mmo:greenfield`) | Every run so far used an existing codebase. |
+| Fix the three issues found in Row 20 | Removes the last known waste on the Flash side and the reviewer's unfixable findings. |
+| Measure a project built from scratch (`/mmo:greenfield`) | A teammate's greenfield runs showed Flash 27–38% cheaper on ~100-file projects; worth confirming on this setup. |
 | Build the "shared starting plan" (Row 5) | Takes planning noise out of the comparison, so fewer runs are needed. |
 
 ## Where the raw data lives
 
 - **Per-run records** are in the Kaneo repo under `.sdlc/runs/<run-id>/`: the task brief, plan, task list, test results, reviews, `notes.md`, `telemetry.jsonl`, and the code change as `change.patch`.
+- **Run IDs** for the small/large phase contain `small-a`…`small-d`, `large-a`, `large-b`, `large2-a`…`large2-d`.
 - **Summaries** are in Kaneo's `.sdlc/ledger.md` (one entry per run) and `.sdlc/policy-study.md`.
 - **Cost collector:** `plugin/scripts/collect-orchestrator-usage.mjs`. Figures are priced from the Claude Code logs at list prices, not checked against an invoice.
 - **Version notes** are in [../methodology.md](../methodology.md), and the technical plan is in [../planning/opus-plus-flash-cost-plan.md](../planning/opus-plus-flash-cost-plan.md).

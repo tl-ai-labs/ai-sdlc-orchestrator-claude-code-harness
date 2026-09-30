@@ -460,3 +460,24 @@ test("crlfAware adds --line-ending=crlf to biome check/format only; buildPackets
   assert.ok(!warnings.some((w) => /CRLF/.test(w)), "not a warning: nothing for the orchestrator to touch");
   rmSync(root, { recursive: true, force: true });
 });
+
+test("biome checks are dropped for files biome does not process (.mdx / .md / .yaml), with no warning (Large2-C)", async () => {
+  const { dropUnsupportedBiome } = await import(join(HERE, "..", "..", "..", "scripts", "plan-to-packets.mjs"));
+  const cmds = ["pnpm exec biome check docs/a.mdx", "node -e \"1\""];
+  assert.deepEqual(dropUnsupportedBiome(cmds, "docs/a.mdx"), ['node -e "1"']);
+  assert.deepEqual(dropUnsupportedBiome(["pnpm exec biome check x.yml"], "x.yml"), []);
+  assert.deepEqual(dropUnsupportedBiome(["pnpm exec biome check a.ts"], "a.ts"), ["pnpm exec biome check a.ts"], "code files keep the check");
+  const plan = PLAN + `
+## A9 — apps/docs/core/workload.mdx
+
+- **File** \`apps/docs/core/workload.mdx\` · **Action** \`new_file\` · **Depends on** —
+- **Behavior**
+  - A user guide page.
+- **Verify** \`pnpm exec biome check apps/docs/core/workload.mdx\`
+`;
+  const { packets, warnings } = buildPackets(parsePlan(plan), { runId: "r1", intent: "feature-extend", planPath: ".sdlc/runs/r1/change_plan.md" });
+  const doc = packets.find((p) => p.artifact_path === "apps/docs/core/workload.mdx");
+  assert.deepEqual(doc.apply.verify, []);
+  assert.equal(doc.apply.format, undefined);
+  assert.ok(!warnings.some((w) => /A9.*Verify/.test(w)), "no missing-Verify warning for a docs page");
+});
