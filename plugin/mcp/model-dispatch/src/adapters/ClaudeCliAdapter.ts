@@ -47,15 +47,6 @@ interface ClaudeCliOptions {
   projectsDir?: string;
   /** Clock for the dispatch date the price is looked up on; tests pin it. */
   now?: Clock;
-  /**
-   * Start the worker with NO tools (`--tools ""`). Chat jobs set it: their
-   * worker turns a brief into text, and code checks that text before anything
-   * lands, so a worker that could read or write files itself would skip those
-   * checks. A CLI whose --help lists no `--tools` is refused, never started.
-   */
-  noTools?: boolean;
-  /** The CLI's --help text; tests pin it. Default: read from `claude --help` once. */
-  helpText?: string;
 }
 
 interface ClaudeCliResponse extends ClaudeCliResultLike {
@@ -77,48 +68,6 @@ interface ClaudeCliResponse extends ClaudeCliResultLike {
   [key: string]: unknown;
 }
 
-/**
- * Launch arguments for the worker.
- *
- * The typed pipeline's worker (no `noTools`) starts exactly as in 0.7.6:
- * `claude -p --model <m> --output-format json`, and `claude --help` is never
- * read for it. 0.8.3 is 0.7.6's pipeline with zero-touch added, so nothing a
- * /mmo: command does may change; the zero-touch branch (ed8e701) had put the
- * safety switches on this launch too, and that is parked as its own pipeline
- * change (docs/methodology.md, v0.8.3).
- *
- * A zero-touch hand-over's worker (`noTools`) turns a brief into text that code
- * checks before anything lands, so it gets NO tools (`--tools ""`) and every
- * safety switch this machine's CLI lists in `--help`: plain `claude -p` inside
- * a project would load that repository's hooks, plugins and .mcp.json servers.
- * A switch the CLI lacks is not passed, so an older CLI keeps working; a CLI
- * with no `--tools` is refused, because "no tools" is a promise. `--bare` is
- * never used: it skips keychain reads, which is how a subscription login is found.
- */
-const WORKER_SAFETY_FLAGS = ["--safe-mode", "--strict-mcp-config", "--disable-slash-commands"] as const;
-
-export function claudeCliArgs(modelName: string, helpText: string, opts: { noTools?: boolean } = {}): string[] {
-  const args = ["-p", "--model", modelName, "--output-format", "json"];
-  if (!opts.noTools) return args;
-  const lists = (flag: string) => new RegExp(`(^|\\s)${flag}(\\s|$)`, "m").test(helpText);
-  for (const flag of WORKER_SAFETY_FLAGS) if (lists(flag)) args.push(flag);
-  if (!lists("--tools")) throw new Error("this claude CLI lists no --tools flag, so a worker with no tools cannot be started; nothing was sent");
-  args.push("--tools", "");
-  return args;
-}
-
-let cachedHelp: string | null = null;
-/** `claude --help` calls no model. Read once per server process; empty on any failure. */
-function cliHelpText(): string {
-  if (cachedHelp !== null) return cachedHelp;
-  try {
-    cachedHelp = execFileSync("claude", ["--help"], { stdio: "pipe", timeout: 8000 }).toString("utf8");
-  } catch {
-    cachedHelp = "";
-  }
-  return cachedHelp;
-}
-
 export class ClaudeCliAdapter implements ModelAdapter {
   readonly id: string;
   readonly modelConfig: ModelConfig;
@@ -127,8 +76,6 @@ export class ClaudeCliAdapter implements ModelAdapter {
   private readonly timeoutMs: number;
   private readonly projectsDir: string;
   private readonly pricer: DispatchPricer;
-  private readonly noTools: boolean;
-  private readonly helpText: string | undefined;
 
   /**
    * Constructor verifies the `claude` binary is reachable rather than probing
@@ -142,8 +89,6 @@ export class ClaudeCliAdapter implements ModelAdapter {
     this.timeoutMs = (options.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     this.projectsDir = options.projectsDir ?? claudeProjectsDir();
     this.pricer = new DispatchPricer(config, options.now ?? systemClock);
-    this.noTools = options.noTools === true;
-    this.helpText = options.helpText;
 
     const probe =
       options.probeBinary ??
@@ -183,13 +128,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
     const { stableBlock, userPrompt } = splitStableFromDynamic(packet, this.cachedSystem);
     const prompt = stableBlock ? `${stableBlock}\n\n${userPrompt}` : userPrompt;
 
-    let args: string[];
-    try {
-      args = claudeCliArgs(this.modelConfig.model_name, this.noTools ? (this.helpText ?? cliHelpText()) : "", { noTools: this.noTools });
-    } catch (err: any) {
-      return this.failure(packet, { input: 0, input_cached: 0, output: 0 }, started, err?.message ?? String(err));
-    }
-    const run = await this.runClaudeCli(prompt, args);
+    const run = await this.runClaudeCli(prompt);
 
     if (!run.ok) {
       return this.failure(packet, { input: estimateTokens(prompt), input_cached: 0, output: 0 }, started, run.error);
@@ -339,12 +278,15 @@ export class ClaudeCliAdapter implements ModelAdapter {
 
   private runClaudeCli(
     prompt: string,
-    args: string[],
   ): Promise<{ ok: true; response: ClaudeCliResponse } | { ok: false; error: string }> {
     return new Promise((resolveRun) => {
       let child: ChildProcess;
       try {
-        child = this.spawnFn("claude", args, { stdio: ["pipe", "pipe", "pipe"] });
+        child = this.spawnFn(
+          "claude",
+          ["-p", "--model", this.modelConfig.model_name, "--output-format", "json"],
+          { stdio: ["pipe", "pipe", "pipe"] },
+        );
       } catch (err: any) {
         resolveRun({ ok: false, error: `claude-cli spawn failed: ${err?.message ?? err}` });
         return;

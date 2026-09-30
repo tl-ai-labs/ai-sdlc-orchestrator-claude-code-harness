@@ -158,9 +158,18 @@ test("the generic orchestrator's files are gone, and every file left in the hook
     "plugin/scripts/ambient/write-files.mjs", "plugin/scripts/ambient/census.mjs", "plugin/scripts/ambient/setup.mjs",
     "plugin/scripts/ambient/board", "plugin/config/ambient-labels.json", "plugin/mcp/model-dispatch/src/ambient",
     "tools/ambient-preflight.mjs",
+    // Found on 30 Sep 2026 while writing the docs: two leftovers nothing read any more. The seed evidence fed the
+    // worker-picking rule, and the no-tools worker launch was for the chat jobs; both went with the generic
+    // orchestrator, and hand-off mode types through the executor's own typists.
+    "plugin/config/ambient-seeds.json", "plugin/mcp/model-dispatch/test/claudeWorkerLaunch.test.mjs",
   ]) {
     assert.ok(!existsSync(join(ROOT, gone)), `${gone} is removed (kept on archive/generic-orchestrator)`);
   }
+  // Zero-touch ships one settings file. Any other ambient* file in the plugin's config folder is read by nothing.
+  assert.deepEqual(readdirSync(join(PLUGIN, "config")).filter((n) => /^ambient/.test(n)), ["ambient.default.json"]);
+  // The typed pipeline's `claude` worker starts with the pipeline's own arguments and nothing of zero-touch's: a
+  // launch option no caller sets is a change to the pipeline's file that does nothing.
+  assert.doesNotMatch(readFileSync(join(PLUGIN, "mcp", "model-dispatch", "src", "adapters", "ClaudeCliAdapter.ts"), "utf8"), /noTools|--tools/);
   // The modules reachable from hook.mjs through its imports, static or dynamic.
   const reached = new Set();
   const visit = (file) => {
@@ -186,12 +195,17 @@ test("the generic orchestrator's files are gone, and every file left in the hook
   assert.deepEqual(unused, [], "no file in plugin/scripts/ambient that the hook does not use");
 });
 
-test("the plugins describe zero-touch as routing only: no promise of cheaper ordinary chats", () => {
+test("the plugins describe both of zero-touch's modes, and promise no saving: none has been measured", () => {
   const zt = JSON.parse(readFileSync(join(ROOT, "zero-touch", ".claude-plugin", "plugin.json"), "utf8"));
   const market = JSON.parse(readFileSync(join(ROOT, ".claude-plugin", "marketplace.json"), "utf8"));
   const entry = market.plugins.find((p) => p.name === "zero-touch");
   for (const text of [zt.description, entry?.description ?? ""]) {
     assert.doesNotMatch(text, /cheaper|savings|worker/i, text);
-    assert.match(text, /workflow/i, text);
+    // Workflow mode: a plain-words request starts its workflow. Hand-off mode: the chat's own model develops and
+    // some typing is handed off. A person choosing the plugin in the list must learn of both, and where to choose.
+    assert.match(text, /workflow mode/i, text);
+    assert.match(text, /hand-off mode/i, text);
+    assert.match(text, /~\/\.mmo-ambient\/mode/, text);
+    assert.match(text, /new chats/i, text);
   }
 });

@@ -1,7 +1,7 @@
 {
   "name": "zero-touch",
   "version": "0.8.4",
-  "description": "Zero-touch for the mmo plugin: plain-words requests start the matching /mmo: workflow; any other message is an ordinary chat. Enable or disable this plugin to switch zero-touch on or off; it takes effect in new chats.",
+  "description": "Zero-touch for the mmo plugin, in two modes chosen in ~/.mmo-ambient/mode. Workflow mode (the default): a plain-words request starts the matching /mmo: workflow; any other message is an ordinary chat. Hand-off mode: the chat's own model does the development, and new docs, specs, plans, tests and repeated edits are handed to the model the policy routes them to and checked by code before they land. Enable or disable this plugin to switch zero-touch on or off; it takes effect in new chats.",
   "author": {
     "name": "Tilicho Labs"
   },

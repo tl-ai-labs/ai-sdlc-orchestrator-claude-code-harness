@@ -214,7 +214,7 @@ function rulesNote() {
     "- NEW tests for code that exists: decide the cases yourself, then the write_tests_from_cases tool.",
     "- The same change in several files: make it yourself in ONE file, then the repeat_edit_across_files tool for the others.",
     "How to hand off: read what the tool's form needs, fill in every field with exact facts from the project (real paths, commands, names and values), and make one call. The form is a brief, never the finished text. The tool refuses a form with an empty field or a fact that is not in the project, and says what to fix. When it returns, read what it wrote before you tell the person it is done.",
-    "Creating such a file yourself with Write or Edit is refused; a small correction to a file that exists is yours to make.",
+    "Creating such a file yourself, with the Write tool or a shell command, is refused; a change to a file that exists is yours to make.",
     "When a tool reports that the hand-off failed or cannot run, do that piece yourself and say so in one line. When tests handed off do not pass, read the output the tool returns: correct a wrong case and hand off again; a real bug in the code under test you tell the person, and you never change a test to hide it.",
     "Every hand-off that changed the project has an id on its receipt; the undo_hand_off tool takes one back.",
     "Start no workflow (an mmo: command) from the person's plain words in this chat: a workflow starts only when the person types its command.",

@@ -61,16 +61,19 @@ answer rather than merely an inconvenient one.
 Continue with the build below. It runs as a shell command and does not need the plugin's slash
 commands to exist.
 
-**Zero-touch is a separate, optional plugin.** Only if the user wants plain-words requests to start the
-matching workflow without typing a command (every other message stays an ordinary chat):
+**Zero-touch is a separate, optional plugin with two modes.** Install it only if the user wants one of them.
+Workflow mode (the default): plain-words requests start the matching workflow without typing a command, and
+every other message stays an ordinary chat. Hand-off mode: the chat's own model does the development and
+hands new docs, specs, plans, tests and repeated edits to the model the policy routes them to.
 
 ```
 /plugin install zero-touch@tilicho-ai-labs
 ```
 
 It needs `mmo` (installing it brings `mmo` along) and has nothing to build or set: it only marks each
-new chat at its start. Enabled, every new chat has zero-touch; disabled in the plugin list (desktop
-app: **+** → **Plugins** → **Manage plugins**), new chats have none. See `docs/ambient-mode.md`.
+new chat at its start with its mode, read from `~/.mmo-ambient/mode` (`a` or no file: workflow mode;
+`b`: hand-off mode; `off`: none). Enabled, every new chat has zero-touch; disabled in the plugin list
+(desktop app: **+** → **Plugins** → **Manage plugins**), new chats have none. See `docs/ambient-mode.md`.
 
 ## 3. Build the bundled model server
 

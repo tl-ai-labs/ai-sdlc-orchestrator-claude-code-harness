@@ -218,7 +218,7 @@ Both check the install, show which model each phase will run on, confirm the pla
 
 Thirteen commands, split by purpose. All are declared in [plugin/commands/](plugin/commands/) with the same descriptions shown here.
 
-To start the right workflow from a plain request without typing a command, see [zero-touch](docs/ambient-mode.md): install the separate `zero-touch` plugin from the same marketplace to switch it on, disable it to switch it off (with it off, the `mmo` plugin behaves exactly as without it). Any message that is not one of the eight jobs stays an ordinary chat.
+[Zero-touch](docs/ambient-mode.md) is a separate, optional plugin in the same marketplace, with two modes chosen in `~/.mmo-ambient/mode`. **Workflow mode** (the default) starts the right workflow from a plain request, with no command typed; any message that is not one of the eight jobs stays an ordinary chat. **Hand-off mode** leaves the development to the chat's own model and hands new docs, specs, plans, tests and one change repeated across files to the model the policy routes that work to, checked by code before anything reaches the project. Install `zero-touch` to switch it on and disable it to switch it off; with it off, no zero-touch hook acts.
 
 ### Run the pipeline
 
@@ -330,7 +330,7 @@ node tools/setup.mjs
 - [docs/methodology.md](docs/methodology.md) — how tokens and costs are recorded
 - [docs/two-gemini-paths.md](docs/two-gemini-paths.md) — measured comparison of the two doors on the same brief
 - [docs/brownfield-routing.md](docs/brownfield-routing.md) — which model does which work
-- [docs/ambient-mode.md](docs/ambient-mode.md) — zero-touch: a plain-words request starts its `/mmo:` workflow, no command typed (its own plugin, `zero-touch`: enable it to switch it on)
+- [docs/ambient-mode.md](docs/ambient-mode.md) — zero-touch (its own plugin, `zero-touch`: enable it to switch it on). Workflow mode: a plain-words request starts its `/mmo:` workflow, no command typed. Hand-off mode: the chat's own model develops, and docs, tests and repeated edits go to the policy's typing model
 - [docs/walkthroughs/](docs/walkthroughs/) — the two Gemini paths, frame by frame ([model](docs/walkthroughs/model-path.html), [agent](docs/walkthroughs/agent-path.html))
 - [examples/unit-convert/](examples/unit-convert/) — one endpoint, one conversion, minutes to run
 - [examples/quick-demo/](examples/quick-demo/) — one-endpoint ping service, minutes to run

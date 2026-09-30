@@ -279,6 +279,30 @@ export function receiptLine(receipt, chat) {
   return null;
 }
 
+/** The project files a failed hand-off handed back to the chat's model (written by the server, handoff/chat.ts). */
+export function releasedPaths(sid, env = process.env) {
+  const v = readJson(join(sessionDir(sid, env), "handoff_released.json"));
+  return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+}
+
+/** What the net says for each kind of file: the tool that takes it, its form's fields, and the person's word for it. */
+const BY_HAND = {
+  document: { tool: HANDOFF_TOOL.docs, form: "kind, file, purpose, readers, sections, facts", word: "document" },
+  tests: { tool: HANDOFF_TOOL.tests, form: "file, target, functions, cases, test_command", word: "test file" },
+};
+
+/** What the chat's model reads when a new document or test file it typed by hand is refused. */
+export function byHandReason(path, kind) {
+  const k = BY_HAND[kind];
+  return (
+    `In this chat a new ${k.word} is not typed by hand: hand ${path} to the ${k.tool} tool (its form: ${k.form}), which has it written and checked. ` +
+    "If the hand-off fails, the tool hands the file back and you write it yourself. A change to a file that exists is yours to make."
+  );
+}
+
+/** The line the person sees with that refusal. */
+export const byHandLine = (path, kind) => `${LABEL} a new ${BY_HAND[kind].word} typed by hand was sent back to the hand-off (${path}).`;
+
 /** What the model reads when a hand-off tool is called where hand-off mode does not act. */
 export const NOT_A_HANDOFF_CHAT = "The hand-off tools work only in a chat that started in zero-touch hand-off mode. Do this work yourself.";
 export const NOT_IN_A_WORKFLOW = "The hand-off tools are not available inside a workflow run. Carry on with the workflow's own steps.";

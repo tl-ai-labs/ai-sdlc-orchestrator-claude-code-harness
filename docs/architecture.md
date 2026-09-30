@@ -30,7 +30,8 @@ Additional plugin content:
 | [plugin/config/intents.json](../plugin/config/intents.json) | The seven-intent registry — id, title, example, argument hint, summary, interview questions. Single source for the job commands, the interview, and this table's own accuracy. |
 | [plugin/skills/pipeline/](../plugin/skills/pipeline/) | Skill body loaded by the orchestrator. |
 | [plugin/skills/brownfield-guide/](../plugin/skills/brownfield-guide/) | The shared seven-step brownfield manual. Every brownfield entry point (`brownfield.md` and the seven job commands) points here; step 4 branches on the `intent` / `seed_description` handover. |
-| [plugin/hooks/hooks.json](../plugin/hooks/hooks.json) | `PreToolUse`: the write-contract check, the foreground rule for the pipeline's own helpers, and the executor guard. `PostToolUse`: the telemetry heartbeat on `execute_with_model` and the executor guard's record of `execute_stage` callers, each matching the MCP tool name under both install routes. |
+| [plugin/hooks/hooks.json](../plugin/hooks/hooks.json) | `PreToolUse`: the write-contract check, the foreground rule for the pipeline's own helpers, and the executor guard. `PostToolUse`: the telemetry heartbeat on `execute_with_model` and the executor guard's record of `execute_stage` callers, each matching the MCP tool name under both install routes. Beside them, zero-touch's twelve hooks, which act only in a chat the `zero-touch` plugin marked. |
+| [plugin/scripts/ambient/](../plugin/scripts/ambient/) · [zero-touch/](../zero-touch/) | Zero-touch ([ambient-mode.md](ambient-mode.md)). `zero-touch/` is the switch plugin: its one start hook gives each new chat its mode. `plugin/scripts/ambient/hook.mjs` handles every other moment. Workflow mode starts a `/mmo:` workflow from a plain-words request; hand-off mode leaves development to the chat's own model and hands docs, tests and repeated edits to the server's hand-off tools (§2b). |
 | [plugin/config/policies/](../plugin/config/policies/) | Shipped policy YAMLs. The directory listing is the authoritative preset set (`opus-plus-flash` is the default; the loader's not-found error prints the live list). |
 | [plugin/policy-console/](../plugin/policy-console/) | Single-page HTML console + tiny http server, used at setup to pick or author the per-project policy. |
 | `.sdlc/project.json` | Per-project state file. Fields: `default_policy` (name of the policy every run in this folder uses when `--policy` is not passed), `off_limits_default` (constant paths never touched by brownfield writes — merged with Gate 0 additions), `last_updated_at`, `schema_version: 2`. Written by `setup-policy.mjs` and consumed by every task command. |
@@ -39,7 +40,7 @@ The hook matcher is a regex because the plugin route namespaces MCP tools with t
 
 ## 2. MCP server
 
-The bundled server exposes eight tools over stdio: the five below, and the three of the typed-spec executor (§2a).
+The bundled server exposes twelve tools over stdio: the five below, the three of the typed-spec executor (§2a), and zero-touch's four hand-off tools (§2b).
 
 | Tool | Purpose |
 |---|---|
@@ -98,6 +99,25 @@ The architect hands the build over as a typed spec, and code types, checks and w
 - The collector copies `acceptance.md` into SUMMARY.md between `<!-- acceptance:start -->` and `<!-- acceptance:end -->` on every run, so the report's acceptance table is code's.
 
 Code: [src/spec/](../plugin/mcp/model-dispatch/src/spec/) (schema, hand-over, rendering) and [src/executor/](../plugin/mcp/model-dispatch/src/executor/) (briefs, typists, checks, the stage runner, the acceptance stage, the tool handlers).
+
+### 2b. Zero-touch's hand-off tools (a chat in hand-off mode)
+
+In hand-off mode the chat's own model does the development and hands over only work that is mostly typing and that code can check. The four tools are listed in every chat, because the server cannot know a chat's mode when its tools are listed; a call works only when zero-touch's hook stamped it (`_mmo`: the chat, the project folder, who pays for a Claude typist) in a hand-off chat, and never inside a workflow run. The policy and the model come from the chat's own records, written once at its start, so nothing the model writes in a call can choose them. Full description: [ambient-mode.md](ambient-mode.md), "Hand-off mode".
+
+| Tool | Purpose |
+|---|---|
+| `write_document` | A new document, spec or plan, from a form: purpose, readers, sections, and facts each tied to a project file by a quote found in it word for word (or to the chat). The answer is refused when a listed section has no heading, a shell command is not among the facts, or a project path or relative link leads nowhere. |
+| `write_tests_from_cases` | A new test file, from named cases (`given`, `expect`) for functions of one target file. Every case must appear by name; the file is then run with the form's test command in a scratch copy of the project, and only a file whose tests pass is written. A case's expected result is never changed to make a test pass. |
+| `repeat_edit_across_files` | One change, already made by hand in an example file, repeated in the target files as exact edits. Each edit must apply exactly once and may remove only lines the change is about; the optional check command runs in the scratch copy before anything lands. |
+| `undo_hand_off` | Takes one landing back by its id: a changed file gets its earlier text, a created file is removed. A file changed since is left alone and named. |
+
+| What | Rule |
+|---|---|
+| Who types | The executor's typists and its ladder: two attempts by the model the policy routes that stage to (`docs`, `tests`, `codegen`), then one by the policy's Claude model. |
+| Where a command runs | A scratch copy of the project (`handoff/scratch.ts`): the project's own files copied as they are on disk, what git ignores linked in. A project that is not a git repository gets no copy, and the hand-off is refused. |
+| What is recorded | Under `~/.mmo-ambient/sessions/<id>/`: one telemetry line per typist call (`handoff-telemetry.jsonl`), every landing with what each file held before (`handoff_landings.json`, `handoff_undo/`), and the files a failed hand-off handed back to the chat's model (`handoff_released.json`). Nothing is written into a run folder: a hand-off belongs to the chat, not to a run. |
+
+Code: `plugin/mcp/model-dispatch/src/handoff/`. Tests: `test/handoffDocument.test.mjs`, `test/handoffScratch.test.mjs`, `test/handoffTestsAndEdits.test.mjs`, `test/toolList.test.mjs`.
 
 ## 3. Routing
 

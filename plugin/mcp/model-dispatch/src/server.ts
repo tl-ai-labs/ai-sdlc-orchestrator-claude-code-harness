@@ -453,12 +453,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
-    // The pipeline's tools and the executor's only. 0.8.4 removed the ten chat-worker tools the generic orchestrator
-    // (zero-touch's ask 1) listed here in every chat, workflow runs included; zero-touch's workflow routing needs no
-    // tool of its own (test/toolList.test.mjs).
     ...EXECUTOR_TOOLS,
-    // Zero-touch's hand-off mode (handoff/tools.ts). Listed in every chat, because the server cannot know a chat's
-    // mode when its tools are listed; a call is refused unless the plugin's hook stamped it in a hand-off chat.
+    // Zero-touch's four hand-off tools (handoff/tools.ts), the only tools zero-touch adds: its workflow routing
+    // needs none. Listed in every chat, because the server cannot know a chat's mode when its tools are listed; a
+    // call is refused unless the plugin's hook stamped it in a hand-off chat (test/toolList.test.mjs).
     ...HANDOFF_TOOLS,
   ],
 }));

@@ -17,8 +17,8 @@ untouched.
   above. `b` is hand-off mode: the chat's own model does the development, and new docs, specs, plans, tests and the
   same change repeated across files go to a cheaper model through the `mmo` plugin's hand-off tools, which check the
   result before it reaches your project; plain words start no workflow there, a typed `/mmo:` command still does.
-  Hand-off mode is being built: its refusal of a document typed by hand is not in yet, and nothing of it has been
-  checked live. A change of mode reaches the next new chat.
+  A new document or test file typed by hand there is refused and pointed at the hand-off tool. Nothing of hand-off
+  mode has been checked live yet. A change of mode reaches the next new chat.
 - **Turn it off for new chats, keeping the plugin:** put `off` in `~/.mmo-ambient/mode`; a new chat then says
   zero-touch is off and how to turn it on (`a` or `b` in that file, or remove it).
 - **Turn it off:** disable it in Claude Code's plugin list (desktop app: **+** next to the prompt box → **Plugins** →

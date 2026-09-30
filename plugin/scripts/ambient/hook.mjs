@@ -51,6 +51,7 @@ import { acquire, heldByOther, pipelineSinceOf, release } from "./lib/project-lo
 import * as Q from "./lib/queue.mjs";
 import { handoffMessage } from "./lib/handoff-route.mjs";
 import * as H from "./lib/handoff.mjs";
+import { createdByHand, fileKind } from "./lib/handoff-net.mjs";
 
 const SELF_STOP_MS = 1500;
 const BREAKER_FAILURES = 3;
@@ -344,6 +345,31 @@ function blockUntilStarted(ctx) {
   return true;
 }
 
+/**
+ * Hand-off mode's safety net: a NEW document or test file of the project is not typed by hand, with the Write tool
+ * or through the shell; it goes to the hand-off tool, which has it written and checked (lib/handoff-net.mjs says
+ * which files). Whoever in the chat makes the call, a helper included: the work is the chat's. It stands down
+ * when handing off is not possible or not wanted: the file exists (a change to it is the chat model's own edit), a
+ * failed hand-off handed it back, the chat is running a workflow (which has its own rules for what is written),
+ * or the hand-off cannot run here (then the model is told so by the prompt hook and does the work itself).
+ */
+function typedByHandNet(ctx) {
+  const tool = String(ctx.input.tool_name ?? "");
+  if ((tool !== "Write" && tool !== "Bash") || ctx.pipeline) return;
+  const paths = createdByHand(tool, ctx.input.tool_input, { cwd: ctx.cwd, projectDir: ctx.projectDir });
+  if (!paths.length) return;
+  const released = new Set(H.releasedPaths(ctx.sid));
+  const path = paths.find((p) => fileKind(p) && !existsSync(join(ctx.projectDir, p)) && !released.has(p));
+  if (!path) return;
+  if (H.handoffRoutes(ctx.sid, H.readStamp(ctx.sid)).error) return;
+  const kind = fileKind(path);
+  appendEvent(ctx.sid, "handoff.by_hand_refused", { tool, kind, path });
+  emit({
+    systemMessage: H.byHandLine(path, kind),
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: H.byHandReason(path, kind) },
+  });
+}
+
 /** Refuses the tool call this PreToolUse hook is about, with the reason the model reads, and logs it. */
 function deny(ctx, event, why) {
   appendEvent(ctx.sid, event, { tool: String(ctx.input.tool_name ?? "") });
@@ -514,7 +540,9 @@ const handlers = {
   "pre-any"(ctx) {
     // Guard A: one catch-all, so every tool that can change something waits
     // for a routed workflow's start, whoever calls it (blockUntilStarted).
-    blockUntilStarted(ctx);
+    if (blockUntilStarted(ctx)) return;
+    // Hand-off mode's safety net rides on the same catch-all, so no extra hook runs in any chat.
+    if (ctx.config.mode === "b") typedByHandNet(ctx);
   },
 
   "post-skill"(ctx) {
