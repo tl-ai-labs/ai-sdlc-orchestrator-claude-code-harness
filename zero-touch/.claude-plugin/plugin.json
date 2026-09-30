@@ -1,0 +1,19 @@
+{
+  "name": "zero-touch",
+  "version": "0.8.4",
+  "description": "Zero-touch for the mmo plugin: plain-words requests start the matching /mmo: workflow; any other message is an ordinary chat. Enable or disable this plugin to switch zero-touch on or off; it takes effect in new chats.",
+  "author": {
+    "name": "Tilicho Labs"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness",
+  "keywords": [
+    "mmo",
+    "zero-touch",
+    "orchestration",
+    "multi-model"
+  ],
+  "dependencies": [
+    "mmo"
+  ]
+}

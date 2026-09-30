@@ -138,8 +138,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only
 ```
 
 This prints the `default_policy` field setup wrote to `.sdlc/project.json`. If the output is
-empty, setup wasn't run for this project — stop and tell the user to run setup first
-([SETUP.md](../../SETUP.md), §5b). Do not proceed to spend anything without a policy the user
+empty, setup wasn't run for this project — stop and tell the user to pick a policy first with
+`/mmo:setup` (its policy step) or `/mmo:policy`. Do not proceed to spend anything without a policy the user
 has explicitly picked or explicitly kept as the shipped default.
 
 Resolve the policy through the `load_policy` MCP tool, passing `policy_name: <resolved-name>` and
@@ -199,12 +199,10 @@ The run records tokens and cost in one of two modes. Present the choice; do not 
   reports. Requires `ANTHROPIC_API_KEY`. Use this whenever the numbers will be shown to anyone.
 - **Estimated** — the judgment-phase tokens are estimated from character counts. No API key needed;
   a Claude Code subscription covers the run. The mechanical-phase numbers are still vendor-reported.
-  This mode also requires `CLAUDE_CODE_SUBAGENT_MODEL` to have been set before `claude` launched,
-  to the policy's driver model: from a terminal, exported or in the `env` block of the project's
-  `.claude/settings.local.json`; from the desktop app, in the `env` block of
-  `~/.claude/settings.json` (the app ignores project settings files). The orchestrator's run-start
-  check stops the run otherwise and prints where to set it, because the driver subagents execute
-  whatever that variable names while the policy only prices the work.
+  The driver subagents run on the model their agent files name (`claude-opus-5`), whatever the
+  chat's own model is, so nothing has to be set before launch. The orchestrator's run-start check
+  stops the run when the policy's driver model is a different one, because the policy only prices
+  the work and the report must price the model that ran.
 
 If `ANTHROPIC_API_KEY` is set, recommend vendor and say why: the numbers reconcile against the
 console. If it is absent, recommend estimated and say what is lost: the judgment-phase figures are

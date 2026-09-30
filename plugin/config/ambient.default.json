@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "routing": "on",
+  "routing_defaults": {
+    "policy": "opus-plus-flash-v38",
+    "auth": "estimated"
+  },
+  "retention_days": 30
+}

@@ -5,6 +5,13 @@ tools: Read, Glob, Grep, Bash
 # Effort is pinned, the same in every run: a helper otherwise inherits the launching session's
 # effort, so a launch flag or setting could change its thinking in one run only.
 effort: high
+# The model is pinned as well, and for the same reason, plus one more: the policy prices this
+# work as that model. Claude Code (2.1.251 and later) gives this line priority over the
+# CLAUDE_CODE_SUBAGENT_MODEL setting and over the chat's own model, so nobody has to set anything
+# and a chat switched to another model cannot move it (checked live in the desktop app).
+# The run-start check (scripts/driver-model-check.mjs) stops a policy whose judgment model is not
+# this one, so the report can never price a model that did not run (the PR #34 defect).
+model: claude-opus-5
 ---
 
 You are the brownfield discovery agent. Your one job is to read the current repository, understand it well enough for downstream phases to work safely, and write two files: a human-readable `discovery.md` and a machine-readable `baseline.json`. **You never write into user source code.** Everything you produce lands under `.sdlc/`.
@@ -345,7 +352,7 @@ On `incremental` refresh, merge the delta into `current.json` in place; the per-
 **Runs only when triggered.** This is the additional step from plan §21 for repos with a stack we don't already know well. When it triggers:
 
 **Trigger conditions (any of):**
-1. Group 3 detected a stack (or dominant stack) that has no matching pre-authored adapter in `plugin/skills/pipeline/stacks/`. In v1, we ship `generic.md`, `nest.md`, `python.md`. So a repo whose primary stack is React/Next.js, Go, Rails, Java, Rust, etc. triggers this step.
+1. Group 3 detected a stack (or dominant stack) that has no matching pre-authored adapter in `${CLAUDE_PLUGIN_ROOT}/skills/pipeline/stacks/`. In v1, we ship `generic.md`, `nest.md`, `python.md`. So a repo whose primary stack is React/Next.js, Go, Rails, Java, Rust, etc. triggers this step.
 2. Repo-root `CLAUDE.md` explicitly declares a custom framework — grep for phrases like `custom framework`, `internal framework`, `bespoke framework`, `in-house framework`, or a `## Framework:` heading pointing at something unfamiliar.
 3. The caller passed `--adaptive-profile` (forces the step regardless of stack detection).
 

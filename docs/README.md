@@ -33,6 +33,7 @@ Look things up. Exact answers, exhaustive.
 | [Brownfield setup issues (17 known)](brownfield-setup-issues.md) | Every install-time issue that has hit real users and how the plugin handles each. |
 | [Understanding output](understanding-output.md) | Reading `telemetry.jsonl`, `manifest.json`, `provenance.json`, and the cost report. |
 | [Logging](logging.md) | The `MMO:` log stream — format, levels, taxonomy, enablement, redaction. |
+| [Zero-touch](ambient-mode.md) | A plain-words request starts its `/mmo:` workflow with no command typed: how requests are recognised, the hooks, what is stored, the settings, how to turn it on and off (the separate `zero-touch` plugin). |
 
 ## Concepts
 

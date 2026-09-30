@@ -345,10 +345,12 @@ test("the setup script ships inside the plugin, where an install can reach it", 
   // It lives under plugin/ on purpose: the plugin directory is what gets
   // copied into the plugin cache, so the script is present after an install
   // even when the user never cloned the repo.
+  // Only the mmo plugin has setup: the zero-touch plugin (29 Sep 2026) writes one record at each chat's start and
+  // needs nothing set up of its own.
   const { plugins } = readJson(".claude-plugin/marketplace.json");
-  for (const p of plugins) {
-    assert.ok(existsSync(join(ROOT, p.source, "scripts", "verify-setup.mjs")));
-  }
+  const mmo = plugins.find((p) => p.name === "mmo");
+  assert.ok(existsSync(join(ROOT, mmo.source, "scripts", "verify-setup.mjs")));
+  assert.ok(plugins.every((p) => p.name === "mmo" || existsSync(join(ROOT, p.source, ".claude-plugin", "plugin.json"))), "every other plugin in the catalogue is a real plugin folder");
 });
 
 test("SETUP.md quotes the names the catalogue actually publishes", () => {

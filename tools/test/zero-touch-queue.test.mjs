@@ -1,0 +1,378 @@
+/**
+ * A second job while a workflow runs (zero-touch 0.8.4, step 3): zero-touch chats only, mmo untouched.
+ *
+ * Why: on 29 Sep a chat typed /mmo:bugfix, then /mmo:docs while the bug fix was running; docs started and the bug
+ * fix was dropped without a word. In a zero-touch chat a new job that arrives while a workflow runs (plain words,
+ * a typed /mmo: workflow command, or the model starting one) is held, and the model asks the person one question,
+ * "Queue it" or "Replace it", as a multiple-choice question whose answer the hook reads exactly:
+ *   - Queue it: first-in-first-out; the job starts by itself at the end of the turn in which the running
+ *     workflow's own log shows it ended; a duplicate is not added; the queue ends with the chat (or /clear).
+ *   - Replace it: the running workflow is stopped the way mmo's own abort stops it (its run log records the abort,
+ *     a brownfield write lock of that run is switched off), then the new one starts.
+ * A message typed while a workflow's question is open (a gate, or its first questions) is that question's answer,
+ * never a new job. A project lock stops two chats running workflows in one project.
+ *
+ * Platform facts these rest on, probed on Claude Code 2.1.283 on 29 Sep through the desktop app's own transport
+ * (stream-json): a /command sent while Claude works waits and runs as its own turn after the running one; plain
+ * words sent while Claude works join the running turn; a UserPromptSubmit "block" keeps a typed command from the
+ * model and shows the person the reason; UserPromptExpansion and UserPromptSubmit of one typed command carry the
+ * same prompt_id; a multiple-choice answer reaches PostToolUse as tool_response.answers[question] = label.
+ *
+ * Every case runs through the real shell shim with its own MMO_HOME and project folder. No network, no model.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
+const { startingChats } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
+const { serverBuilt } = await import(join(ROOT, "tools", "test", "lib", "server-built.mjs"));
+const { formatLine } = await import(join(ROOT, "plugin", "scripts", "lib", "log.mjs"));
+// Starting a workflow asks the workflows' own model check, which needs the built server.
+const SKIP = serverBuilt();
+const SHIM = join(ROOT, "plugin", "hooks", "ambient.sh");
+
+function sandbox() {
+  const dir = mkdtempSync(join(tmpdir(), "mmo-zt-queue-"));
+  const home = join(dir, "home");
+  const repo = join(dir, "repo");
+  mkdirSync(home);
+  mkdirSync(repo);
+  writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
+  return { dir, home, repo, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+function runOnce(event, payload, { home, repo }, env = {}) {
+  return new Promise((done) => {
+    const childEnv = { PATH: process.env.PATH, HOME: home, MMO_HOME: home, CLAUDE_PROJECT_DIR: repo, ...env };
+    const p = spawn("sh", [SHIM, event], { cwd: repo, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    p.stdout.on("data", (c) => (stdout += c));
+    p.on("close", (code) => {
+      let json = null;
+      try { json = stdout ? JSON.parse(stdout) : null; } catch { /* left null */ }
+      done({ code, stdout, json });
+    });
+    p.stdin.on("error", () => {});
+    p.stdin.end(JSON.stringify(payload));
+  });
+}
+const run = startingChats(runOnce, (s) => s.home, { envOf: (s, env) => env ?? {} });
+
+let promptSeq = 0;
+const say = (s, sid, text, extra = {}) => run("prompt", { session_id: sid, cwd: s.repo, prompt: text, prompt_id: extra.prompt_id ?? `p-${++promptSeq}`, ...extra }, s);
+/** A typed command: Claude Code fires the expansion hook, then the prompt hook, with one prompt_id. */
+async function typed(s, sid, line) {
+  const prompt_id = `t-${++promptSeq}`;
+  const name = /^\/(\S+)/.exec(line)[1];
+  const exp = await run("prompt-expansion", { session_id: sid, cwd: s.repo, prompt: line, prompt_id, command_name: name, expansion_type: "slash_command" }, s);
+  const sub = await run("prompt", { session_id: sid, cwd: s.repo, prompt: line, prompt_id }, s);
+  return { exp, sub, prompt_id };
+}
+const skill = (s, sid, name, args) => run("pre-skill", { session_id: sid, cwd: s.repo, tool_name: "Skill", tool_input: { skill: name, ...(args ? { args } : {}) } }, s);
+const tool = (s, sid, tool_name, tool_input = {}) => run("pre-any", { session_id: sid, cwd: s.repo, tool_name, tool_input }, s);
+const agent = (s, sid, type) => run("pre-agent", { session_id: sid, cwd: s.repo, tool_name: "Agent", tool_input: { subagent_type: type, prompt: "x" } }, s);
+const turnEnd = (s, sid, extra = {}) => run("turn-end", { session_id: sid, cwd: s.repo, stop_hook_active: false, ...extra }, s);
+function answer(s, sid, label) {
+  const q = choice(s, sid)?.question;
+  return run("post-question", { session_id: sid, cwd: s.repo, tool_name: "AskUserQuestion", tool_input: { questions: [{ question: q }] }, tool_response: { questions: [{ question: q }], answers: { [q]: label } } }, s);
+}
+const context = (r) => r.json?.hookSpecificOutput?.additionalContext ?? "";
+const denied = (r) => r.json?.hookSpecificOutput?.permissionDecision === "deny";
+const reason = (r) => r.json?.hookSpecificOutput?.permissionDecisionReason ?? "";
+const read = (s, sid, name) => { try { return JSON.parse(readFileSync(join(s.home, "sessions", sid, name), "utf8")); } catch { return null; } };
+const choice = (s, sid) => read(s, sid, "choice.json");
+const queue = (s, sid) => read(s, sid, "queue.json") ?? [];
+const pipelineJob = (s, sid) => read(s, sid, "pipeline")?.job ?? null;
+const events = (s, sid) => readFileSync(join(s.home, "sessions", sid, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+
+function workflowLog(s, runId, ...lines) {
+  const dir = join(s.repo, ".sdlc", "runs", runId);
+  mkdirSync(dir, { recursive: true });
+  for (const [event, fields] of lines) appendFileSync(join(dir, "orchestrator.log"), formatLine("info", event, { run_id: runId, ...fields }) + "\n");
+}
+const logText = (s, runId) => readFileSync(join(s.repo, ".sdlc", "runs", runId, "orchestrator.log"), "utf8");
+
+const BUGFIX = "fix the /login endpoint returning 500 on missing password";
+const DOCS = "add jsdoc to every function in src/cart.js";
+const TESTS = "write unit tests for the pricing functions in src/cart.js";
+
+/** A routed bug-fix workflow, started and past its first gate: running, no question open. */
+async function runningBugfix(s, sid, { gateOpen = false } = {}) {
+  await say(s, sid, BUGFIX);
+  assert.equal((await skill(s, sid, "mmo:bugfix", BUGFIX)).stdout, "", "the bug fix starts");
+  workflowLog(s, `bf-${sid}`, ["run.start", { mode: "brownfield" }], ["gate.open", { gate: "gate-0", title: "scope" }]);
+  if (!gateOpen) workflowLog(s, `bf-${sid}`, ["gate.resolved", { gate: "gate-0", response: "approved" }]);
+}
+const endBugfix = (s, sid) => workflowLog(s, `bf-${sid}`, ["run.end", { outcome: "completed" }], ["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]);
+
+test("plain words for a new job while a workflow runs: the model must ask Queue it / Replace it before anything else", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q1");
+    const c = context(await say(s, "q1", DOCS));
+    assert.match(c, /AskUserQuestion/);
+    assert.match(c, /"Queue it"/);
+    assert.match(c, /"Replace it"/);
+    assert.match(c, /bug-fix workflow/, "names the running workflow in plain words");
+    assert.match(c, /documentation workflow/, "names the new one in plain words");
+    assert.doesNotMatch(c, /mmo:/, "no command name for the person to repeat");
+    const ch = choice(s, "q1");
+    assert.equal(ch.job, "docs");
+    assert.equal(ch.args, DOCS);
+    assert.ok(c.includes(ch.question), "the question the model is told to ask is the one the hook will read");
+    // Until the person answers, nothing that changes anything runs; asking and reading still do.
+    for (const t of ["Write", "Bash", "Edit", "Agent"]) assert.ok(denied(await tool(s, "q1", t)), `${t} waits for the answer`);
+    for (const t of ["AskUserQuestion", "Read", "Grep"]) assert.equal((await tool(s, "q1", t)).stdout, "", `${t} runs`);
+    assert.ok(denied(await agent(s, "q1", "mmo:orchestrator")), "the running workflow's helpers wait too");
+    assert.ok(denied(await skill(s, "q1", "mmo:docs", DOCS)), "the new workflow cannot start before the answer");
+  } finally { s.cleanup(); }
+});
+
+test("a message typed while the workflow's question is open is its answer, never a new job", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q2", { gateOpen: true });
+    const r = await say(s, "q2", DOCS);
+    assert.equal(context(r), "", "gate 0 is open: the message answers it, and nothing is added for the model");
+    assert.equal(r.json?.hookSpecificOutput, undefined);
+    assert.equal(choice(s, "q2"), null);
+  } finally { s.cleanup(); }
+});
+
+test("Queue it: the job waits; it starts by itself at the end of the turn in which the running workflow ended", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q3");
+    await say(s, "q3", DOCS);
+    const a = await answer(s, "q3", "Queue it");
+    assert.match(context(a), /queued/i);
+    assert.equal(choice(s, "q3"), null, "the question is settled");
+    assert.deepEqual(queue(s, "q3").map((q) => q.job), ["docs"]);
+    assert.equal((await tool(s, "q3", "Bash")).stdout, "", "the running workflow carries on");
+    assert.equal((await turnEnd(s, "q3")).stdout, "", "the bug fix is still running: nothing starts");
+    endBugfix(s, "q3");
+    const e = await turnEnd(s, "q3");
+    assert.equal(e.json?.decision, "block", "the turn continues with the queued job");
+    assert.match(e.json?.reason ?? "", /Skill tool/);
+    assert.match(e.json?.reason ?? "", /"mmo:docs"/);
+    assert.ok(denied(await tool(s, "q3", "Write")), "Guard A: nothing else first");
+    assert.equal((await skill(s, "q3", "mmo:docs", DOCS)).stdout, "", "the queued workflow starts");
+    assert.equal(pipelineJob(s, "q3"), "docs");
+    assert.deepEqual(queue(s, "q3"), [], "it left the queue when it started");
+  } finally { s.cleanup(); }
+});
+
+test("the queue is first-in-first-out and a duplicate is not added", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q4");
+    await say(s, "q4", DOCS);
+    await answer(s, "q4", "Queue it");
+    await say(s, "q4", TESTS);
+    await answer(s, "q4", "Queue it");
+    await say(s, "q4", DOCS);
+    const dup = await answer(s, "q4", "Queue it");
+    assert.match(context(dup), /already queued/i);
+    assert.deepEqual(queue(s, "q4").map((q) => q.job), ["docs", "test"]);
+    endBugfix(s, "q4");
+    assert.match((await turnEnd(s, "q4")).json?.reason ?? "", /"mmo:docs"/, "first in, first out");
+    await skill(s, "q4", "mmo:docs", DOCS);
+    workflowLog(s, "docs-1", ["run.start", {}], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "approved" }], ["run.end", { outcome: "completed" }]);
+    assert.match((await turnEnd(s, "q4")).json?.reason ?? "", /"mmo:test"/, "then the next one");
+  } finally { s.cleanup(); }
+});
+
+test("a queued start the model does not make is not pushed again in a loop; the job stays queued", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q5");
+    await say(s, "q5", DOCS);
+    await answer(s, "q5", "Queue it");
+    endBugfix(s, "q5");
+    assert.equal((await turnEnd(s, "q5")).json?.decision, "block");
+    const again = await turnEnd(s, "q5", { stop_hook_active: true });
+    assert.equal(again.stdout, "", "the turn is allowed to end");
+    assert.deepEqual(queue(s, "q5").map((q) => q.job), ["docs"], "still queued for the next turn");
+    assert.equal((await tool(s, "q5", "Write")).stdout, "", "nothing stays blocked");
+  } finally { s.cleanup(); }
+});
+
+test("Replace it: the running workflow is stopped as mmo's own abort stops it, then the new one starts", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q6");
+    mkdirSync(join(s.repo, ".sdlc", "local"), { recursive: true });
+    writeFileSync(join(s.repo, ".sdlc", "local", "write-contract.json"), JSON.stringify({ schema_version: 1, active: true, mode: "brownfield", run_id: "bf-q6", strict: true, allowlist: ["src/**"], off_limits: [] }));
+    await say(s, "q6", DOCS);
+    const a = await answer(s, "q6", "Replace it");
+    assert.match(logText(s, "bf-q6"), /run\.end run_id=bf-q6 outcome=aborted/, "the run's own log records the abort");
+    assert.equal(JSON.parse(readFileSync(join(s.repo, ".sdlc", "local", "write-contract.json"), "utf8")).active, false, "its write lock is switched off, as mmo's abort does");
+    assert.match(context(a), /"mmo:docs"/, "the model is told to start the new one now");
+    assert.equal((await skill(s, "q6", "mmo:docs", DOCS)).stdout, "");
+    assert.equal(pipelineJob(s, "q6"), "docs");
+    assert.ok(events(s, "q6").some((e) => e.type === "route.replaced"));
+  } finally { s.cleanup(); }
+});
+
+test("a write lock of another run is left alone by a replace", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q7");
+    mkdirSync(join(s.repo, ".sdlc", "local"), { recursive: true });
+    writeFileSync(join(s.repo, ".sdlc", "local", "write-contract.json"), JSON.stringify({ schema_version: 1, active: true, run_id: "someone-else", allowlist: [], off_limits: [] }));
+    await say(s, "q7", DOCS);
+    await answer(s, "q7", "Replace it");
+    assert.equal(JSON.parse(readFileSync(join(s.repo, ".sdlc", "local", "write-contract.json"), "utf8")).active, true);
+  } finally { s.cleanup(); }
+});
+
+test("a typed /mmo: workflow command while one runs gets the same question; its text stays with the model", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q8", { gateOpen: true });
+    const { exp, sub } = await typed(s, "q8", `/mmo:docs ${DOCS}`);
+    assert.equal(exp.stdout, "", "the expansion hook is not zero-touch's any more: the prompt hook decides");
+    assert.match(context(sub), /"Queue it"/, "a typed command is never a gate's answer: the question is asked");
+    assert.equal(choice(s, "q8").via, "typed");
+    assert.equal(events(s, "q8").filter((e) => e.type === "route.ask").length, 1, "one typed command, one question");
+    assert.ok(denied(await tool(s, "q8", "Bash")));
+  } finally { s.cleanup(); }
+});
+
+test("typed, then Queue it: nothing of the typed command runs this turn; the hold ends with the turn", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q9", { gateOpen: true });
+    await typed(s, "q9", `/mmo:docs ${DOCS}`);
+    const a = await answer(s, "q9", "Queue it");
+    assert.match(context(a), /Do not run the command/i);
+    const b = await tool(s, "q9", "Bash");
+    assert.ok(denied(b) && /queued/i.test(reason(b)), "the command's own steps may not run now");
+    assert.ok(denied(await agent(s, "q9", "mmo:orchestrator")));
+    await turnEnd(s, "q9");
+    assert.equal((await tool(s, "q9", "Bash")).stdout, "", "the hold ended with the turn");
+    assert.deepEqual(queue(s, "q9").map((q) => [q.job, q.args]), [["docs", DOCS]]);
+  } finally { s.cleanup(); }
+});
+
+test("typed, then Replace it: the old run is aborted and the typed command carries on as the chat's workflow", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q10", { gateOpen: true });
+    await typed(s, "q10", `/mmo:docs ${DOCS}`);
+    const a = await answer(s, "q10", "Replace it");
+    assert.match(logText(s, "bf-q10"), /outcome=aborted/);
+    assert.match(context(a), /Carry on with the command the person typed/);
+    assert.equal(pipelineJob(s, "q10"), "docs");
+    assert.equal((await agent(s, "q10", "mmo:orchestrator")).stdout, "", "the new workflow's helpers run");
+    assert.equal((await tool(s, "q10", "Bash")).stdout, "");
+  } finally { s.cleanup(); }
+});
+
+test("the model starting a second workflow by itself mid-run is refused with the question to ask", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q11");
+    const r = await skill(s, "q11", "mmo:docs", DOCS);
+    assert.ok(denied(r));
+    assert.match(reason(r), /"Queue it"/);
+    assert.equal(choice(s, "q11").via, "skill");
+    assert.equal((await skill(s, "q11", "mmo:brownfield-guide")).stdout, "", "the workflow's own manual still loads");
+  } finally { s.cleanup(); }
+});
+
+test("an answer that is neither drops the question and starts nothing; so does a new message", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q12");
+    await say(s, "q12", DOCS);
+    const a = await answer(s, "q12", "hmm, not now");
+    assert.match(context(a), /neither/i);
+    assert.equal(choice(s, "q12"), null);
+    assert.deepEqual(queue(s, "q12"), []);
+    await say(s, "q12", DOCS);
+    await say(s, "q12", "what does the checkout do?");
+    assert.equal(choice(s, "q12"), null, "a question belongs to one message");
+    assert.equal((await tool(s, "q12", "Bash")).stdout, "");
+  } finally { s.cleanup(); }
+});
+
+test("a person who types the answer instead of clicking it is understood only when they type an option exactly", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q13");
+    await say(s, "q13", DOCS);
+    const r = await say(s, "q13", "Queue it.");
+    assert.match(context(r), /queued/i);
+    assert.deepEqual(queue(s, "q13").map((q) => q.job), ["docs"]);
+  } finally { s.cleanup(); }
+});
+
+test("/clear ends the queue and any open question with the conversation", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q14");
+    await say(s, "q14", DOCS);
+    await answer(s, "q14", "Queue it");
+    await say(s, "q14", TESTS);
+    await run("session-start", { session_id: "q14", cwd: s.repo, source: "clear" }, s);
+    assert.deepEqual(queue(s, "q14"), []);
+    assert.equal(choice(s, "q14"), null);
+  } finally { s.cleanup(); }
+});
+
+test("a project lock: a second chat cannot start a workflow in a project where another chat runs one", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "owner");
+    const c = context(await say(s, "other", TESTS));
+    assert.doesNotMatch(c, /"mmo:test"/, "not started");
+    assert.match(c, /another chat/i);
+    const t = await typed(s, "other", `/mmo:docs ${DOCS}`);
+    assert.equal(t.sub.json?.decision, "block", "a typed command is kept from the model");
+    assert.match(t.sub.json?.reason ?? "", /another chat/i);
+    endBugfix(s, "owner");
+    assert.match(context(await say(s, "other", TESTS)), /"mmo:test"/, "once that workflow has ended, the project is free");
+  } finally { s.cleanup(); }
+});
+
+test("a lock left by a chat that was cleared does not hold the project", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "gone");
+    await run("session-start", { session_id: "gone", cwd: s.repo, source: "clear" }, s);
+    assert.match(context(await say(s, "next", TESTS)), /"mmo:test"/);
+  } finally { s.cleanup(); }
+});
+
+test("a typed non-workflow command (setup, policy, revert) never makes the chat a workflow run", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await typed(s, "q15", "/mmo:setup");
+    assert.equal(pipelineJob(s, "q15"), null);
+    assert.equal((await skill(s, "q15", "mmo:setup")).stdout, "", "the typed command itself runs");
+    assert.match(context(await say(s, "q15", TESTS)), /"mmo:test"/, "the next job message routes as usual");
+  } finally { s.cleanup(); }
+});
+
+test("a chat without zero-touch is untouched: a second typed command gets no question and no lock", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    const off = (event, payload) => runOnce(event, payload, s);
+    assert.equal((await off("prompt", { session_id: "plain", cwd: s.repo, prompt: "/mmo:bugfix x", prompt_id: "a" })).stdout, "");
+    assert.equal((await off("prompt", { session_id: "plain", cwd: s.repo, prompt: "/mmo:docs y", prompt_id: "b" })).stdout, "");
+    assert.ok(!existsSync(join(s.home, "sessions", "plain")));
+  } finally { s.cleanup(); }
+});
+
+test("every command the plugin ships is either a workflow or a one-off tool", async () => {
+  const { readdirSync } = await import("node:fs");
+  const { WORKFLOW_COMMANDS, ONE_OFF_COMMANDS } = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "commands.mjs"));
+  const shipped = readdirSync(join(ROOT, "plugin", "commands")).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort();
+  assert.deepEqual([...WORKFLOW_COMMANDS, ...ONE_OFF_COMMANDS].sort(), shipped, "a new command must be classified before it ships");
+});

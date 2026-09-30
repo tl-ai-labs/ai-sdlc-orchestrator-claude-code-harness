@@ -11,13 +11,25 @@
       "name": "mmo",
       "source": "./plugin",
       "description": "Runs a multi-model SDLC pipeline against a project brief. Routes judgment phases to Claude and mechanical phases to a cost-efficient model per policy, and reports what the run spent.",
-      "version": "0.7.12",
+      "version": "0.8.4",
       "author": { "name": "Tilicho Labs" },
       "homepage": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness",
       "repository": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness",
       "license": "MIT",
       "category": "development",
       "keywords": ["mmo", "orchestration", "multi-model", "gemini", "opus", "antigravity"]
+    },
+    {
+      "name": "zero-touch",
+      "source": "./zero-touch",
+      "description": "Zero-touch for mmo: type what you want in plain words and the matching /mmo: workflow starts; any other message is an ordinary chat. Enable or disable this plugin to switch zero-touch on or off; it takes effect in new chats.",
+      "version": "0.8.4",
+      "author": { "name": "Tilicho Labs" },
+      "homepage": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness",
+      "repository": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness",
+      "license": "MIT",
+      "category": "development",
+      "keywords": ["mmo", "zero-touch", "orchestration", "multi-model"]
     }
   ]
 }

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "_comment": "The whole of this plugin: at the start of each chat (and after /clear) it decides from the person's mode file whether the chat has zero-touch, marks the chat, and shows the person one message saying so (again after a compaction or a reopened chat). The mmo plugin, which holds all of zero-touch's code, hooks and tools, acts only in a chat so marked (plugin/scripts/ambient/lib/chat-mode.mjs). Always exits 0.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/start-chat.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

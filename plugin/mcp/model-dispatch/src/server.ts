@@ -452,6 +452,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    // The pipeline's tools and the executor's only. 0.8.4 removed the ten chat-worker tools the generic orchestrator
+    // (zero-touch's ask 1) listed here in every chat, workflow runs included; zero-touch's workflow routing needs no
+    // tool of its own (test/toolList.test.mjs).
     ...EXECUTOR_TOOLS,
   ],
 }));

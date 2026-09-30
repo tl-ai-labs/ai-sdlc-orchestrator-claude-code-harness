@@ -1,6 +1,6 @@
 # Repo guide
 
-This repository holds `mmo` (Multi-Model Orchestrator) v0.7.12 — a Claude Code plugin that runs a
+This repository holds `mmo` (Multi-Model Orchestrator) v0.8.4 — a Claude Code plugin that runs a
 full software-delivery pipeline against a brief (requirements → design → code → senior review →
 tests → security review), routes each phase to the model that fits it, and records what each phase
 cost — plus the harness, tests and documentation that ship it.
@@ -77,8 +77,8 @@ path, one API call per unit of work, nothing here is installed and nothing here 
 | `config/intents.json` | The seven brownfield job types. |
 | `mcp/model-dispatch/` | The MCP server package (see the table above). |
 | `policy-console/` | The policy console package. |
-| `scripts/` | Node scripts the commands shell out to — setup checks, credential discovery, the write-contract hook, provenance recording, run logging. |
-| `hooks/` | `hooks.json` registers: a `PreToolUse` write-contract check that refuses edits outside an approved file list, a `PreToolUse` rule that keeps the pipeline's own helpers in the foreground, the executor guard (`PreToolUse` and `PostToolUse`) that keeps a greenfield executor run's orchestrator to its own record folder, and a `PostToolUse` telemetry heartbeat. |
+| `scripts/` | Node scripts the commands shell out to — setup checks, credential discovery, the write-contract hook, provenance recording, run logging. `scripts/ambient/` holds zero-touch: the hook dispatcher and its libraries (recognition, the hand-off, the chat's on/off record) ([ambient-mode.md](ambient-mode.md)). |
+| `hooks/` | `hooks.json` registers: a `PreToolUse` write-contract check that refuses edits outside an approved file list, a `PreToolUse` rule that keeps the pipeline's own helpers in the foreground, the executor guard (`PreToolUse` and `PostToolUse`) that keeps a greenfield executor run's orchestrator to its own record folder, a `PostToolUse` telemetry heartbeat, and zero-touch's eight routing hooks, which all go through the POSIX shim `ambient.sh`, set a timeout of 5 s, and do nothing in a chat the zero-touch plugin did not mark. The pipeline's own hooks keep no timeout of their own. |
 | `templates/` | Fragments copied into a target project, such as the `.gitignore` entry for run artifacts. |
 | `examples/` | Sandbox projects you point the plugin at by hand — six tiny apps, one per brownfield job type — plus copies of the four example briefs, which live here because only `plugin/` is copied on install. |
 

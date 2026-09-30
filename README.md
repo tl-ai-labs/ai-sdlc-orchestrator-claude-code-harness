@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.7.12-blue)](.claude-plugin/marketplace.json)
+[![Version](https://img.shields.io/badge/version-0.8.4-blue)](.claude-plugin/marketplace.json)
 
 ![How the plugin works — you paste two prompts, an orchestrator routes premium work to Claude Opus and mechanical work to Gemini Flash, and your project gets both generated code and a full audit trail](docs/assets/hero.svg)
 
@@ -218,6 +218,8 @@ Both check the install, show which model each phase will run on, confirm the pla
 
 Thirteen commands, split by purpose. All are declared in [plugin/commands/](plugin/commands/) with the same descriptions shown here.
 
+To start the right workflow from a plain request without typing a command, see [zero-touch](docs/ambient-mode.md): install the separate `zero-touch` plugin from the same marketplace to switch it on, disable it to switch it off (with it off, the `mmo` plugin behaves exactly as without it). Any message that is not one of the eight jobs stays an ordinary chat.
+
 ### Run the pipeline
 
 | Command | What it does | When to use it |
@@ -328,6 +330,7 @@ node tools/setup.mjs
 - [docs/methodology.md](docs/methodology.md) — how tokens and costs are recorded
 - [docs/two-gemini-paths.md](docs/two-gemini-paths.md) — measured comparison of the two doors on the same brief
 - [docs/brownfield-routing.md](docs/brownfield-routing.md) — which model does which work
+- [docs/ambient-mode.md](docs/ambient-mode.md) — zero-touch: a plain-words request starts its `/mmo:` workflow, no command typed (its own plugin, `zero-touch`: enable it to switch it on)
 - [docs/walkthroughs/](docs/walkthroughs/) — the two Gemini paths, frame by frame ([model](docs/walkthroughs/model-path.html), [agent](docs/walkthroughs/agent-path.html))
 - [examples/unit-convert/](examples/unit-convert/) — one endpoint, one conversion, minutes to run
 - [examples/quick-demo/](examples/quick-demo/) — one-endpoint ping service, minutes to run

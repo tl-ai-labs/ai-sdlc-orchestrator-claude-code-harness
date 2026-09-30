@@ -50,14 +50,27 @@ Check the version it reports against `.claude-plugin/marketplace.json` on the re
 branch. If they differ, the refresh above was skipped; run it and install again.
 
 The plugin's files are in place from here on, but neither its slash commands nor its bundled model
-server are live in this session, and no reload makes them so: Claude Code builds the command list
-and starts plugin MCP servers when a session starts. Do not go looking for a reload command —
-`/reload-plugins` does not exist in the desktop app, and running it wastes the user's turn on an
-error. Step 6 says what to tell them instead, and why running the pipeline here would produce a
-wrong answer rather than merely an inconvenient one.
+server are live in this session: Claude Code builds the command list and starts plugin MCP servers
+when a session starts. This setup hands over with a new session (step 6), which is the path it has
+been checked with. `/reload-plugins` exists in the desktop app as well as the terminal (seen in
+Claude Code 2.1.283 on 29 Sep 2026; an earlier version of this file said it did not), but whether it
+makes this plugin's commands and server live mid-setup has not been checked, so do not rely on it.
+Step 6 says what to tell them instead, and why running the pipeline here would produce a wrong
+answer rather than merely an inconvenient one.
 
 Continue with the build below. It runs as a shell command and does not need the plugin's slash
 commands to exist.
+
+**Zero-touch is a separate, optional plugin.** Only if the user wants plain-words requests to start the
+matching workflow without typing a command (every other message stays an ordinary chat):
+
+```
+/plugin install zero-touch@tilicho-ai-labs
+```
+
+It needs `mmo` (installing it brings `mmo` along) and has nothing to build or set: it only marks each
+new chat at its start. Enabled, every new chat has zero-touch; disabled in the plugin list (desktop
+app: **+** → **Plugins** → **Manage plugins**), new chats have none. See `docs/ambient-mode.md`.
 
 ## 3. Build the bundled model server
 

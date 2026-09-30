@@ -10,7 +10,7 @@ pause only when a human decision is genuinely required.
 
 **Argument parsing:**
 - `--policy=<name>` — pre-answer the policy pick (skips the browser). Must match a file in
-  `plugin/config/policies/<name>.yaml` — the directory listing is the authoritative preset set
+  `${CLAUDE_PLUGIN_ROOT}/config/policies/<name>.yaml` — the directory listing is the authoritative preset set
   (`opus-plus-flash` is the recommended default; a wrong name makes the loader print the live
   list).
 - `--gemini-door=<enterprise|antigravity>` — pre-answer the Gemini door choice. `enterprise` is the
@@ -21,7 +21,7 @@ pause only when a human decision is genuinely required.
 # Scope
 
 This is the RE-VERIFY / RE-CONFIGURE command. First-time install (marketplace add + `/plugin
-install`) still lives in [SETUP.md](../../SETUP.md) — the plugin has to exist before its slash
+install`) still lives in the repository's `SETUP.md` — the plugin has to exist before its slash
 commands do. `/mmo:setup` covers everything from step 3 of SETUP.md onward: MCP server build,
 environment check, credential probe, Gemini door, policy pick, and the hand-over banner.
 
