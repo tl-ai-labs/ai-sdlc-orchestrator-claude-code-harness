@@ -33,6 +33,17 @@
         ]
       },
       {
+        "_comment": "Zero-touch hand-off mode (docs/ambient-mode.md, Hand-off mode). Before a hand-off tool runs: in a hand-off chat the call gets the hook's stamp (the chat, the project folder, who pays), which the server needs to find the chat's policy and models; in a chat in workflow mode, and inside a workflow run, the call is refused with the reason. A chat without zero-touch ends in the shim before node starts, and the server refuses the unstamped call itself. Always exits 0; decisions are JSON on stdout.",
+        "matcher": "mcp__(plugin_mmo_)?model-dispatch__(write_document|write_tests_from_cases|repeat_edit_across_files|undo_hand_off)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" pre-handoff",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "_comment": "Zero-touch workflow routing (docs/ambient-mode.md). Acts only in a chat the zero-touch plugin marked at its start (or for one run under MMO_AMBIENT); otherwise the shim exits before node starts. Always exits 0; decisions are JSON on stdout. Guard B: a /mmo: workflow starts only when routing recognised the message, the person typed it, or the queue or a replace starts it; the chat starting a second one mid-run is held for the Queue-or-Replace question.",
         "matcher": "Skill",
         "hooks": [
@@ -73,6 +84,17 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/telemetry.sh\""
+          }
+        ]
+      },
+      {
+        "_comment": "Zero-touch hand-off mode (docs/ambient-mode.md, Hand-off mode). After a hand-off tool answered: the person sees one line written from the tool's receipt (what was written, by which model, what it cost; or that the hand-off failed). Decides nothing and adds nothing for the model. Always exits 0.",
+        "matcher": "mcp__(plugin_mmo_)?model-dispatch__(write_document|write_tests_from_cases|repeat_edit_across_files|undo_hand_off)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" post-handoff",
+            "timeout": 5
           }
         ]
       },
@@ -140,6 +162,30 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" turn-end",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreModelSwitch": [
+      {
+        "_comment": "Zero-touch hand-off mode (docs/ambient-mode.md, Hand-off mode). Acts only in a chat the zero-touch plugin marked for hand-off at its start; in every other chat the shim exits or the hook answers nothing. Always exits 0; decisions are JSON on stdout. Keeps a hand-off chat on its pinned model: a switch to another model is refused, a switch to the pinned one passes, and a switch whose target cannot be read is never refused.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" pre-model-switch",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "_comment": "Zero-touch hand-off mode (docs/ambient-mode.md, Hand-off mode). Acts only in a hand-off chat. Always exits 0 and decides nothing: it keeps the model the chat is on now, so the line the person sees after each message names the model really in use.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" post-model-switch",
             "timeout": 5
           }
         ]

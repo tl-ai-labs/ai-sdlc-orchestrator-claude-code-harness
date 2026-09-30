@@ -5,5 +5,9 @@
     "policy": "opus-plus-flash-v38",
     "auth": "estimated"
   },
+  "handoff": {
+    "chat_model": "claude-opus-5",
+    "policy": "opus-plus-flash-v38"
+  },
   "retention_days": 30
 }

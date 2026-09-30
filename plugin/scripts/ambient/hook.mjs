@@ -10,6 +10,13 @@
  * something wait (Guard A, pre-any) and only that workflow's command may start (Guard B, pre-skill). Every other
  * message and every other tool call passes untouched: the chat is plain Claude Code.
  *
+ * Hand-off mode (a chat the zero-touch plugin marked "b"; docs/ambient-mode.md, "Hand-off mode"): the chat's own
+ * model does the development, so plain words start no workflow. A message asking for a new document, spec, plan,
+ * tests or the same change across files is recognised by fixed rules (lib/handoff-route.mjs) and the chat's model is
+ * reminded to hand that work to the hand-off tools; the person sees one line saying where the work goes
+ * (lib/handoff.mjs). The chat is kept on its pinned model: a switch to another model is refused (pre-model-switch).
+ * A workflow command the person types runs as in any chat.
+ *
  * A second job while a workflow runs (0.8.4, lib/queue.mjs): plain words recognised as a job, a typed /mmo:
  * workflow command, or the model starting one is held, and the model asks the person "Queue it" or "Replace it";
  * the answer is read from the multiple-choice result (post-question). A queued job starts by itself at the end of
@@ -25,6 +32,7 @@
  *     crash here can never block a tool call or a prompt. No handler relies on exit 2.
  *   - A chat without the zero-touch mark returns before touching the disk (the shim, then lib/chat-mode.mjs).
  *     Mode "observe", a workflow run and a helper agent's call start nothing.
+ *   - Modes: "on" is workflow mode, "b" is hand-off mode; zero-touch acts in both (acts()). "observe" only records.
  *   - No prompt text, file content or command output is ever stored. Paths, sizes, rule ids and numbers only.
  */
 import { randomUUID } from "node:crypto";
@@ -41,6 +49,8 @@ import { folderKind, routeMessage } from "./lib/route.mjs";
 import { PERSON_LINE as L, cannotStartInstruction, dropRoute, KEEP_OUT, NOT_NOW_REASON, plainName, readRoute, saveWorkflowPolicy, startFirstReason, startInstruction, startProblem, typedBusyReason, writeRoute } from "./lib/route-flow.mjs";
 import { acquire, heldByOther, pipelineSinceOf, release } from "./lib/project-lock.mjs";
 import * as Q from "./lib/queue.mjs";
+import { handoffMessage } from "./lib/handoff-route.mjs";
+import * as H from "./lib/handoff.mjs";
 
 const SELF_STOP_MS = 1500;
 const BREAKER_FAILURES = 3;
@@ -73,9 +83,7 @@ function emit(obj) {
   process.stdout.write(JSON.stringify(obj));
 }
 
-function canonicalModel(name) {
-  return typeof name === "string" ? name.replace(/\[[^\]]*\]$/, "").trim() : "";
-}
+const canonicalModel = H.canonicalModel;
 
 function num(value, fallback, min = 0) {
   return typeof value === "number" && Number.isFinite(value) && value >= min ? value : fallback;
@@ -112,12 +120,40 @@ function recordFailure(sid, event, err) {
   } catch { /* nothing more to do */ }
 }
 
+/** Zero-touch acts in this chat: workflow mode ("on") or hand-off mode ("b"). A measuring run ("observe") only records. */
+function acts(ctx) {
+  return ctx.config.mode === "on" || ctx.config.mode === "b";
+}
+
 /**
- * Routing (docs/ambient-mode.md, "Routing") may act: zero-touch on for this chat, workflows switched on, no workflow
- * running, and not inside a helper agent.
+ * Routing (docs/ambient-mode.md, "Routing") may act: workflow mode on for this chat, workflows switched on, no
+ * workflow running, and not inside a helper agent. Hand-off mode never routes: there a workflow starts only from a
+ * typed command.
  */
 function routingOn(ctx) {
   return ctx.config.mode === "on" && ctx.config.routing === "on" && !ctx.pipeline && !ctx.agent;
+}
+
+/**
+ * A message typed in a hand-off chat that is idle: which hand-off work it asks for, by the fixed rules. The person
+ * sees where the work goes; the chat's model is reminded which tool takes it. Nothing is started and nothing is
+ * blocked: the chat's model does the work, and hands the recognised part off.
+ */
+function handoffPrompt(ctx, text) {
+  const stamp = H.readStamp(ctx.sid);
+  const chat = H.chatState(stamp, H.chatModelNow(ctx.sid, ctx.input.transcript_path));
+  const asked = handoffMessage(text);
+  if (!asked.kinds.length) {
+    appendEvent(ctx.sid, "handoff.none", { reason: asked.reason });
+    return void say(null, H.HANDOFF_LINE.chatHandles(chat));
+  }
+  const found = H.handoffRoutes(ctx.sid, stamp);
+  if (found.error) {
+    appendEvent(ctx.sid, "handoff.unavailable", { kinds: asked.kinds.join(","), cause: found.error });
+    return void say(H.unavailableInstruction(found), H.HANDOFF_LINE.unavailable(found, chat));
+  }
+  appendEvent(ctx.sid, "handoff.recognised", { kinds: asked.kinds.join(","), rest: asked.rest || undefined });
+  say(H.handoffInstruction(asked), H.HANDOFF_LINE.handoff(asked, found.routes, chat));
 }
 
 /**
@@ -242,7 +278,7 @@ function typedMoment(ctx, cmd) {
   const seen = Q.readTyped(ctx.sid);
   if (seen && pid && seen.prompt_id === pid) return seen.decision ?? {};
   let decision = {};
-  if (cmd.workflow && ctx.config.mode === "on" && !ctx.agent) {
+  if (cmd.workflow && acts(ctx) && !ctx.agent) {
     const lock = heldByOther(ctx.projectDir, ctx.sid);
     if (lock) {
       decision = { block: typedBusyReason(lock) };
@@ -384,9 +420,11 @@ const handlers = {
     if (ctx.pipeline) {
       // Plain words while this chat runs a workflow (0.8.4). A recognised job is held and the person is asked
       // Queue it / Replace it, unless the workflow is waiting for an answer: then the message is that answer.
-      if (ctx.config.mode !== "on" || ctx.agent) return;
+      if (!acts(ctx) || ctx.agent) return;
       const waits = waitingFor(ctx);
       if (waits) return void say(null, waits === "gate" ? L.gateAnswer() : L.workflowAnswer());
+      // Hand-off mode starts no workflow from plain words, so there is no second job to queue.
+      if (ctx.config.mode === "b") return void say(null, L.duringWorkflow());
       const r = routeMessage(text, folderKind(ctx.projectDir));
       if (!r.job) return void say(null, L.duringWorkflow());
       return void say(ask(ctx, { job: r.job, args: r.args, via: "words" }), L.alreadyRunning());
@@ -401,6 +439,8 @@ const handlers = {
     // A route belongs to one prompt: a new prompt ends it, so nothing stays blocked.
     const stale = readRoute(ctx.sid);
     if (stale?.status === "pending") { dropRoute(ctx.sid); appendEvent(ctx.sid, "route.dropped", { job: stale.job }); }
+    // Hand-off mode: the message is the chat's own work; the part that is hand-off work is recognised.
+    if (ctx.config.mode === "b") return void (ctx.agent ? undefined : handoffPrompt(ctx, text));
     if (!routingOn(ctx)) return;
     // Only the rules route (26 Sep): a request they do not recognise is an ordinary chat, never an offer and never
     // the chat model's guess. Nothing is added to it.
@@ -432,7 +472,9 @@ const handlers = {
     // Guard B. Every command start, typed or model-started, can be a Skill call
     // (probed live on Claude Code 2.1.282). Zero-touch off: nothing to decide, as on 0.7.7.
     const name = String(ctx.input.tool_input?.skill ?? "").trim().replace(/^\//, "");
-    if (!/^mmo:/.test(name) || ctx.config.mode !== "on") return;
+    if (!/^mmo:/.test(name) || !acts(ctx)) return;
+    // Workflow mode starts a workflow the rules recognised; hand-off mode only one the person typed.
+    const notNow = ctx.config.mode === "b" ? H.TYPED_ONLY_REASON : NOT_NOW_REASON;
     const job = name.slice("mmo:".length);
     const typed = Q.readTyped(ctx.sid);
     // The Skill call of a command the person just typed (in modes where a typed command makes one): the prompt
@@ -444,13 +486,13 @@ const handlers = {
       // own typing runs it, and so does a running workflow; the chat starting one by itself is refused.
       if (typedNow || ctx.pipeline) return;
       appendEvent(ctx.sid, "route.refused", { job, by: ctx.agent ? "helper" : "chat" });
-      return void refuse(NOT_NOW_REASON);
+      return void refuse(notNow);
     }
     // 0.8.4: the replace-or-queue question waits for its answer; no workflow starts before it.
     const waiting = Q.readChoice(ctx.sid);
     if (waiting) return void refuse(Q.askInstruction(waiting));
     // A helper agent never starts the chat's workflow: the person asked the chat, not the helper.
-    if (ctx.agent) { appendEvent(ctx.sid, "route.refused", { job, by: "helper" }); return void refuse(NOT_NOW_REASON); }
+    if (ctx.agent) { appendEvent(ctx.sid, "route.refused", { job, by: "helper" }); return void refuse(notNow); }
     const route = readRoute(ctx.sid);
     if (route?.status === "pending") {
       if (route.job !== job) return void refuse(startFirstReason(route.job));
@@ -466,7 +508,7 @@ const handlers = {
     // No route: the chat is starting a workflow on its own guess. Only the rules (or a typed command) start one
     // since 26 Sep, so this is always refused and the chat carries on.
     appendEvent(ctx.sid, "route.refused", { job, by: "chat" });
-    refuse(NOT_NOW_REASON);
+    refuse(notNow);
   },
 
   "pre-any"(ctx) {
@@ -489,16 +531,16 @@ const handlers = {
     const type = String(ctx.input.tool_input?.subagent_type ?? "");
     if (!type.startsWith("mmo:")) return;
     // 0.8.4: while the replace-or-queue question waits, or "Queue it" holds a typed command, no workflow helper starts.
-    const waiting = ctx.config.mode === "on" ? Q.readChoice(ctx.sid) : null;
-    if (waiting || (ctx.config.mode === "on" && Q.hasHold(ctx.sid))) {
+    const waiting = acts(ctx) ? Q.readChoice(ctx.sid) : null;
+    if (waiting || (acts(ctx) && Q.hasHold(ctx.sid))) {
       appendEvent(ctx.sid, "agent.mmo-ambient_request", { agent: type, blocked: true, held: true });
       return void emit({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: waiting ? Q.askInstruction(waiting) : HOLD_REASON } });
     }
     // The five mmo agents belong to a workflow run. In ordinary chat the
     // model picking one up on its own starts a gated run nobody asked for.
     const blocked = !ctx.pipeline && !ctx.agent;
-    appendEvent(ctx.sid, "agent.mmo-ambient_request", { agent: type, blocked: blocked && ctx.config.mode === "on" });
-    if (blocked && ctx.config.mode === "on") {
+    appendEvent(ctx.sid, "agent.mmo-ambient_request", { agent: type, blocked: blocked && acts(ctx) });
+    if (blocked && acts(ctx)) {
       emit({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -514,7 +556,7 @@ const handlers = {
     // The person answered a multiple-choice question (PostToolUse on AskUserQuestion). When it is the waiting
     // replace-or-queue question, its exact label decides (lib/queue.mjs answerFrom); any other question is not ours.
     const waiting = Q.readChoice(ctx.sid);
-    if (!waiting || ctx.config.mode !== "on") return;
+    if (!waiting || !acts(ctx)) return;
     const kind = Q.answerFrom(ctx.input.tool_response, waiting.question);
     if (kind === null) return;
     emit({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: settle(ctx, waiting, kind) } });
@@ -532,7 +574,7 @@ const handlers = {
       if (route?.status === "pending" && route.via === "queue") { dropRoute(ctx.sid); appendEvent(ctx.sid, "route.queue_not_started", { job: route.job }); }
       return;
     }
-    if (ctx.config.mode !== "on" || ctx.agent || ctx.pipeline || route?.status === "pending" || Q.readChoice(ctx.sid)) return;
+    if (!acts(ctx) || ctx.agent || ctx.pipeline || route?.status === "pending" || Q.readChoice(ctx.sid)) return;
     const next = Q.readQueue(ctx.sid)[0];
     if (!next) return;
     const lock = heldByOther(ctx.projectDir, ctx.sid);
@@ -547,6 +589,65 @@ const handlers = {
     appendEvent(ctx.sid, "route.decided", { job: next.job, via: "queue" });
     emit({ decision: "block", reason: Q.queuedStartInstruction(next), systemMessage: L.startingQueued(next.job) });
   },
+
+  "pre-handoff"(ctx) {
+    // A hand-off tool call (hand-off mode; the tools are the server's, which never sees a chat). In a hand-off chat
+    // that runs no workflow the call gets the hook's stamp, so the server knows which chat it belongs to; the chat's
+    // models are resolved first, so the server finds them in the chat's records. Anywhere else the call is refused:
+    // a chat in workflow mode has no hand-offs, and a workflow run has its own steps and its own bill.
+    const tool = H.handoffToolName(ctx.input.tool_name);
+    if (!tool) return;
+    const refuse = (why, cause) => {
+      appendEvent(ctx.sid, "handoff.tool_refused", { tool, cause });
+      emit({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } });
+    };
+    if (ctx.config.mode !== "b") return void (acts(ctx) ? refuse(H.NOT_A_HANDOFF_CHAT, "not-handoff-chat") : undefined);
+    if (ctx.pipeline) return void refuse(H.NOT_IN_A_WORKFLOW, "workflow-run");
+    // An undo sends nothing to a model, so it works even when the chat's hand-off policy cannot be read.
+    if (tool !== H.UNDO_TOOL) {
+      const found = H.handoffRoutes(ctx.sid, H.readStamp(ctx.sid));
+      if (found.error) return void refuse(H.unavailableInstruction(found), found.error);
+    }
+    appendEvent(ctx.sid, "handoff.tool_call", { tool });
+    emit({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: H.stampedInput(ctx.input.tool_input, { sessionId: ctx.sid, projectDir: ctx.projectDir, auth: ctx.config.routing_defaults.auth }) } });
+  },
+
+  "post-handoff"(ctx) {
+    // A hand-off tool answered. The person sees one line written by code from the tool's receipt; the model reads
+    // the receipt itself, so nothing is added for it.
+    if (ctx.config.mode !== "b" || !H.handoffToolName(ctx.input.tool_name)) return;
+    const receipt = H.toolReceipt(ctx.input.tool_response);
+    const chat = H.chatState(H.readStamp(ctx.sid), H.chatModelNow(ctx.sid, ctx.input.transcript_path));
+    const shown = H.receiptLine(receipt, chat);
+    if (!shown) return;
+    appendEvent(ctx.sid, "handoff.receipt", { status: receipt.status, file: typeof receipt.file === "string" ? receipt.file : undefined, cost_usd: typeof receipt.cost_usd === "number" ? receipt.cost_usd : undefined });
+    emit({ systemMessage: shown });
+  },
+
+  "pre-model-switch"(ctx) {
+    // Hand-off mode keeps the chat on its pinned model: the chat's own model does the development, so which model
+    // that is decides the quality and the cost of everything that is not handed off. A switch to the pinned model
+    // always passes. A switch whose target cannot be read is never refused: a guard that misreads its input must
+    // not lock the person out of their own model picker. Workflow mode never pins the chat.
+    if (ctx.config.mode !== "b" || ctx.agent) return;
+    const stamp = H.readStamp(ctx.sid);
+    const to = canonicalModel(ctx.input.to_model);
+    if (!stamp?.chat_model || !to) return;
+    const leaves = to !== stamp.chat_model && canonicalModel(ctx.input.requested_model) !== stamp.chat_model;
+    appendEvent(ctx.sid, "model.switch_request", { to, refused: leaves });
+    if (!leaves) return;
+    emit({ hookSpecificOutput: { hookEventName: "PreModelSwitch", permissionDecision: "deny", permissionDecisionReason: H.switchRefusal(stamp) } });
+  },
+
+  "post-model-switch"(ctx) {
+    // The chat is on another model now (a switch that passed, or one this plugin could not refuse; Claude Code also
+    // sends this when a reopened chat gets its model back). Kept so every line names the model really in use.
+    if (ctx.config.mode !== "b" || ctx.agent) return;
+    const to = canonicalModel(ctx.input.to_model);
+    if (!to) return;
+    H.recordModelNow(ctx.sid, to);
+    appendEvent(ctx.sid, "model.switched", { to });
+  },
 };
 
 /**
@@ -559,7 +660,7 @@ function say(text, line = null) {
   if (!text && !shown) return;
   emit({ ...(shown ? { systemMessage: shown } : {}), ...(text ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: text } } : {}) });
 }
-/** Set once per hook run (main): the chat has zero-touch on and the call is the chat's own, not a helper's. */
+/** Set once per hook run (main): zero-touch acts in the chat (workflow or hand-off mode) and the call is the chat's own, not a helper's. */
 let showsLines = false;
 
 /**
@@ -608,7 +709,7 @@ async function main() {
   // A call from inside a helper agent carries agent_id; the session id is the parent chat's.
   const agent = typeof input.agent_id === "string" && input.agent_id ? input.agent_id : null;
   const ctx = { input, sid, cwd, projectDir, config, sources, agent };
-  showsLines = config.mode === "on" && !agent;
+  showsLines = acts({ config }) && !agent;
   setEventAgent(agent);
   try {
     ctx.pipeline = hasSessionMarker(ctx, "pipeline");

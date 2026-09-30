@@ -13,6 +13,10 @@
  *   routing_defaults   the policy and cost-recording mode a routed workflow starts with, when the project has
  *                      saved no policy of its own
  *   retention_days     how long a chat's records under MMO_HOME are kept
+ *   handoff            hand-off mode's two settings: the model a hand-off chat is pinned to and the policy whose
+ *                      models do its hand-offs. The shipped file holds their defaults. A chat never reads them from
+ *                      here: the zero-touch plugin's start hook reads them once, at the chat's start, and stamps them
+ *                      on the chat, and the hook acts on that stamp (lib/handoff.mjs)
  *
  * None of the files switches zero-touch on or off (29 Sep 2026). Whether a chat has zero-touch is the chat's own
  * record, written when the chat starts by the zero-touch plugin, the switch people use in Claude Code's plugin list

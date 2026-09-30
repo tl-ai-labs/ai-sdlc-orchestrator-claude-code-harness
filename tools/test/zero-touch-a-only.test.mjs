@@ -1,5 +1,7 @@
 /**
- * Zero-touch 0.8.4 is its workflow routing and nothing else.
+ * In workflow mode, zero-touch is its workflow routing and nothing else. (Hand-off mode, the plugin's other mode, is
+ * chosen in the person's mode file and has its own tests: zero-touch-handoff-*.test.mjs. Everything below is about a
+ * chat in workflow mode, the default.)
  *
  * Why: until 0.8.3 a zero-touch chat whose message was not one of the eight /mmo: jobs got the generic orchestrator
  * (ask 1): a start-of-chat note, big Reads turned into outlines, by-hand typing refused and handed to a Flash or
@@ -47,8 +49,10 @@ function runOnce(event, payload, { home, repo }) {
   });
 }
 const run = startingChats(runOnce, (s) => s.home);
+/** The matcher of the two hooks around hand-off mode's own tools. */
+const HANDOFF_TOOLS = "mcp__(plugin_mmo_)?model-dispatch__(write_document|write_tests_from_cases|repeat_edit_across_files|undo_hand_off)";
 
-test("mmo hooks only the eight moments workflow routing needs; no Read, Bash, Write, Edit or model-switch hook is left", () => {
+test("mmo hooks only the moments zero-touch needs: eight for workflow routing, four for hand-off mode (its model pin, and around its own tools); no Read, Bash, Write or Edit hook is left", () => {
   const hooks = JSON.parse(readFileSync(join(PLUGIN, "hooks", "hooks.json"), "utf8")).hooks;
   const moments = [];
   for (const [event, entries] of Object.entries(hooks)) {
@@ -68,6 +72,13 @@ test("mmo hooks only the eight moments workflow routing needs; no Read, Bash, Wr
     "PreToolUse:Skill:pre-skill",
     "SessionStart::session-start",
     "UserPromptSubmit::prompt",
+    // Hand-off mode keeps a chat on its pinned model (zero-touch-handoff-chat.test.mjs); both answer nothing in a
+    // workflow-mode chat.
+    "PreModelSwitch::pre-model-switch",
+    "PostModelSwitch::post-model-switch",
+    // Around a hand-off tool call (zero-touch-handoff-tools.test.mjs): matched on those tools only.
+    `PreToolUse:${HANDOFF_TOOLS}:pre-handoff`,
+    `PostToolUse:${HANDOFF_TOOLS}:post-handoff`,
   ].sort());
 });
 
@@ -123,9 +134,10 @@ test("in an ordinary zero-touch chat every tool runs untouched: nothing is refus
   }
 });
 
-test("the shipped settings hold only routing's keys, and an older settings file's other keys are ignored", async () => {
+test("the shipped settings hold only routing's keys and hand-off mode's two, and an older settings file's other keys are ignored", async () => {
   const shipped = JSON.parse(readFileSync(join(PLUGIN, "config", "ambient.default.json"), "utf8"));
-  assert.deepEqual(Object.keys(shipped).sort(), ["retention_days", "routing", "routing_defaults", "schema_version"]);
+  assert.deepEqual(Object.keys(shipped).sort(), ["handoff", "retention_days", "routing", "routing_defaults", "schema_version"]);
+  assert.deepEqual(Object.keys(shipped.handoff).sort(), ["chat_model", "policy"]);
   const { loadConfig } = await import(join(AMBIENT, "lib", "config.mjs"));
   const s = sandbox();
   try {

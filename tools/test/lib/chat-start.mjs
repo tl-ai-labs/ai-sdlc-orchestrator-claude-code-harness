@@ -18,11 +18,15 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const ZT_START = join(ROOT, "zero-touch", "hooks", "start-chat.sh");
 
-/** Runs the zero-touch plugin's start hook for one chat, as Claude Code does at SessionStart while it is enabled. */
-export function zeroTouchStart({ home, sid, source = "startup", cwd, env = {} }) {
-  const childEnv = { PATH: process.env.PATH, HOME: home, MMO_HOME: home, ...env };
+/**
+ * Runs the zero-touch plugin's start hook for one chat, as Claude Code does at SessionStart while it is enabled.
+ * `model` is the model Claude Code says the chat starts on, when it says so. The organisation settings file is one
+ * inside the test's own home (absent unless the test writes it), never this machine's real one.
+ */
+export function zeroTouchStart({ home, sid, source = "startup", cwd, env = {}, model }) {
+  const childEnv = { PATH: process.env.PATH, HOME: home, MMO_HOME: home, MMO_MANAGED_SETTINGS: join(home, "managed-settings.json"), ...env };
   for (const k of Object.keys(childEnv)) if (childEnv[k] === undefined) delete childEnv[k];
-  spawnSync("sh", [ZT_START], { input: JSON.stringify({ session_id: sid, cwd, source }), env: childEnv, cwd });
+  spawnSync("sh", [ZT_START], { input: JSON.stringify({ session_id: sid, cwd, source, ...(model ? { model } : {}) }), env: childEnv, cwd });
 }
 
 export function startingChats(runOnce, keyOf, { envOf = () => ({}), zeroTouch = true } = {}) {
@@ -31,7 +35,7 @@ export function startingChats(runOnce, keyOf, { envOf = () => ({}), zeroTouch = 
     const sid = payload && typeof payload === "object" ? payload.session_id : null;
     if (typeof sid === "string" && sid) {
       const key = `${keyOf(...rest)}\0${sid}`;
-      const plugin = (source) => { if (zeroTouch) zeroTouchStart({ home: keyOf(...rest), sid, source, cwd: payload.cwd, env: envOf(...rest) ?? {} }); };
+      const plugin = (source) => { if (zeroTouch) zeroTouchStart({ home: keyOf(...rest), sid, source, cwd: payload.cwd, env: envOf(...rest) ?? {}, model: event === "session-start" ? payload.model : undefined }); };
       if (event === "session-start") {
         started.add(key);
         plugin(payload.source);

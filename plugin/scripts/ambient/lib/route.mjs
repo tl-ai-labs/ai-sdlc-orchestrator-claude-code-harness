@@ -93,7 +93,7 @@ const CLAUSE_SEPARATOR = /(\s*(?:,\s*and then|,\s*then|,\s*and|;|\s+and then|\s+
  * A word that can be a verb or a noun ("test", "change", "return") is treated as a verb: an unsure part is cut,
  * which is the behaviour before 26 Sep, so the worst case stays a missed route, never a wrong one.
  */
-const INSTRUCTION = /^(?:(?:also|please|just|then|now)\s+)*(?:add|write|create|build|make|fix|update|upgrade|bump|refactor|document|implement|support|extend|generate|develop|scaffold|bootstrap|introduce|extract|migrate|convert|integrate|debug|diagnose|troubleshoot|investigate|resolve|repair|reproduce|run|rerun|re-run|test|check|verify|ensure|confirm|remove|delete|drop|rename|move|replace|change|split|combine|improve|increase|reduce|optimi[sz]e|clean|deploy|push|commit|merge|rebase|install|uninstall|enable|disable|turn|switch|use|keep|set|wire|hook|connect|expose|handle|return|print|call|explain|describe|summari[sz]e|compare|show|tell|list|review|find|revert|undo|open|close|send|start|stop|restart|give|put|get|let|try|do|go|see|look|read)\b/;
+export const INSTRUCTION = /^(?:(?:also|please|just|then|now)\s+)*(?:add|write|create|build|make|fix|update|upgrade|bump|refactor|document|implement|support|extend|generate|develop|scaffold|bootstrap|introduce|extract|migrate|convert|integrate|debug|diagnose|troubleshoot|investigate|resolve|repair|reproduce|run|rerun|re-run|test|check|verify|ensure|confirm|remove|delete|drop|rename|move|replace|change|split|combine|improve|increase|reduce|optimi[sz]e|clean|deploy|push|commit|merge|rebase|install|uninstall|enable|disable|turn|switch|use|keep|set|wire|hook|connect|expose|handle|return|print|call|explain|describe|summari[sz]e|compare|show|tell|list|review|find|revert|undo|open|close|send|start|stop|restart|give|put|get|let|try|do|go|see|look|read)\b/;
 
 /** An object that starts by negating itself ("fix nothing yet, just explain") asks for no job. */
 const NEGATED_OBJECT = /^(?:nothing|none|no|not|never)\b/;
@@ -112,7 +112,7 @@ const POSITION = /\b(?:below|above)\b/g;
 const COMPARED_OBJECT = /^\s*(?:[-+]?[$€£₹]?\d|(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|hundred|thousand|the|a|an|its|their|his|her|our|your|my|this|that|these|those|some|any|each|every|all|no|half)\b)/;
 
 /** Whether an object points at text in the message rather than naming something in the project. */
-function pointsAtText(raw) {
+export function pointsAtText(raw) {
   if (POINTS_AT_TEXT.test(raw)) return true;
   for (const m of raw.matchAll(POSITION)) {
     if (!COMPARED_OBJECT.test(raw.slice(m.index + m[0].length))) return true;
@@ -294,6 +294,41 @@ function pickJob(found, folder) {
 }
 
 /**
+ * The instruction a message's first line opens with, in lower case and with its polite openers removed ("can you
+ * fix …" is "fix …"), or the reason it is not an instruction: nothing is asked, or it asks for information. Shared
+ * by the workflow recogniser below and by hand-off mode's recogniser (lib/handoff-route.mjs), so both read a
+ * question, a polite request and a sentence end the same way.
+ */
+export function requestLead(firstLine) {
+  // The request: the first line, up to the first sentence end ("app.py" and "v1.2" are not sentence ends).
+  const lower = String(firstLine ?? "").trim().toLowerCase();
+  const sentence = /^(.*?)([.!?])(?:\s|$)/.exec(lower);
+  const lead = stripOpeners((sentence ? sentence[1] : lower).trim());
+  if (!lead) return { lead, reason: "no instruction" };
+  if (INFO_OPENERS.test(lead)) return { lead, reason: "a question or a request to explain, not a job" };
+  if (sentence?.[2] === "?" && !POLITE.test(lower)) return { lead, reason: "a question: it ends with a question mark and is not a can-you request" };
+  return { lead, reason: null };
+}
+
+/**
+ * The clauses of an instruction. A part after "and" / "then" / ";" starts a new clause only when it opens an
+ * instruction: a verb (INSTRUCTION), or whatever else `opens` says opens one. Any other part is joined back to the
+ * clause before it, exactly as written (26 Sep). Each clause carries `first`, its first part before anything was
+ * joined to it.
+ */
+export function splitClauses(lead, opens = () => false) {
+  const parts = lead.split(CLAUSE_SEPARATOR);
+  const clauses = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const part = parts[i];
+    if (!part) continue;
+    if (!clauses.length || INSTRUCTION.test(part) || opens(part)) clauses.push({ text: part, first: part });
+    else clauses[clauses.length - 1].text += parts[i - 1] + part;
+  }
+  return clauses;
+}
+
+/**
  * The /mmo: job this message asks for in a folder of this kind ("new" or
  * "existing"), or { job: null, reason } when it asks for none or is unsure.
  * `args` is the one-line job description a brownfield command takes; greenfield takes none.
@@ -311,25 +346,12 @@ export function routeMessage(message, folder) {
       : { job: null, reason: "a brief pasted in an existing project: not sure it is a new build" };
   }
 
-  // The request: the first line, up to the first sentence end ("app.py" and "v1.2" are not sentence ends).
-  const lower = firstLine.trim().toLowerCase();
-  const sentence = /^(.*?)([.!?])(?:\s|$)/.exec(lower);
-  const lead = stripOpeners((sentence ? sentence[1] : lower).trim());
-  if (!lead) return { job: null, reason: "no instruction" };
-  if (INFO_OPENERS.test(lead)) return { job: null, reason: "a question or a request to explain, not a job" };
-  if (sentence?.[2] === "?" && !POLITE.test(lower)) return { job: null, reason: "a question: it ends with a question mark and is not a can-you request" };
+  const { lead, reason: notAnInstruction } = requestLead(firstLine);
+  if (notAnInstruction) return { job: null, reason: notAnInstruction };
   if (FOLLOW_UP.test(lead)) return { job: null, reason: "a follow-up to earlier work (also / as well / too / again), not a new job" };
 
-  // Clauses: a part after "and" / "then" / ";" starts a new clause only when it opens an instruction (a verb, or
-  // one of the eight jobs); any other part is joined back to the clause before it, exactly as written (26 Sep).
-  const parts = lead.split(CLAUSE_SEPARATOR);
-  const clauses = [];
-  for (let i = 0; i < parts.length; i += 2) {
-    const part = parts[i];
-    if (!part) continue;
-    if (!clauses.length || INSTRUCTION.test(part) || clauseJobs(part).length) clauses.push({ text: part, first: part });
-    else clauses[clauses.length - 1].text += parts[i - 1] + part;
-  }
+  // A part that opens one of the eight jobs is always a clause of its own (see splitClauses).
+  const clauses = splitClauses(lead, (part) => clauseJobs(part).length > 0);
   if (!clauses.length) return { job: null, reason: "no instruction" };
   const found = clauseJobs(clauses[0].text, clauses[0].first);
   if (!found.length) return { job: null, reason: "no job verb opens the message" };

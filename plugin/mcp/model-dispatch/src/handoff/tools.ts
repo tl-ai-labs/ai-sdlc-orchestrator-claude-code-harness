@@ -1,0 +1,465 @@
+/**
+ * The MCP tools of zero-touch's hand-off mode (docs/ambient-mode.md, "Hand-off mode").
+ *
+ * In a hand-off chat the chat's own model does the development, and work that is mostly typing AND has a check code
+ * can run on the result goes to the hand-off policy's model through these tools:
+ *
+ *  - write_document — one NEW document, spec or planning text, written from a form the chat's model fills in
+ *    (document.ts), checked by code, then written into the project.
+ *  - write_tests_from_cases — one NEW test file for cases the chat's model decided (tests.ts), run with the
+ *    project's own test command in a scratch copy of the project (scratch.ts); written only when its tests pass.
+ *  - repeat_edit_across_files — a change the chat's model made once, repeated in the files it names as exact edits
+ *    (repeat.ts), each checked, then all of them run against the project's check command in a scratch copy.
+ *  - undo_hand_off — takes a landed hand-off back (landing.ts).
+ *
+ * Each call carries the stamp the plugin's hook adds (`_mmo`); the chat it names must be a hand-off chat, and its
+ * policy and the model that policy gives each kind of work are read from the chat's own records (chat.ts), so they
+ * are the ones the chat started with. The model never chooses the policy, the model or the auth mode in a call.
+ *
+ * A reply is one short receipt. A refused form and a failed hand-off are ordinary replies with `status` and `next`
+ * (what the chat's model does now), not errors: both are outcomes the chat's model acts on.
+ */
+import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import type { ModelConfig, Policy, SelectOverrides, TelemetryEvent } from "../types.js";
+import { loadPolicy, loadPolicyFromPath } from "../policy.js";
+import { appendEvent } from "../telemetry.js";
+import { log } from "../log.js";
+import { executorView } from "../executor/run.js";
+import { HEARTBEAT_MS, ROUTED_ATTEMPTS, STAGE_CONCURRENCY, TRANSPORT, fallbackLeaf, typistDoorFor, typistForLeaf, type ProgressChannel } from "../executor/tools.js";
+import type { Typist } from "../executor/typists.js";
+import { handoffTelemetryPath, readChatHandoff, releasePath, type ChatHandoff, type HandoffWork } from "./chat.js";
+import { DOCUMENT_KINDS, checkDocument, checkDocumentForm, documentPacket, renderDocumentInstruction, renderDocumentShared } from "./document.js";
+import { checkTestsForm, checkTestsText, renderTestsInstruction, renderTestsShared, testsPacket } from "./tests.js";
+import { changeMarkers, checkRepeatEdits, checkRepeatForm, readTarget, renderRepeatInstruction, renderRepeatShared, repeatPacket } from "./repeat.js";
+import { makeScratchCopy, runInScratch, type ScratchRun } from "./scratch.js";
+import { recordLanding, undoLanding } from "./landing.js";
+import { runHandoff, type HandoffDeps, type HandoffJob, type HandoffOutcome } from "./run.js";
+
+/**
+ * The time limit on a command run in a scratch copy (a test file's run, a project's check). A stated safety bound
+ * that only catches a command that hangs: ten minutes is far longer than one test file or a build takes, and the
+ * chat's model is waiting on the call.
+ */
+export const CHECK_TIMEOUT_S = 600;
+
+const STAMP = { _mmo: { type: "object", description: "Added by the plugin's hook. Do not set it." } };
+const oneLine = (description: string) => ({ type: "string", description });
+
+export const HANDOFF_TOOLS = [
+  {
+    name: "write_document",
+    description:
+      "Zero-touch hand-off (works only in a hand-off chat): have the hand-off policy's model write ONE NEW file of this project from the brief you fill in here: docs (a README, a guide, an API reference, a changelog), spec (requirements, a design document, an API spec, a data-model write-up) or plan (a plan, a task breakdown or tickets, a status report, release notes). Code checks the result (every section present, every shell command one of your facts, every project path real) and only then writes the file. The form is a brief, never the finished text: every string is ONE line. The typist cannot see the project, so `facts` must hold everything the document may state about it: every command, path, setting, name and number. Returns one short receipt; read the written file before you tell the person it is done.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: [...DOCUMENT_KINDS] },
+        file: oneLine("The NEW file, as a path from the project folder (for example docs/setup.md). A file that exists is refused: change it yourself."),
+        purpose: oneLine("What the document is for."),
+        readers: oneLine("Who reads it, and what they already know."),
+        sections: {
+          type: "array",
+          description: "The sections, in order. At least one.",
+          items: {
+            type: "object",
+            properties: { heading: oneLine("The section's heading, as it will appear."), must_say: oneLine("What the section must tell the reader: an instruction, not the text itself.") },
+            required: ["heading", "must_say"],
+          },
+        },
+        facts: {
+          type: "array",
+          description: "Everything the document may state about the project. At least one.",
+          items: {
+            type: "object",
+            properties: {
+              statement: oneLine("One fact, with the exact command, path, setting, name or number in it."),
+              source: oneLine('The project file the fact comes from (a path from the project folder), or "chat" for something the person said.'),
+              quote: oneLine("For a project file: one line copied exactly from it that shows the fact. Omit for a fact from the chat."),
+            },
+            required: ["statement", "source"],
+          },
+        },
+        style_from: oneLine("Optional: an existing document of the project whose tone and layout to follow."),
+        ...STAMP,
+      },
+      required: ["kind", "file", "purpose", "readers", "sections", "facts"],
+    },
+  },
+  {
+    name: "write_tests_from_cases",
+    description:
+      "Zero-touch hand-off (works only in a hand-off chat): have the hand-off policy's model write ONE NEW test file for code that exists, from the cases you decide here. Code runs the file with your test command in a scratch copy of the project, and writes it into the project only when its tests pass. A case's expected result is the specification: the typist may not change it to make a test pass, so when the tests keep failing you get the run's output back. Then: a wrong case you correct and hand off again; a real bug in the code under test you tell the person. Every string is ONE line. The project must be a git repository.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file: oneLine("The NEW test file, as a path from the project folder (for example tests/cart.test.js)."),
+        target: oneLine("The file under test, as a path from the project folder."),
+        functions: { type: "array", items: { type: "string" }, description: "The names in the target the tests exercise. Each must be in the target file. At least one." },
+        cases: {
+          type: "array",
+          description: "One test per case. At least one.",
+          items: {
+            type: "object",
+            properties: { name: oneLine("The test's title; it must be unique."), given: oneLine("The input or the situation."), expect: oneLine("The exact expected result.") },
+            required: ["name", "given", "expect"],
+          },
+        },
+        style_from: oneLine("Optional: an existing test file whose framework, imports and layout to follow."),
+        test_command: oneLine("The command that runs the new test file, as typed from the project folder (for example node --test tests/cart.test.js)."),
+        notes: oneLine("Optional: anything else the typist must know."),
+        ...STAMP,
+      },
+      required: ["file", "target", "functions", "cases", "test_command"],
+    },
+  },
+  {
+    name: "repeat_edit_across_files",
+    description:
+      "Zero-touch hand-off (works only in a hand-off chat): repeat in other files a change you ALREADY made by hand in one file. The example file's own change since the last commit is the pattern; the hand-off policy's model answers with exact edits for each target. Code checks every edit applies exactly once and removes only lines the change is about, runs your check command in a scratch copy with all the changed files, and only then writes them. A target whose edits do not pass is named back for you to change yourself. undo_hand_off takes the landing back. The project must be a git repository.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        example: oneLine("The file you changed by hand, as a path from the project folder. It must differ from the last commit."),
+        targets: { type: "array", items: { type: "string" }, description: "The files to repeat the change in, as paths from the project folder. At least one." },
+        change: oneLine("The change, in words."),
+        check_command: oneLine("Optional but wanted: the project's build or test command, run in a scratch copy with every changed file."),
+        ...STAMP,
+      },
+      required: ["example", "targets", "change"],
+    },
+  },
+  {
+    name: "undo_hand_off",
+    description:
+      "Zero-touch hand-off (works only in a hand-off chat): take a landed hand-off back. A file it changed gets its earlier text, a file it created is removed; a file changed since is left alone and named.",
+    inputSchema: {
+      type: "object",
+      properties: { id: oneLine("The hand-off's id from its receipt (h1, h2, ...)."), ...STAMP },
+      required: ["id"],
+    },
+  },
+] as const;
+
+export const HANDOFF_TOOL_NAMES: ReadonlySet<string> = new Set(HANDOFF_TOOLS.map((t) => t.name));
+
+type Reply = { content: { type: "text"; text: string }[]; isError?: boolean };
+/** A receipt is sent as compact JSON: the chat's model re-reads it on every later turn. */
+const receipt = (value: unknown): Reply => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
+
+export interface HandoffContext {
+  overrides: SelectOverrides;
+  env?: Record<string, string | undefined>;
+  /** Tests pass fake typists; the server passes nothing and gets the executor's. */
+  typistFor?: (leaf: ModelConfig, authMode: "estimated" | "vendor") => Typist;
+  sleep?(ms: number): Promise<void>;
+  random?(): number;
+  /** The request's progress channel: a hand-off that runs a command can take minutes, and progress keeps the call alive. */
+  progress?: ProgressChannel;
+}
+
+/** Runs a long step while telling the client the call is still alive. */
+async function alive<T>(ctx: HandoffContext, message: string, step: () => Promise<T>): Promise<T> {
+  const token = ctx.progress?.token;
+  if (token === undefined) return step();
+  let n = 0;
+  const beat = setInterval(() => { void ctx.progress!.send({ progressToken: token, progress: ++n, message }).catch(() => {}); }, HEARTBEAT_MS);
+  try { return await step(); } finally { clearInterval(beat); }
+}
+
+/**
+ * A typist that is built when it is first used: one that cannot run on this machine (a claude CLI without the lean
+ * flags, no Python for the agent door) then fails its attempt with the reason, and the ladder moves on, instead of
+ * the whole hand-off failing before anything was tried.
+ */
+function lazyTypist(leaf: ModelConfig, build: () => Typist): Typist {
+  let built: Typist | undefined;
+  return {
+    door: typistDoorFor(leaf) ?? "lean-opus",
+    modelId: leaf.id,
+    modelName: leaf.model_name,
+    type: async (req) => (built ??= build()).type(req),
+  };
+}
+
+/** The chat's policy as the executor reads it, and the typists for one kind of hand-off work. */
+function typistsFor(chat: ChatHandoff, work: HandoffWork, ctx: HandoffContext): { policy: Policy; routed: Typist; fallback: Typist | null } | { refused: string } {
+  let policy: Policy;
+  try {
+    policy = executorView(chat.policyFile ? loadPolicyFromPath(chat.policyFile) : loadPolicy({ policyName: chat.policy })).policy;
+  } catch (e: any) {
+    return { refused: `the hand-off policy cannot be read: ${String(e?.message ?? e).split("\n")[0].slice(0, 200)}` };
+  }
+  const route = chat.routes[work];
+  const leaf = policy.models.find((m) => m.id === route.id);
+  if (!leaf) return { refused: `the hand-off policy no longer has the model this chat resolved for ${work} work (${route.id}); start a new chat` };
+  if (!typistDoorFor(leaf)) return { refused: `the hand-off tools have no typist for adapter '${leaf.adapter}' (model ${leaf.id})` };
+  const build = ctx.typistFor ?? typistForLeaf;
+  const routed = lazyTypist(leaf, () => build(leaf, chat.authMode));
+  const last = fallbackLeaf(policy, ctx.overrides);
+  // The Claude last attempt and the routed attempts share one typist when the policy routes this work to that model.
+  const fallback = !last ? null : last.id === leaf.id ? routed : lazyTypist(last, () => build(last, chat.authMode));
+  return { policy, routed, fallback };
+}
+
+const refusedCall = (reason: string) => receipt({ status: "refused", reason, next: "Nothing was sent. Do this work yourself." });
+
+export async function handleHandoffTool(name: string, rawArgs: unknown, ctx: HandoffContext): Promise<Reply> {
+  const { _mmo: stamp, ...args } = (rawArgs && typeof rawArgs === "object" ? rawArgs : {}) as Record<string, unknown>;
+  // An undo sends nothing to a model, so it needs the chat and its project, not the chat's models.
+  const chat = readChatHandoff(stamp, ctx.env ?? process.env, { needRoutes: name !== "undo_hand_off" });
+  if ("refused" in chat) {
+    log("warn", "handoff.refused", { tool: name, reason: chat.refused });
+    return refusedCall(chat.refused);
+  }
+  if (name === "write_document") return writeDocument(args, chat, ctx);
+  if (name === "write_tests_from_cases") return alive(ctx, "the hand-off is writing and running the tests", () => writeTests(args, chat, ctx));
+  if (name === "repeat_edit_across_files") return alive(ctx, "the hand-off is repeating and checking the change", () => repeatEdit(args, chat, ctx));
+  if (name === "undo_hand_off") return undo(args, chat);
+  return refusedCall(`unknown hand-off tool ${name}`);
+}
+
+/** What one hand-off's runner needs besides its job: the typists, the ladder, the bill. */
+function depsFor(chat: ChatHandoff, typists: { policy: Policy; routed: Typist; fallback: Typist | null }, ctx: HandoffContext): HandoffDeps {
+  const telemetryPath = handoffTelemetryPath(chat);
+  return {
+    routed: typists.routed, fallback: typists.fallback, routedAttempts: ROUTED_ATTEMPTS, transport: TRANSPORT,
+    policy: { name: typists.policy.name, version: typists.policy.version },
+    emit: (ev: TelemetryEvent) => appendEvent(telemetryPath, ev), sleep: ctx.sleep, random: ctx.random,
+  };
+}
+const maxOutOf = (typists: { policy: Policy; routed: Typist }) => typists.policy.models.find((m) => m.id === typists.routed.modelId)?.max_output_tokens_absolute ?? 8192;
+const seconds = (run: ScratchRun) => `${(run.ms / 1000).toFixed(1)} s`;
+const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
+
+async function writeDocument(args: Record<string, unknown>, chat: ChatHandoff, ctx: HandoffContext): Promise<Reply> {
+  const checked = checkDocumentForm(args, chat.projectDir);
+  if ("problems" in checked) {
+    log("info", "handoff.document", { status: "refused", problems: checked.problems.length });
+    return receipt({ status: "refused", problems: checked.problems, next: "Nothing was sent. Fix these in the form and call again." });
+  }
+  const form = checked.form;
+  const typists = typistsFor(chat, "docs", ctx);
+  if ("refused" in typists) {
+    log("warn", "handoff.refused", { tool: "write_document", reason: typists.refused });
+    return refusedCall(typists.refused);
+  }
+
+  const maxOut = maxOutOf(typists);
+  const job: HandoffJob = {
+    id: `doc:${form.file}`,
+    path: form.file,
+    phase: "docs",
+    kind: form.kind,
+    contract: "file",
+    shared: renderDocumentShared(),
+    packet: (refusal) => documentPacket(form, chat.projectDir, renderDocumentInstruction(form, refusal), "handoff", maxOut),
+    accept: (answer) => {
+      const verdict = checkDocument(form, answer.content ?? "", chat.projectDir);
+      return verdict.ok ? { content: answer.content!, checked: verdict.checked } : { reason: verdict.reason };
+    },
+  };
+  const outcome: HandoffOutcome = await runHandoff(job, depsFor(chat, typists, ctx));
+
+  // The file was new when the form was checked; one that appeared meanwhile is someone's work and is never overwritten.
+  if (outcome.ok && existsSync(join(chat.projectDir, form.file))) { outcome.ok = false; outcome.reason = `${form.file} appeared while the document was being written, so it was not overwritten`; }
+  if (!outcome.ok) {
+    releasePath(chat.dir, form.file);
+    log("warn", "handoff.document", { status: "failed", file: form.file, attempts: outcome.attempts, cost_usd: outcome.cost_usd });
+    return receipt({
+      status: "failed", file: form.file, kind: form.kind, routed_model: outcome.routed_model, attempts: outcome.attempts, reason: outcome.reason ?? "no answer", cost_usd: outcome.cost_usd,
+      next: `Write ${form.file} yourself, and tell the person in one line that the hand-off failed.`,
+    });
+  }
+  const id = recordLanding(chat.dir, chat.projectDir, { tool: "write_document", files: [{ path: form.file, content: outcome.content! }] });
+  log("info", "handoff.document", { status: "written", id, file: form.file, written_by: outcome.written_by, attempts: outcome.attempts, cost_usd: outcome.cost_usd });
+  return receipt({
+    status: "written", id, file: form.file, kind: form.kind, written_by: outcome.written_by, routed_model: outcome.routed_model, attempts: outcome.attempts, cost_usd: outcome.cost_usd,
+    ...(outcome.note ? { note: outcome.note } : {}),
+    checked: outcome.checked,
+    next: `Read ${form.file} before you tell the person it is done; correct a slip yourself.`,
+  });
+}
+
+async function writeTests(args: Record<string, unknown>, chat: ChatHandoff, ctx: HandoffContext): Promise<Reply> {
+  const checked = checkTestsForm(args, chat.projectDir);
+  if ("problems" in checked) {
+    log("info", "handoff.tests", { status: "refused", problems: checked.problems.length });
+    return receipt({ status: "refused", problems: checked.problems, next: "Nothing was sent. Fix these in the form and call again." });
+  }
+  const form = checked.form;
+  const typists = typistsFor(chat, "tests", ctx);
+  if ("refused" in typists) {
+    log("warn", "handoff.refused", { tool: "write_tests_from_cases", reason: typists.refused });
+    return refusedCall(typists.refused);
+  }
+  // No copy to run the tests in means they cannot be checked, so nothing is sent: the chat's model writes them itself.
+  const scratch = makeScratchCopy(chat.projectDir);
+  if (scratch.refused !== undefined) {
+    releasePath(chat.dir, form.file);
+    log("warn", "handoff.refused", { tool: "write_tests_from_cases", reason: scratch.refused });
+    return receipt({ status: "refused", reason: scratch.refused, next: `Nothing was sent. Write ${form.file} yourself.` });
+  }
+
+  const maxOut = maxOutOf(typists);
+  let lastRun: ScratchRun | null = null;
+  const job: HandoffJob = {
+    id: `tests:${form.file}`,
+    path: form.file,
+    phase: "tests",
+    kind: "tests",
+    contract: "file",
+    shared: renderTestsShared(),
+    packet: (refusal) => testsPacket(form, chat.projectDir, renderTestsInstruction(form, refusal), maxOut),
+    accept: async (answer) => {
+      const content = answer.content ?? "";
+      const text = checkTestsText(form, content);
+      if (!text.ok) { lastRun = null; return { reason: text.reason }; }
+      const inCopy = join(scratch.dir, form.file);
+      mkdirSync(dirname(inCopy), { recursive: true });
+      writeFileSync(inCopy, content);
+      const run = await runInScratch(scratch.dir, form.test_command, { timeoutMs: CHECK_TIMEOUT_S * 1000, env: ctx.env });
+      lastRun = run;
+      if (run.code === 0 && !run.timedOut) {
+        return { content, checked: [`${form.cases.length} case${form.cases.length === 1 ? "" : "s"} present`, `\`${form.test_command}\` passed in a scratch copy (${seconds(run)})`] };
+      }
+      const how = run.timedOut ? `it was stopped at its ${CHECK_TIMEOUT_S} s time limit` : `exit ${run.code}`;
+      return { reason: `the test command failed in a scratch copy of the project (${how}). Its output:\n${run.output.trimEnd()}` };
+    },
+  };
+  let outcome: HandoffOutcome;
+  try { outcome = await runHandoff(job, depsFor(chat, typists, ctx)); } finally { scratch.remove(); }
+
+  if (outcome.ok && existsSync(join(chat.projectDir, form.file))) { outcome.ok = false; outcome.reason = `${form.file} appeared while the tests were being written, so it was not overwritten`; }
+  if (!outcome.ok) {
+    releasePath(chat.dir, form.file);
+    const failedRun = lastRun as ScratchRun | null;
+    log("warn", "handoff.tests", { status: "failed", file: form.file, attempts: outcome.attempts, cost_usd: outcome.cost_usd });
+    return receipt({
+      status: "failed", file: form.file, kind: "tests", routed_model: outcome.routed_model, attempts: outcome.attempts, reason: outcome.reason ?? "no answer", cost_usd: outcome.cost_usd,
+      ...(failedRun ? { output: failedRun.output.trimEnd() } : {}),
+      next: `Nothing was written. Read the output: if a case is wrong, correct it and hand off again, or write ${form.file} yourself; if it shows a real bug in ${form.target}, tell the person, and do not change a test to hide it.`,
+    });
+  }
+  const id = recordLanding(chat.dir, chat.projectDir, { tool: "write_tests_from_cases", files: [{ path: form.file, content: outcome.content! }] });
+  log("info", "handoff.tests", { status: "written", id, file: form.file, written_by: outcome.written_by, attempts: outcome.attempts, cost_usd: outcome.cost_usd });
+  return receipt({
+    status: "written", id, file: form.file, kind: "tests", written_by: outcome.written_by, routed_model: outcome.routed_model, attempts: outcome.attempts, cost_usd: outcome.cost_usd,
+    ...(outcome.note ? { note: outcome.note } : {}),
+    checked: outcome.checked,
+    next: `Read ${form.file} before you tell the person it is done.`,
+  });
+}
+
+async function repeatEdit(args: Record<string, unknown>, chat: ChatHandoff, ctx: HandoffContext): Promise<Reply> {
+  const checked = checkRepeatForm(args, chat.projectDir);
+  if ("problems" in checked) {
+    log("info", "handoff.repeat", { status: "refused", problems: checked.problems.length });
+    return receipt({ status: "refused", problems: checked.problems, next: "Nothing was sent. Fix these in the form and call again." });
+  }
+  const form = checked.form;
+  const typists = typistsFor(chat, "repeat", ctx);
+  if ("refused" in typists) {
+    log("warn", "handoff.refused", { tool: "repeat_edit_across_files", reason: typists.refused });
+    return refusedCall(typists.refused);
+  }
+  const scratch = makeScratchCopy(chat.projectDir);
+  if (scratch.refused !== undefined) {
+    log("warn", "handoff.refused", { tool: "repeat_edit_across_files", reason: scratch.refused });
+    return receipt({ status: "refused", reason: scratch.refused, next: "Nothing was sent. Make the change in the other files yourself." });
+  }
+
+  try {
+    const markers = changeMarkers(form.diff);
+    const shared = renderRepeatShared(form);
+    const maxOut = maxOutOf(typists);
+    const deps = depsFor(chat, typists, ctx);
+    // One job per target, a few at a time: each carries only its own file, so no job waits for another.
+    const results = new Map<string, { before: string; outcome: HandoffOutcome }>();
+    const queue = [...form.targets];
+    await Promise.all(Array.from({ length: Math.min(STAGE_CONCURRENCY, queue.length) }, async () => {
+      for (let target = queue.shift(); target !== undefined; target = queue.shift()) {
+        const path = target;
+        const before = readTarget(chat.projectDir, path);
+        const job: HandoffJob = {
+          id: `repeat:${path}`,
+          path,
+          phase: "codegen",
+          kind: "repeat",
+          contract: "edit",
+          shared,
+          packet: (refusal) => repeatPacket(path, before, renderRepeatInstruction(path, refusal), maxOut),
+          accept: (answer) => {
+            // Exact edits only: a whole rewritten file cannot be checked line by line against the change.
+            if (!answer.edits) return { reason: "answer with exact edits for this file, not the whole file" };
+            const verdict = checkRepeatEdits(before, answer.edits, markers);
+            return verdict.ok ? { content: verdict.content, checked: [] } : { reason: verdict.reason };
+          },
+        };
+        results.set(path, { before, outcome: await runHandoff(job, deps) });
+      }
+    }));
+
+    const changed: { path: string; content: string }[] = [];
+    const unchanged: string[] = [];
+    const failed: { file: string; reason: string }[] = [];
+    let cost = 0;
+    let byClaude = 0;
+    for (const path of form.targets) {
+      const { before, outcome } = results.get(path)!;
+      cost += outcome.cost_usd;
+      if (!outcome.ok) failed.push({ file: path, reason: outcome.reason ?? "no answer" });
+      else if (outcome.content === before) unchanged.push(path);
+      else { changed.push({ path, content: outcome.content! }); if (outcome.written_by !== outcome.routed_model) byClaude++; }
+    }
+    cost = round6(cost);
+    const routedModel = typists.routed.modelName;
+    const changedPaths = changed.map((c) => c.path);
+    const leftForChat = failed.length ? `Make the change in ${failed.map((f) => f.file).join(", ")} yourself. ` : "";
+
+    if (!changed.length && failed.length) {
+      log("warn", "handoff.repeat", { status: "failed", targets: form.targets.length, failed: failed.length, cost_usd: cost });
+      return receipt({ status: "failed", reason: "no target's edits passed the checks", routed_model: routedModel, changed: [], unchanged, failed, cost_usd: cost, next: `Nothing was changed. ${leftForChat}`.trim() });
+    }
+
+    let check = "not run (no check_command was given)";
+    if (changed.length && form.check_command) {
+      // The copy already holds the example as the chat's model changed it; the repeated edits go on top.
+      for (const c of changed) writeFileSync(join(scratch.dir, c.path), c.content);
+      const run = await runInScratch(scratch.dir, form.check_command, { timeoutMs: CHECK_TIMEOUT_S * 1000, env: ctx.env });
+      if (run.code !== 0 || run.timedOut) {
+        const how = run.timedOut ? `it was stopped at its ${CHECK_TIMEOUT_S} s time limit` : `exit ${run.code}`;
+        log("warn", "handoff.repeat", { status: "failed", targets: form.targets.length, changed: changed.length, cost_usd: cost, check: "failed" });
+        return receipt({
+          status: "failed", reason: `the check command failed in a scratch copy with the ${changed.length} changed file${changed.length === 1 ? "" : "s"} (${how})`, routed_model: routedModel,
+          would_change: changedPaths, unchanged, failed, output: run.output.trimEnd(), cost_usd: cost,
+          next: "Nothing was changed in the project. Read the output, then make the change yourself, or hand off again with fewer targets.",
+        });
+      }
+      check = `\`${form.check_command}\` passed in a scratch copy (${seconds(run)})`;
+    }
+
+    const id = changed.length ? recordLanding(chat.dir, chat.projectDir, { tool: "repeat_edit_across_files", files: changed }) : undefined;
+    log("info", "handoff.repeat", { status: "landed", id, changed: changed.length, unchanged: unchanged.length, failed: failed.length, cost_usd: cost });
+    return receipt({
+      status: "landed", ...(id ? { id } : {}), changed: changedPaths, unchanged, failed, routed_model: routedModel,
+      ...(byClaude ? { by_fallback: byClaude, fallback_model: typists.fallback?.modelName } : {}),
+      check, cost_usd: cost,
+      next: `${leftForChat}${id ? `Look over the changed files before you tell the person it is done; undo_hand_off with id ${id} takes this back.` : "No file needed the change."}`,
+    });
+  } finally {
+    scratch.remove();
+  }
+}
+
+function undo(args: Record<string, unknown>, chat: ChatHandoff): Reply {
+  const id = typeof args.id === "string" ? args.id.trim() : "";
+  if (!id) return receipt({ status: "refused", reason: "id is empty: name the hand-off to undo (its receipt's id)", next: "Nothing was changed." });
+  const result = undoLanding(chat.dir, chat.projectDir, id);
+  if (result.refused !== undefined) return receipt({ status: "refused", reason: result.refused, next: "Nothing was changed." });
+  log("info", "handoff.undo", { id, restored: result.restored.length, left_alone: result.left_alone.length });
+  return receipt({
+    status: "undone", id, restored: result.restored, left_alone: result.left_alone,
+    ...(result.left_alone.length ? { next: `${result.left_alone.join(", ")} changed after the hand-off and was left as it is: look at it yourself.` } : {}),
+  });
+}

@@ -1,8 +1,8 @@
 /**
- * Reads the END of a chat's transcript to learn one thing the hook input does not carry: whether a message was typed
- * while Claude was still working (sentWhileWorking). Only a bounded tail is read, so the cost is the same for a 2 MB
- * transcript and a 200 MB one. (Until 0.8.4 it also read the context size and the answering model for the generic
- * orchestrator's prices; that went with it.)
+ * Reads the END of a chat's transcript to learn two things the hook input does not carry: whether a message was typed
+ * while Claude was still working (sentWhileWorking), and which model the chat last answered with (lastAssistantModel,
+ * for hand-off mode, which keeps a chat on one model). Only a bounded tail is read, so the cost is the same for a
+ * 2 MB transcript and a 200 MB one.
  */
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 
@@ -50,6 +50,29 @@ export function sentWhileWorking(transcriptPath, text) {
     if (rec.isSidechain === true) continue;
     if (rec.type === "attachment" && rec.attachment?.type === "queued_command" && typeof rec.attachment.prompt === "string" && rec.attachment.prompt.trim() === want) return true;
     if (rec.type === "user" && contentText(rec.message?.content).trim() === want) return false;
+  }
+  return null;
+}
+
+/**
+ * The model the chat itself last answered with, and when: `{ model, at }` (at in milliseconds), or null when the tail
+ * holds no answer of the chat's own. A helper agent's answers (sidechain entries) and the entries Claude Code writes
+ * itself without a model ("<synthetic>") are not the chat's model. The name is returned as written; the caller
+ * removes a context tag such as "[1m]".
+ */
+export function lastAssistantModel(transcriptPath) {
+  if (typeof transcriptPath !== "string" || !transcriptPath) return null;
+  const lines = readTail(transcriptPath).split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line || line[0] !== "{") continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch { continue; }
+    if (rec.type !== "assistant" || rec.isSidechain === true) continue;
+    const model = rec.message?.model;
+    if (typeof model !== "string" || !model || model.startsWith("<")) continue;
+    const at = Date.parse(rec.timestamp ?? "");
+    return { model, at: Number.isFinite(at) ? at : 0 };
   }
   return null;
 }

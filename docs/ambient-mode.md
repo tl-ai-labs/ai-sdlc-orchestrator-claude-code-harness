@@ -2,6 +2,8 @@
 
 Zero-touch is the part of the plugin that works while you chat with Claude Code as usual. You type a normal sentence; if it clearly asks for one of the eight `/mmo:` jobs, that job's workflow runs exactly as if you had typed the command. Every other message is an ordinary Claude Code chat: nothing is added to it, nothing is refused. It is switched by its own plugin, **`zero-touch`**, listed beside `mmo` in the same marketplace: install and enable it and every new chat has zero-touch; disable it and new chats have none. Without it the `mmo` plugin behaves exactly as it did before this page existed.
 
+That is **workflow mode**, the default. The same plugin has a second mode, **hand-off mode**, chosen in the person's mode file: the chat's own model does the development, and new docs, specs, plans, tests and repeated edits go to a cheaper model. It has its own section, "Hand-off mode", below; everything before that section describes workflow mode.
+
 (The file keeps its old name, `ambient-mode.md`, so existing links still work.)
 
 ## What changed in 0.8.4: routing only
@@ -9,12 +11,12 @@ Zero-touch is the part of the plugin that works while you chat with Claude Code 
 Until 0.8.3 zero-touch had a second half, the **generic orchestrator** (ask 1): in a chat whose message was not a recognised job it sent a start-of-chat note, turned big Reads into code-built outlines, refused by-hand typing above a break-even and handed it to a Flash or Sonnet worker through ten extra server tools, drew a control arm for measurement, could lock the chat's model, and kept a savings board. **0.8.4 removes all of it.** A zero-touch chat whose message is not a recognised job is now plain Claude Code. Its code is kept on the branch `archive/generic-orchestrator` (tag `generic-orchestrator-0.8.3`).
 
 What went, concretely:
-- Of 0.8.3's 22 zero-touch hooks, six stay (`session-start`, `prompt`, `pre-skill`, `pre-any`, `post-skill`, `pre-agent`) and 16 are gone: Read, Bash, Write, Edit, the worker tools, model switch, compaction, helper start, the old turn end, and the command-expansion hook, whose work the prompt hook now does. Two are new, for the second-job question: `post-question` and `turn-end` (a `Stop` hook again, now for the queue). Eight in all (below).
+- Of 0.8.3's 22 zero-touch hooks, six stay (`session-start`, `prompt`, `pre-skill`, `pre-any`, `post-skill`, `pre-agent`) and 16 are gone: Read, Bash, Write, Edit, the worker tools, model switch, compaction, helper start, the old turn end, and the command-expansion hook, whose work the prompt hook now does. Two are new, for the second-job question: `post-question` and `turn-end` (a `Stop` hook again, now for the queue). Eight in all for workflow routing; hand-off mode adds two (below).
 - The ten worker tools the server listed in every chat (`fix_from_analysis`, `write_files_from_specs`, `write_tests_from_cases`, `repeat_edit_across_files`, `scout_repo`, `job_result`, `undo_job`, `consent_to_send`, `lookup`, `write_files`). The server's tool list is the pipeline's and the executor's again (`plugin/mcp/model-dispatch/test/toolList.test.mjs`).
 - The job runner, the apply and lookup scripts, the census, the board, `setup.mjs`, the prompt labels and 27 library modules under `plugin/scripts/ambient/`, and `tools/ambient-preflight.mjs`.
 - Every setting of theirs (see "Settings").
 
-Tests: `tools/test/zero-touch-a-only.test.mjs` (an ordinary message gets nothing; every tool passes untouched; only the eight hooks are registered; no file is left that the hook does not use).
+Tests: `tools/test/zero-touch-a-only.test.mjs` (an ordinary message gets nothing; every tool passes untouched; only zero-touch's own hooks are registered; no file is left that the hook does not use).
 
 What 0.8.4 added to routing, each with its tests:
 - **A second job while a workflow runs** is held and the person chooses "Queue it" or "Replace it" (see "A second job while a workflow runs"; `tools/test/zero-touch-queue.test.mjs`).
@@ -36,7 +38,7 @@ What 0.8.4 added to routing, each with its tests:
 **The person sees it.** Three kinds of message come from zero-touch's own code, as a hook's `systemMessage`: Claude Code shows it in the chat and does not give it to the model, so it appears every time and the model cannot reword it.
 
 - **The start message**, from the zero-touch plugin's start hook (`zero-touch/scripts/start-chat.mjs`): at a fresh start (a new chat or `/clear`), and again after a compaction or when a chat is reopened (the chat keeps its mode; its first lines may be out of view). It says workflow mode is on, what to ask for, that anything else is a normal Claude chat, which policy the chat's workflows will use (this project's `routing-policy.yaml`, else the project's saved choice, else the person's default, else the shipped one) and how to turn zero-touch off.
-- **Off:** the person's mode file `~/.mmo-ambient/mode` holding `off` leaves a new chat without zero-touch, and the start message says so and how to turn it on. A missing file or any other value is workflow mode. A disabled plugin shows nothing: its hooks do not run.
+- **The mode file:** the person's `~/.mmo-ambient/mode` holds `a` (workflow mode), `b` (hand-off mode) or `off`. `off` leaves a new chat without zero-touch, and the start message says so and how to turn it on. A missing file or any other value is workflow mode. Every start message says how to reach the other modes. A disabled plugin shows nothing: its hooks do not run.
 - **One line after each typed message**, from the prompt hook (`lib/route-flow.mjs` `PERSON_LINE`), always starting with `Zero-touch:`:
 
 | What happened | Line |
@@ -61,7 +63,7 @@ Nothing is shown for a message nobody typed (a machine notice), for a typed `/mm
 
 Without a record (and without `MMO_AMBIENT`), the shell shim in front of every zero-touch hook (`plugin/hooks/ambient.sh`) exits before `node` even starts: it reads the chat id from the start of the hook input, and an id it cannot read with certainty goes on to `node`, which decides. Tests: `tools/test/zero-touch-plugin.test.mjs`, `tools/test/ambient-chat-decision.test.mjs`.
 
-## The eight hooks
+## The twelve hooks
 
 All in `plugin/hooks/hooks.json`, all through the POSIX shim with a 5-second timeout, all exit 0 (a decision travels as JSON on stdout, never as an exit code), all handled by `plugin/scripts/ambient/hook.mjs`:
 
@@ -75,6 +77,12 @@ All in `plugin/hooks/hooks.json`, all through the POSIX shim with a 5-second tim
 | `post-question` | `PostToolUse` on `AskUserQuestion` | Reads the person's answer to the Queue-or-Replace question and acts on it. |
 | `pre-agent` | `PreToolUse` on `Agent` / `Task` | The five mmo agents run only inside a workflow, and not while the question waits; the chat hiring one by itself is refused. |
 | `turn-end` | `Stop` | Ends a queued typed command's hold; once the chat's workflow has ended, continues the turn with the first queued job. |
+| `pre-model-switch` | `PreModelSwitch` | Hand-off mode only: refuses a switch away from the chat's pinned model. Answers nothing in a workflow-mode chat. |
+| `post-model-switch` | `PostModelSwitch` | Hand-off mode only: keeps the model the chat is on now, so each line names the model really in use. Decides nothing. |
+| `pre-handoff` | `PreToolUse` on the hand-off tools | In a hand-off chat: stamps the call with the chat, the project folder and who pays, after making sure the chat's models are resolved. In a workflow-mode chat and inside a workflow run: refuses the call with the reason. |
+| `post-handoff` | `PostToolUse` on the hand-off tools | Shows the person one line written from the tool's receipt. Decides nothing, adds nothing for the model. |
+
+In a hand-off chat the same `prompt` hook recognises hand-off work instead of workflow jobs, and `pre-skill` lets a workflow start only from a typed command ("Hand-off mode" below).
 
 The pipeline's own hooks (the write contract, the foreground-helpers guard, telemetry, the executor guard) are not zero-touch's and keep their own settings, with no short timeout: Claude Code lets a tool call through when its guard hook times out.
 
@@ -84,7 +92,14 @@ Everything lives under `~/.mmo-ambient/` (override with `MMO_HOME`), directories
 
 | Path | Holds |
 |---|---|
-| `sessions/<id>/chat_mode` | The chat's on/off decision, written once at its start by the zero-touch plugin (or by `MMO_AMBIENT`): "on" or "observe"; no file means off. |
+| `sessions/<id>/chat_mode` | The chat's mode, written once at its start by the zero-touch plugin (or by `MMO_AMBIENT`): "on" (workflow mode), "b" (hand-off mode) or "observe"; no file means off. |
+| `sessions/<id>/handoff.json` | Hand-off mode: the chat's stamp, written once at its start: the model it is pinned to (`chat_model`, and `pin`: default, setting or admin), the hand-off policy (`policy`, or `policy_file` for a project's own) and any setting that was set aside. |
+| `sessions/<id>/handoff_models.json` | Hand-off mode: the model the policy gives each kind of hand-off work, asked of the workflows' router once per chat. |
+| `sessions/<id>/model_now` | Hand-off mode: the model Claude Code last said the chat is on (at its start, at a model switch). |
+| `sessions/<id>/handoff-telemetry.jsonl` | Hand-off mode: the chat's hand-off bill, one line per typist call (failed ones included), in the shape of a workflow's telemetry. Written by the server. |
+| `sessions/<id>/handoff_released.json` | Hand-off mode: the files a failed hand-off handed back, which the chat's model may write by hand. Written by the server. |
+| `sessions/<id>/handoff_landings.json` | Hand-off mode: every hand-off that changed the project, in order, each with its id (`h1`, `h2`, …), its tool and its files (whether each existed before, and a hash of what was written). Written by the server. |
+| `sessions/<id>/handoff_undo/<id>/<n>` | Hand-off mode: the earlier text of a landing's n-th file, for the undo. |
 | `sessions/<id>/events.jsonl` | One record per event: the chat's start, each prompt's length, each route decision and why, each refusal. |
 | `sessions/<id>/started` | The chat's start work has run (at its start, or late at its first moment with a record). |
 | `sessions/<id>/route.json` | The job the rules recognised in the latest message (or the queue or a replace started): `pending` until its workflow starts, then `started`. |
@@ -110,6 +125,7 @@ Layers, weakest first: shipped defaults (`plugin/config/ambient.default.json`), 
 | `routing` | on / off | on. Off: no workflow is ever started from chat, and the chat may not start one by itself |
 | `routing_defaults` | `{policy, auth}` | `opus-plus-flash-v38`, `estimated`: what a routed workflow starts with when the project has saved no policy of its own |
 | `retention_days` | a whole number of days | 30 |
+| `handoff` | `{chat_model, policy}` | `claude-opus-5`, `opus-plus-flash-v38`: hand-off mode's two settings, read once per chat at its start ("Hand-off mode" below) |
 
 A project file is anyone's input: anyone who can land a commit can edit it. It may only switch `routing` off, never on, and nothing else. (Keeping zero-touch out of one project entirely is Claude Code's own job: disable the zero-touch plugin at project scope.) A value of the wrong type is ignored; an unknown `routing` value means off; a policy name that is not a plain name is never passed to a script. A settings file from 0.8.3 still reads: its other keys (valves, cost, prices, workers, jobs, offers, delegation, control, thinker, lock_model, closed cells, never-delegate paths) are ignored, and so is `receipts.json`, which let a trusted project file set them.
 
@@ -225,6 +241,166 @@ The model is told the exact question and the two labels and must ask with Claude
 
 Tests: `tools/test/zero-touch-queue.test.mjs`.
 
+## Hand-off mode
+
+Workflow mode runs a whole gated workflow for a job. Hand-off mode is for ordinary development in the chat: **the chat's own model does the work** (reading, deciding, new code, bug fixes, refactors, reviews), and only work that is mostly typing AND has a check code can run on the result goes to a cheaper model. Put `b` in `~/.mmo-ambient/mode` and start a new chat.
+
+| Kind | What it covers | Goes to |
+|---|---|---|
+| docs | a new document of the project: a README, a guide, an API reference, a changelog | the policy's `docs` stage |
+| spec | a new spec: requirements, a design document, an API spec, a data-model write-up | the policy's `docs` stage |
+| plan | planning text: a plan, a task breakdown or tickets, a status report, release notes | the policy's `docs` stage |
+| tests | new tests for code that exists | the policy's `tests` stage |
+| repeat | the same change repeated across files (the chat's model makes it once) | the policy's `codegen` stage |
+
+New code, a bug fix and a refactor are never handed off: a wrong answer there is hard to spot. **Plain words start no workflow in a hand-off chat**; a workflow starts only when the person types its command (`/mmo:greenfield`, `/mmo:bugfix`, …), and then runs as in any chat.
+
+### The chat's start (`zero-touch/scripts/start-chat.mjs`)
+
+The start hook reads the mode file and, for `b`, hand-off mode's two settings, **once**, and stamps them on the chat (`sessions/<id>/handoff.json`). Everything later reads the stamp, never the files: a setting changed in the middle of a chat would leave its start note, its model guard and its hand-offs disagreeing, and would split one chat's costs across two sets of models. A change reaches the next new chat, or `/clear`.
+
+| Setting (in `~/.mmo-ambient/ambient.json`) | Controls | Default |
+|---|---|---|
+| `handoff.chat_model` | the model a hand-off chat is pinned to; an exact model id, never an alias such as `opus` | `claude-opus-5` |
+| `handoff.policy` | the shipped policy whose models do the hand-offs; its `select` slot decides how a Gemini model is reached | `opus-plus-flash-v38` |
+
+Two things outrank them. **An organisation's pinned model** (managed settings `model`) is the chat's pin; written as an alias it cannot be compared with a model id, so the plugin then pins nothing and the organisation's setting is what holds the chat. **A policy file in the project** (`routing-policy.yaml`) wins over `handoff.policy`, as it does for a workflow: a project uses it to say which models may see its code. A setting that is not a model id or a policy name is set aside for the default, and the start message says so.
+
+The person sees the start message (hand-off mode is on, what is handed off, the chat model and whether the chat is on it, the hand-off policy, where the settings live, that workflows start only from a typed command, how to change the mode). The chat's model gets a note with the hand-off rules (the hook's `additionalContext`). A compaction drops that note from what the model reads, so the message and the note are both given again after a compaction and when a chat is reopened, from the stamp.
+
+### Recognition (`lib/handoff-route.mjs`)
+
+Fixed patterns, no model. The message is read the way workflow mode reads it (the first line, polite openers removed, questions and requests to explain set aside), sentence by sentence and clause by clause. A clause is hand-off work when a creating verb opens it (write, create, draft, generate, prepare, add, …) and the thing it names **is** one of the documents above, not something that mentions one: the document word must close its noun phrase.
+
+| Message | Recognised as | Why |
+|---|---|---|
+| `write a README for this project` | docs | |
+| `draft a design doc for the cache layer` | spec | |
+| `write a test plan for the checkout flow` | plan | the most specific word wins: a test plan is a plan |
+| `add tests and docs for the parser` | tests and docs | one verb, two things, each judged on its own |
+| `fix the login bug and write tests for it` | tests, beside the chat's own work | |
+| `rename getUser to fetchUser everywhere` | repeat | a mechanical change verb plus where it is repeated |
+| `do the same in the other three services` | repeat | |
+| `add a changelog entry for this fix` | none | the thing named is an entry: an edit to a file that exists |
+| `update the README with the new setup steps` | none | an update, not a new document |
+| `add docstrings to the scheduler package` | none | documentation inside code files is an edit to code |
+| `document the auth module` | none | unsure: a document of its own, or comments in the code |
+| `fix the failing tests across the repo` | none | each failure is its own fix |
+
+Precision first: recognition decides only the line the person sees and the reminder the chat's model gets. The model can still hand off work the patterns missed. Unlike workflow mode, a follow-up is fine here ("also add tests", "write tests for it"): nothing is started. The labelled set is `tools/test/zero-touch-handoff-words.test.mjs`.
+
+### What the person sees after each message (`lib/handoff.mjs`)
+
+| What happened | Line |
+|---|---|
+| A new document, spec or plan | `Zero-touch: this goes to Flash (docs).` (or `spec`, `plans and reports`) |
+| New tests | `Zero-touch: the tests go to Flash.` |
+| A repeated change | `Zero-touch: Opus makes the change once; Flash repeats it in the other files.` |
+| Hand-off work beside other work | the line above, then `Opus handles the rest in the chat.` |
+| Anything else | `Zero-touch: Opus handles this in the chat.` |
+| Hand-off work that cannot run | `Zero-touch: hand-off cannot run (<why>); Opus handles this in the chat.` |
+| While a typed workflow runs | workflow mode's own lines (the open gate's answer; the running workflow carries on) |
+
+The names are never guessed. **The hand-off model** is the one the policy gives that kind of work, asked of the workflows' own router once per chat (`plugin/scripts/handoff-models.mjs`, the same routing code the server uses) and kept for the chat, so a policy that sends docs to Sonnet shows `Sonnet`. **The chat's model** is the one the chat is on now: what Claude Code last reported (the start moment, a model switch) or, when newer, the model the chat's transcript shows it last answered with; when nothing says, the line reads `Zero-touch: handled in the chat; nothing is handed off.` The chat's model also gets a reminder naming the tool for each recognised kind.
+
+### The chat stays on its model
+
+Hand-off mode pins the chat, because the chat's own model does the development: which model that is decides the quality and the cost of everything that is not handed off. (Workflow mode never pins the chat: its thinking helpers name their model in their own agent files.) A plugin cannot set a chat's model, so:
+
+- the start message asks for `/model <handoff.chat_model>` when the chat is on another model, or may be;
+- a switch to another model is refused (`PreModelSwitch`, Claude Code 2.1.251 and later), and the person reads why and how to use another model. A switch to the pinned model always passes, and a switch whose target the hook cannot read is never refused: a guard that misreads its input must not lock anyone out of their model picker;
+- while the chat is on another model anyway, every line adds `This chat is on <model>; hand-off mode expects <pinned>: type /model <pinned>.`
+
+### A hand-off, step by step
+
+The hand-off tools are the `mmo` server's (`plugin/mcp/model-dispatch/src/handoff/`). The server lists them in every chat, because it cannot know a chat's mode when its tools are listed; a call works only in a hand-off chat.
+
+1. **The chat's model fills in the tool's form and makes one call.** The form is a brief, never the finished text. (For a repeated change it first makes the change itself, in one file.)
+2. **The hook stamps the call** (`pre-handoff`): the chat's id, the project folder and who pays for a Claude typist. The server takes nothing else about the chat from the call: the policy and the model for this kind of work are read from the chat's own records, so nothing the model writes in a call can choose them. A call with no stamp, or whose chat is not a hand-off chat, is refused. So is a call inside a workflow run.
+3. **Code checks the form** before anything is sent. Every problem is listed at once, by field.
+4. **The typist writes.** The ladder is the executor's: two attempts by the model the policy routes this work to (the second with the reason the first was refused), then one by the policy's Claude model. A vendor or network failure waits and is not an attempt. A refused login (HTTP 401 or 403) skips that model's second attempt. Every call is billed and logged, failed ones included.
+5. **Code checks the answer**, and only a checked answer reaches the project. Tests and a repeated change are also run, in a scratch copy of the project (below).
+6. **The receipt** goes to the chat's model (status, who wrote it, attempts, cost, what was checked, what to do next), and the person sees one line (`post-handoff`):
+
+| Outcome | Line |
+|---|---|
+| A file written by the routed model | `Zero-touch: docs/setup.md written by Flash, checked ($0.0041).` |
+| The routed model failed, the Claude model wrote it | `Zero-touch: Flash failed, done by Opus: docs/setup.md written, checked ($0.10).` |
+| Every attempt failed | `Zero-touch: hand-off failed for docs/setup.md ($0.01 spent); Opus writes it in the chat.` (the file is handed back to the chat's model) |
+| Tests that ran and did not pass | `Zero-touch: the tests in tests/cart.test.js did not pass in a scratch copy ($0.10 spent); nothing was written. Opus looks at the output.` |
+| A repeated change, landed | `Zero-touch: the change repeated in 3 files by Flash, checked ($0.01).` (`no check command run` when none was given; `2 left for Opus to change.` when some targets failed) |
+| A repeated change that failed its check | `Zero-touch: the repeated change failed its check in a scratch copy ($0.01 spent); nothing was changed. Opus makes the change in the chat.` |
+| An undo | `Zero-touch: hand-off h2 undone (2 files restored).` |
+| The form was not complete | `Zero-touch: hand-off form not complete (2 to fix); nothing was sent.` |
+
+Every hand-off that changes the project is one **landing** with an id on its receipt (`h1`, `h2`, …), recorded with what each file held before (`handoff/landing.ts`).
+
+### `write_document` (docs, spec, plan)
+
+The form (`handoff/document.ts`):
+
+| Field | Holds | Checked |
+|---|---|---|
+| `kind` | `docs`, `spec` or `plan` | one of the three |
+| `file` | the NEW file, from the project folder | inside the project (symlinks followed), not under `.git`, and not there yet: a change to a file that exists is the chat model's own edit |
+| `purpose`, `readers` | what the document is for; who reads it | filled, one line |
+| `sections` | each `heading` and `must_say` | at least one; no heading twice; every string one line |
+| `facts` | everything the document may state about the project: each `statement`, its `source` (a project file, or `chat` for something the person said) and, for a file, a `quote` | at least one; a file source exists; **the quote is in that file word for word**; a fact from the chat has no quote |
+| `style_from` | optional: a document whose tone and layout to follow | a file of the project |
+
+Every string is one line: a field holding several lines or a code block is the finished text, which would mean the chat's model did the typing and the hand-off saved nothing. The typist is told it cannot see the project and may state only the facts.
+
+The answer's checks refuse only what is certainly wrong whatever the document is about:
+
+- a listed section has no heading of its own (in Markdown a heading line, so "Installation notes" is no "Install" section);
+- a shell command is not one of the facts (commands joined with `&&` or `;` are each checked; a labelled shell block is commands throughout, an unlabelled block only where a line carries a `$` prompt);
+- inline code naming a path under one of the project's own top-level folders, or a relative link, leads to nothing in the project. A word with a slash that is no project path (`text/html`) is left alone.
+
+Whether the prose is right is the chat model's reading of the written file, which the receipt asks for.
+
+### The scratch copy (`handoff/scratch.ts`)
+
+Tests and a repeated change are **run** before they reach the project, in a copy of it, with a command the chat's model names in the form. The project is never the place a hand-off is tried out.
+
+- The copy holds the project's own files as they are on disk now (tracked files and new ones, uncommitted work included) as real copies, copy-on-write where the file system has it, so whatever the command writes over them stays in the copy.
+- What git ignores (installed dependencies, build output, caches) is linked in, not copied: it can be large, and the command needs it. A command that writes inside such a folder (a cache under `node_modules`) writes to the real one, as it does when the person runs it.
+- Git is what tells the two apart, so **a project that is not a git repository gets no copy and the hand-off is refused**; the chat's model does the work itself. Nothing is written into the repository to make the copy (no commit, no worktree).
+- The command runs through `sh -c`, as typed, with `CI=1` (runners do not wait for a person), both output streams together; the end of a long output is kept (8,000 characters, a stated bound). A command past ten minutes is stopped, its process group with it.
+- **The command is the chat model's, run with the person's own rights**, as when the model runs it with Bash; Claude Code's permission prompt for the tool call shows it. Before anything is sent, the form check asks the shell that its program exists, and for `npm run <script>` / `npm test` that package.json has the script.
+
+### `write_tests_from_cases`
+
+Deciding what to test is judgment; typing the test file is not. The form (`handoff/tests.ts`):
+
+| Field | Holds | Checked |
+|---|---|---|
+| `file` | the NEW test file | inside the project, not there yet |
+| `target` | the file under test | a file of the project; its text travels with the brief |
+| `functions` | the names the tests exercise | at least one; each is in the target as a whole name |
+| `cases` | each `name`, `given`, `expect` | at least one; no name twice; every string one line |
+| `style_from` | optional: a test file to follow | a file of the project; its text travels with the brief |
+| `test_command` | the command that runs the new file | its program is on the machine; an npm script exists |
+| `notes` | optional | one line |
+
+The answer is checked in two steps: every case has a test with exactly its name (however the file quotes it), then the file is written into the scratch copy and the test command runs there. **Only a file whose tests pass is written into the project.**
+
+**A case's expected result is the specification.** The typist is told never to change it, or weaken an assertion, to make a test pass. So when the code under test does something else than a case expects, the tests keep failing, nothing is written, and the chat's model gets the run's output: a wrong case it corrects and hands off again; a real bug it tells the person. A hand-off that bent the tests until they passed would hide exactly the bugs tests exist to find.
+
+### `repeat_edit_across_files` and `undo_hand_off`
+
+The chat's model makes a change **once, by hand**, in one file. The form (`handoff/repeat.ts`): `example` (that file; it must differ from the last commit, and its diff is the pattern), `targets` (the files to repeat it in), `change` (the change in words) and `check_command` (optional but wanted: the project's build or test command).
+
+Each target is one job, a few at a time, answered as exact edits. Code checks each answer before any file is touched:
+
+- every edit's search text is in the file exactly once (the executor's own rule), so an edit lands where it was meant or not at all;
+- **an edit removes only lines the change is about.** The words the example's change took away (in its removed lines and in none of its added ones: `getUser` for a rename to `fetchUser`, `moment` for a move to another library) mark such a line. An edit that removes a line carrying none of them is rewriting something else and is refused. A change that only added lines took no word away, so its repeats may add lines and remove none. A line that only changes its indentation is not removed.
+
+Then every changed file is written into the scratch copy (which already holds the example as changed) and the check command runs there. When it passes, the files are written into the project as one landing; when it fails, nothing is changed and the output comes back. A target whose edits never pass is named back to the chat's model, which changes that file itself; the others still land. A file that needs no change is reported unchanged.
+
+`undo_hand_off` takes a landing back by its id: a file it changed gets its earlier text, a file it created is removed. A file that no longer holds what the hand-off wrote was changed since; it is left alone and named.
+
+Tests: `tools/test/zero-touch-handoff-start.test.mjs` (the start, the stamp, the settings), `tools/test/zero-touch-handoff-words.test.mjs` (recognition), `tools/test/zero-touch-handoff-chat.test.mjs` (the lines, no workflow from plain words, typed workflows, the model guard), `tools/test/zero-touch-handoff-tools.test.mjs` (the stamp, the refusals, the receipt line), `plugin/mcp/model-dispatch/test/handoffDocument.test.mjs` (the form, the brief, the answer's checks, the ladder, the receipt), `plugin/mcp/model-dispatch/test/handoffScratch.test.mjs` (the scratch copy, a command run in it, the landing record and the undo), `plugin/mcp/model-dispatch/test/handoffTestsAndEdits.test.mjs` (the tests tool and the repeated change, with real commands run in real scratch copies), `plugin/mcp/model-dispatch/test/toolList.test.mjs` (the listing, and a call through the real server).
+
 ## What zero-touch leaves alone: everything 0.7.7 does
 
 From 0.8.3 zero-touch sits on top of the pipeline (0.7.7, and from 0.8.4 the greenfield executor of 0.7.12), and nothing the pipeline does changes. That covers every `/mmo:` command, typed or started by the model: the same phases, gates, policies, routing, worker launches, output caps and hooks.
@@ -249,9 +425,11 @@ Their code is in `git show ed8e701`, and `docs/methodology.md` (v0.8.3) lists th
 
 ## After a Claude Code update
 
-Routing relies on these behaviours of the app: a note the prompt hook adds reaches the model; a `PreToolUse` deny on the `Skill` tool stops a command and the model reads the reason; a message typed while Claude works is recorded in the transcript as a `queued_command`; both plugins' `SessionStart` hooks run for a new chat and after `/clear`, and a start hook's `systemMessage` is shown to the person; a multiple-choice answer reaches `PostToolUse` as `answers[<question>]`; a `Stop` hook's `block` continues the turn with its reason; and `${CLAUDE_PLUGIN_ROOT}` is filled in inside commands, skills and agents (probed on 2.1.283). An update can change any of them silently. After every update, in one new chat with zero-touch on: the start line shows; a clear job message starts its workflow; a second job during it gets the Queue-or-Replace question; and a `/mmo:` command the chat tries by itself is refused with its reason. `tools/test/ambient-routing-hooks.test.mjs` proves the plugin's side; the live chat proves the app's.
+Routing relies on these behaviours of the app: a note the prompt hook adds reaches the model; a `PreToolUse` deny on the `Skill` tool stops a command and the model reads the reason; a message typed while Claude works is recorded in the transcript as a `queued_command`; both plugins' `SessionStart` hooks run for a new chat and after `/clear`, and a start hook's `systemMessage` is shown to the person; a multiple-choice answer reaches `PostToolUse` as `answers[<question>]`; a `Stop` hook's `block` continues the turn with its reason; and `${CLAUDE_PLUGIN_ROOT}` is filled in inside commands, skills and agents (probed on 2.1.283). Hand-off mode also relies on these: a start hook's `additionalContext` reaches the model, at a fresh start and after a compaction; a `PreModelSwitch` deny stops a model switch and the person reads the reason; the start moment or the transcript names the chat's model; a `PreToolUse` hook's `updatedInput` replaces the input of one of the plugin's own server tools; and a `PostToolUse` hook's `systemMessage` is shown after such a tool answered. An update can change any of them silently. After every update, in one new chat with zero-touch on: the start line shows; a clear job message starts its workflow; a second job during it gets the Queue-or-Replace question; and a `/mmo:` command the chat tries by itself is refused with its reason. `tools/test/ambient-routing-hooks.test.mjs` proves the plugin's side; the live chat proves the app's.
 
 ## Status
+
+**Hand-off mode (30 Sep 2026), being built on 0.8.4:** the chat's start, its two settings, recognition, the lines, the model pin and the four hand-off tools (`write_document`, `write_tests_from_cases`, `repeat_edit_across_files`, `undo_hand_off`) are built and tested offline. **Not built yet:** the refusal of a new document or test file typed by hand in a hand-off chat; until it is, the start note tells the chat's model that such typing is refused while nothing refuses it. Nothing of hand-off mode has been checked live, and no real model has written anything through it yet.
 
 **0.8.4 (29 Sep 2026): the generic orchestrator removed; the second-job question, the project lock, the start line, the below/above rule, the one-off command fix and the installed-path links added.** Built and tested offline (root and server suites), the platform facts probed live on 2.1.283. Not yet checked live end to end; the live checks, in the desktop app and in a terminal, are the next step.
 

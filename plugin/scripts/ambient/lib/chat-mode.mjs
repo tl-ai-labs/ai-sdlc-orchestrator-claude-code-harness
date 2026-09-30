@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { ensureDir, sessionDir } from "./paths.mjs";
 
 const FILE = "chat_mode";
-const ACTIVE = ["on", "observe"];
+const ACTIVE = ["on", "observe", "b"];
 const FRESH_STARTS = ["startup", "clear"];
 
 /** The mode this chat was started in ("on" or "observe"), or null: no record, so the chat is off. */

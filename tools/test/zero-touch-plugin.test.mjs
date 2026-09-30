@@ -152,7 +152,7 @@ test("the person sees the start message at a fresh start: workflow mode, what it
       assert.match(msg, /Anything else is a normal Claude chat\./);
       assert.match(msg, /Policy: opus-plus-flash-v38 \(the default: Opus 5 plans and reviews, Flash 3\.8 types\)\. To use your own, put a policy file named routing-policy\.yaml in this folder; it applies to the next workflow\./);
       assert.doesNotMatch(msg, /\/mmo:/, "no plugin command to learn");
-      assert.match(msg, /put off in \S+mode and start a new chat/, "how to turn it off");
+      assert.match(msg, /To change the mode, put b \(hand-off\) or off in \S+mode and start a new chat\./, "how to turn it off, or reach hand-off mode");
       assert.match(msg, /until \/clear or a new chat/);
       assert.equal(r.json?.hookSpecificOutput, undefined, "the model is given nothing");
     }
@@ -174,12 +174,12 @@ test("the start message names the policy the chat's workflows will use: the proj
   } finally { s.cleanup(); }
 });
 
-test("the mode file: off gives no zero-touch and says so; a missing or unknown value is workflow mode", async () => {
+test("the mode file: off gives no zero-touch and says so; a missing or unknown value is workflow mode (b, hand-off mode: zero-touch-handoff-start.test.mjs)", async () => {
   const s = sandbox();
   try {
     writeFileSync(join(s.home, "mode"), "off\n");
     const off = await ztStart(s, "m-off");
-    assert.match(off.json?.systemMessage ?? "", /^Zero-touch is off for this chat\. To turn it on, put a in \S+mode and start a new chat\.$/);
+    assert.match(off.json?.systemMessage ?? "", /^Zero-touch is off for this chat\. To turn it on, put a \(workflows from plain words\) or b \(hand-off\) in \S+mode and start a new chat\.$/);
     assert.equal(chatMode("m-off", { MMO_HOME: s.home }), null, "the chat is not marked: nothing of zero-touch acts in it");
     writeFileSync(join(s.home, "mode"), "a\n");
     assert.match((await ztStart(s, "m-a")).json.systemMessage, /^Zero-touch workflow mode is on/);

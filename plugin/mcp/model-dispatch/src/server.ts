@@ -43,6 +43,7 @@ import { resolveProjectRoot } from "./project-root.js";
 import { log, setLevel, configureSinks, type Level } from "./log.js";
 // Typed-spec executor tools (greenfield runs): listed below, handled in executor/tools.ts.
 import { EXECUTOR_TOOLS, EXECUTOR_TOOL_NAMES, executorClaudeLeaves, executorPolicyNotes, handleExecutorTool, type RunState } from "./executor/tools.js";
+import { HANDOFF_TOOLS, HANDOFF_TOOL_NAMES, handleHandoffTool } from "./handoff/tools.js";
 import { leanOpusCliProblem } from "./executor/typists.js";
 import { runCard } from "./runCard.js";
 
@@ -456,6 +457,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     // (zero-touch's ask 1) listed here in every chat, workflow runs included; zero-touch's workflow routing needs no
     // tool of its own (test/toolList.test.mjs).
     ...EXECUTOR_TOOLS,
+    // Zero-touch's hand-off mode (handoff/tools.ts). Listed in every chat, because the server cannot know a chat's
+    // mode when its tools are listed; a call is refused unless the plugin's hook stamped it in a hand-off chat.
+    ...HANDOFF_TOOLS,
   ],
 }));
 
@@ -486,6 +490,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
       return await handleExecutorTool(name, a0, {
         run: () => runState,
         policy: (run) => ensurePolicy(run.policyName, run.projectRoot, run.policyPath),
+        overrides: selectOverrides(),
+        progress: { token, send: (params) => extra.sendNotification({ method: "notifications/progress", params } as any) },
+      });
+    }
+    // Zero-touch's hand-off tools: the chat, its policy and its models come from the hook's stamp and the chat's own
+    // records, never from pre-flight (a hand-off chat runs no workflow).
+    if (HANDOFF_TOOL_NAMES.has(name)) {
+      const token = (req.params as any)._meta?.progressToken;
+      return await handleHandoffTool(name, a0, {
         overrides: selectOverrides(),
         progress: { token, send: (params) => extra.sendNotification({ method: "notifications/progress", params } as any) },
       });
