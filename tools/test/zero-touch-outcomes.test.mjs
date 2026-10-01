@@ -362,6 +362,62 @@ test("before its run began, a turn that ended normally, or was cut off at a ques
   }
 });
 
+// A request the rules cannot place, sent while the workflow runs, is left to Claude's judgement, as when no workflow
+// runs: part of the running work, or a clearly separate job, which Claude's Skill call turns into a queued job.
+const UNPLACED_DOCS = "write API documentation for the date helpers in docs/dates.md";
+
+test("unplaced request mid-run × Claude judges it a separate job → its Skill call is queued and said, nothing starts", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await running(s, "j1");
+    const r = await midTurn(s, "j1", UNPLACED_DOCS);
+    assert.equal(line(r), null, "nothing is said before Claude judges it");
+    assert.match(context(r), /quick rules did not place it, so you judge it/);
+    assert.match(context(r), /part of that work/);
+    assert.match(context(r), /"mmo:docs"/);
+    assert.doesNotMatch(context(r), /"mmo:greenfield"/, "a new app is never offered in a project");
+    assert.deepEqual(queue(s, "j1"), []);
+    const k = await run("pre-skill", { session_id: "j1", cwd: s.repo, tool_name: "Skill", tool_input: { skill: "mmo:docs", args: "write API documentation for the date helpers" } }, s);
+    assert.ok(denied(k), "nothing starts while the workflow runs");
+    assert.equal(reason(k), "Zero-touch: noted. The documentation workflow will start by itself when the bug-fix workflow finishes, and it will wait for your approval at its first main step.");
+    assert.deepEqual(queue(s, "j1").map((q) => [q.job, q.args]), [["docs", "write API documentation for the date helpers"]]);
+  } finally { s.cleanup(); }
+});
+
+test("unplaced request mid-run × Claude judges it part of the running work → no call, nothing queued or said", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await running(s, "j2");
+    await midTurn(s, "j2", "the parser should also handle leap years properly");
+    assert.equal((await turnEnd(s, "j2")).stdout, "", "the workflow carries on: nothing starts, nothing is said");
+    assert.deepEqual(queue(s, "j2"), []);
+    assert.equal((await midTurn(s, "j2", "thanks, looks good")).stdout, "", "ordinary chat mid-run gets nothing added");
+  } finally { s.cleanup(); }
+});
+
+test("mid-run, Claude starting a workflow this folder does not allow → refused, never queued", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await running(s, "j3");
+    const k = await run("pre-skill", { session_id: "j3", cwd: s.repo, tool_name: "Skill", tool_input: { skill: "mmo:greenfield", args: "" } }, s);
+    assert.ok(denied(k));
+    assert.equal(reason(k), NOT_NOW);
+    assert.deepEqual(queue(s, "j3"), []);
+  } finally { s.cleanup(); }
+});
+
+test("an unplaced request that cut off the workflow's step is judged, and Claude is told to run the step again", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await prompt(s, "j4", JOB);
+    assert.ok(!denied(await skill(s, "j4", "mmo:bugfix", JOB)));
+    await run("pre-any", { session_id: "j4", cwd: s.repo, tool_name: "Bash", tool_input: { command: "git status" } }, s);
+    const r = await prompt(s, "j4", UNPLACED_DOCS);
+    assert.match(context(r), /quick rules did not place it, so you judge it/);
+    assert.match(context(r), /cut off the workflow's last step: run that step again and carry on/);
+  } finally { s.cleanup(); }
+});
+
 test("Claude starting a second workflow by itself mid-run → refused and queued, no box", { skip: SKIP ?? false }, async () => {
   const s = sandbox();
   try {

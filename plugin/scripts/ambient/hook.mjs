@@ -45,7 +45,7 @@ import { RUN_ID, abortRun, workflowState } from "./lib/workflow-log.mjs";
 import { stampedRunCheck } from "./lib/run-check.mjs";
 import { decideChatMode, dropChatMode } from "./lib/chat-mode.mjs";
 import { folderKind, isStopRequest, mentionsZeroTouch, requestLead, routeMessage } from "./lib/route.mjs";
-import { PERSON_LINE as L, REFUSAL, NOT_A_JOB_NOTE, SAVED_WITH_GIT, STOP_NOTE, runNote, cannotStartInstruction, carryYes, rememberedNote, chatPolicy, declinedLine, retryInstruction, dropRoute, helperModel, jobsFor, judgeable, judgeInstruction, KEEP_OUT, NOT_NOW_REASON, plainName, policyPath, readRoute, startArgs, startFirstReason, startInstruction, startProblem, typedBusyReason, writeRoute } from "./lib/route-flow.mjs";
+import { PERSON_LINE as L, REFUSAL, NOT_A_JOB_NOTE, SAVED_WITH_GIT, STOP_NOTE, runNote, cannotStartInstruction, carryYes, rememberedNote, midRunJudgeInstruction, chatPolicy, declinedLine, retryInstruction, dropRoute, helperModel, jobsFor, judgeable, judgeInstruction, KEEP_OUT, NOT_NOW_REASON, plainName, policyPath, readRoute, startArgs, startFirstReason, startInstruction, startProblem, typedBusyReason, writeRoute } from "./lib/route-flow.mjs";
 import { acquire, heldByOther, lockOwner, pipelineRunOf, pipelineSinceOf, refreshOwner, release, runClaimedByOther } from "./lib/project-lock.mjs";
 import * as Q from "./lib/queue.mjs";
 import { handoffMessage } from "./lib/handoff-route.mjs";
@@ -942,8 +942,17 @@ const handlers = {
       if (!working && waitingFor(ctx, cutOff)) return;
       const running = runningJob(ctx) ?? "workflow";
       // During a new-app build the folder is becoming that app: a change asked for now is a change to it.
-      const r = routeMessage(text, running === "greenfield" ? "existing" : folderKind(ctx.projectDir));
+      const folder = running === "greenfield" ? "existing" : folderKind(ctx.projectDir);
+      const r = routeMessage(text, folder);
       if (!r.job || r.job === "greenfield") {
+        // A request the rules cannot place is left to Claude's judgement, as when no workflow runs: about the running
+        // work, it stays part of it; a clearly separate job, Claude calls its workflow, and pre-skill queues that call
+        // and tells the person. Nothing starts here, so the running workflow is never in the way.
+        const firstLine = text.split("\n").find((l) => l.trim()) ?? "";
+        if (!r.job && judgeable(r, requestLead(firstLine).lead, text)) {
+          appendEvent(ctx.sid, "route.judge", { reason: r.reason, during: running, working });
+          return void say(midRunJudgeInstruction({ folder, running, cutOff: Boolean(cutOff) }), null);
+        }
         appendEvent(ctx.sid, "route.none", { reason: r.job ? "a new app while a workflow runs" : r.reason, during: running, working });
         return;
       }
@@ -1052,9 +1061,16 @@ const handlers = {
       // The chat starting a second workflow by itself while one runs: queued, as the person's own words are (no box,
       // nothing held), unless the new one could not start anyway (newJobProblem).
       const args = typeof ctx.input.tool_input?.args === "string" ? ctx.input.tool_input.args.replace(/^\s*\[zero-touch[^\]]*\]\s*/i, "") : "";
+      const running = runningJob(ctx) ?? "workflow";
+      // Only a job this folder allows, as for a start Claude judges when no workflow runs: never a new app in a
+      // project, never a change in an empty folder. During a new-app build the folder is becoming that app.
+      const folder = running === "greenfield" ? "existing" : folderKind(ctx.projectDir);
+      if (!jobsFor(folder).includes(job)) {
+        appendEvent(ctx.sid, "route.refused", { job, by: "chat", why: "not a job for this folder", during: running });
+        return void refuse(notNow);
+      }
       const blocked = newJobProblem(ctx, job);
       if (blocked) return void refuse([L.notStarted(blocked, job), cannotStartInstruction(job, blocked)]);
-      const running = runningJob(ctx) ?? "workflow";
       const added = Q.enqueue(ctx.sid, { job, args, via: "words" });
       appendEvent(ctx.sid, "route.remembered", { job, running, by: "skill", ...(added === "duplicate" ? { duplicate: true } : {}) });
       return void refuse([added === "duplicate" ? L.queuedTwice(job) : L.remembered(job, running), rememberedNote(job, running)]);

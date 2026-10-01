@@ -334,6 +334,27 @@ export function carryYes(text) {
 }
 
 /** What Claude is told for such a message: the jobs this folder allows, when to start one, and exactly how. */
+/**
+ * What Claude is told about a message, sent while this chat's workflow runs, that the rules could not place but that
+ * may ask for work (judgeable). Most such messages are about the running work; only a clearly separate job is
+ * queued. Claude never starts it: its Skill call is turned into a queued job by pre-skill, which says so to the
+ * person. `cutOff`: the message stopped the workflow's last step part-way, so that step is run again.
+ */
+export function midRunJudgeInstruction({ folder, running, cutOff = false }) {
+  const jobs = jobsFor(folder);
+  const name = PLAIN[running]?.name ?? "workflow";
+  return [
+    `The person sent this while the ${name} runs, and zero-touch's quick rules did not place it, so you judge it:`,
+    `- About the work this workflow is doing (a detail, a change of scope, an answer, a question): it is part of that work. Take it into account in the running workflow and call no other workflow.`,
+    `- Only if it clearly asks for a separate job of one of these kinds, call the Skill tool with skill "mmo:<job>" and args set to the request in one line, in the person's own words:`,
+    ...jobs.map((j) => `  - "mmo:${j}": ${JUDGE_JOBS[j]}`),
+    `  Zero-touch does not start it now: it queues it, tells the person, and it starts by itself when this workflow finishes. Then carry on with the running workflow.`,
+    `- When unsure, treat it as part of the running work.`,
+    `Do not do a separate job yourself now.${cutOff ? " Sending this message cut off the workflow's last step: run that step again and carry on; it was not a failure, and the person did not ask to stop." : ""}`,
+    KEEP_OUT,
+  ].join("\n");
+}
+
 export function judgeInstruction({ folder, auth, policy }) {
   const jobs = jobsFor(folder);
   const tag = startArgs({ args: "", auth, policy });
