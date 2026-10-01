@@ -5,6 +5,12 @@ argument-hint: ""
 
 Run one full AI-SDLC pass. This command takes no arguments. Everything it needs it asks for.
 
+**One exception: a run zero-touch started.** Zero-touch starts this command with one tag as its arguments:
+`[zero-touch policy=<name> auth=<vendor|estimated>]`, the models the person chose and the cost recording. When
+`$ARGUMENTS` holds that tag, those are this run's policy and telemetry mode: step 4 uses that policy, which wins
+over the project's saved choice and over a repo-local `routing-policy.yaml`, exactly as `/mmo:pass --policy`
+does, and step 5 does not ask. Everything else runs as written.
+
 Work through the steps in order. Do not skip a step because the answer seems obvious, and do not
 start the run until step 5 is confirmed.
 
@@ -131,7 +137,14 @@ Tell the user both paths. If `./src` already contains files, say so and ask befo
 
 # 4. Show what will run
 
-State the routing plainly, as fact. Read the policy name written by setup:
+State the routing plainly, as fact.
+
+**When `$ARGUMENTS` holds the zero-touch tag** (`policy=<name>` inside it), that is this run's policy: skip the
+saved-choice check below. Resolve it through `load_policy` with
+`policy_path: ${CLAUDE_PLUGIN_ROOT}/config/policies/<name>.yaml` (an explicit file, which the loader puts ahead
+of a repo-local `routing-policy.yaml`), pass that same `policy_path` on every later policy call, and say
+`Policy: preset <name> (chosen for this run)` in the plan preview. Otherwise, read the policy name written by
+setup:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only
@@ -193,7 +206,8 @@ phases that would have gone to the cheaper model.
 
 # 5. Choose the telemetry mode, out loud
 
-The run records tokens and cost in one of two modes. Present the choice; do not decide silently.
+The run records tokens and cost in one of two modes. Present the choice; do not decide silently. When
+`$ARGUMENTS` holds the zero-touch tag, its `auth=` is the mode: say which, and do not ask.
 
 - **Vendor** — every call goes through the bundled server, and the numbers are the ones the vendor
   reports. Requires `ANTHROPIC_API_KEY`. Use this whenever the numbers will be shown to anyone.
@@ -218,6 +232,8 @@ Invoke the `orchestrator` subagent with the resolved settings from the steps abo
 - `brief_path` — the confirmed brief
 - `auth_mode` — `vendor` or `estimated`, as confirmed in step 5
 - `policy` — the resolved policy name from step 4 (`project.default_policy` or `opus-plus-flash`)
+- `policy_path` — only for a run with the zero-touch tag: `${CLAUDE_PLUGIN_ROOT}/config/policies/<name>.yaml`.
+  The orchestrator then passes it on every policy call and to its run-start check (`--policy-path`)
 - `code_dir` — `./src`
 - `output_dir` — `./.sdlc`
 - `executor` — on: run the pipeline skill's **Executor mode** — the architect hands over a typed

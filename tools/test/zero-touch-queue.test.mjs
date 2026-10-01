@@ -101,10 +101,14 @@ const BUGFIX = "fix the /login endpoint returning 500 on missing password";
 const DOCS = "add jsdoc to every function in src/cart.js";
 const TESTS = "write unit tests for the pricing functions in src/cart.js";
 
+/** The orchestrator's own logging call, as agents/orchestrator.md writes it: through this chat, so it claims the run. */
+const logCall = (s, sid, runId, event = "run.start") => tool(s, sid, "Bash", { command: `node "/plugin/scripts/mmo-log.mjs" --event=${event} --level=info \\\n  --run-id=${runId} --project-root "${s.repo}" --mode=brownfield` });
+
 /** A routed bug-fix workflow, started and past its first gate: running, no question open. */
 async function runningBugfix(s, sid, { gateOpen = false } = {}) {
   await say(s, sid, BUGFIX);
   assert.equal((await skill(s, sid, "mmo:bugfix", BUGFIX)).stdout, "", "the bug fix starts");
+  assert.equal((await logCall(s, sid, `bf-${sid}`)).stdout, "", "the logging call runs untouched");
   workflowLog(s, `bf-${sid}`, ["run.start", { mode: "brownfield" }], ["gate.open", { gate: "gate-0", title: "scope" }]);
   if (!gateOpen) workflowLog(s, `bf-${sid}`, ["gate.resolved", { gate: "gate-0", response: "approved" }]);
 }
@@ -375,4 +379,69 @@ test("every command the plugin ships is either a workflow or a one-off tool", as
   const { WORKFLOW_COMMANDS, ONE_OFF_COMMANDS } = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "commands.mjs"));
   const shipped = readdirSync(join(ROOT, "plugin", "commands")).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort();
   assert.deepEqual([...WORKFLOW_COMMANDS, ...ONE_OFF_COMMANDS].sort(), shipped, "a new command must be classified before it ships");
+});
+
+test("Replace it stops only the run this chat claimed: another chat's run, started later in the same folder, is left alone", { skip: SKIP ?? false }, async () => {
+  // 1 Oct 2026, found in review: the run was picked by time (the latest since the chat's start), so a run another chat
+  // started later in the folder (a chat without zero-touch takes no project lock) was the one stopped.
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q11");
+    await new Promise((r) => setTimeout(r, 20));
+    workflowLog(s, "other-chat-run", ["run.start", { mode: "brownfield" }], ["gate.open", { gate: "gate-0" }]);
+    await say(s, "q11", DOCS);
+    await answer(s, "q11", "Replace it");
+    assert.match(logText(s, "bf-q11"), /outcome=aborted/, "this chat's own run is stopped");
+    assert.doesNotMatch(logText(s, "other-chat-run"), /run\.end/, "the other chat's run is untouched");
+  } finally { s.cleanup(); }
+});
+
+test("Replace it with no claim (a run id left as a shell variable): the run found by time is stopped, as before, unless another chat claimed it", { skip: SKIP ?? false }, async () => {
+  // 1 Oct 2026, found in the review's second pass: stopping only a claimed run left such a run's log open and its
+  // write lock on, while the person read that it was stopped. Before that day, "Replace it" always took the run found
+  // by time; it still does when this chat has no claim, but never a run another chat has claimed as its own.
+  const s = sandbox();
+  try {
+    await say(s, "q12", BUGFIX);
+    await skill(s, "q12", "mmo:bugfix", BUGFIX);
+    assert.equal((await tool(s, "q12", "Bash", { command: 'node /p/scripts/mmo-log.mjs --event=run.start --run-id="$RUN_ID"' })).stdout, "", "not claimed");
+    workflowLog(s, "unclaimed", ["run.start", { mode: "brownfield" }], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "approved" }]);
+    mkdirSync(join(s.repo, ".sdlc", "local"), { recursive: true });
+    const contract = join(s.repo, ".sdlc", "local", "write-contract.json");
+    writeFileSync(contract, JSON.stringify({ schema_version: 1, active: true, run_id: "unclaimed", allowlist: ["src/**"], off_limits: [] }));
+    await say(s, "q12", DOCS);
+    const a = await answer(s, "q12", "Replace it");
+    assert.match(logText(s, "unclaimed"), /run\.end run_id=unclaimed outcome=aborted/, "stopped, as before");
+    assert.equal(JSON.parse(readFileSync(contract, "utf8")).active, false, "its write lock is off");
+    assert.match(context(a), /"mmo:docs"/, "the new workflow starts");
+  } finally { s.cleanup(); }
+  const t = sandbox();
+  try {
+    // This chat's run is unclaimed, and the newest run in the folder is one another chat's record names as its own
+    // (built directly: the project lock keeps two zero-touch chats from running at once, so this is the rare case of a
+    // record another chat has not yet cleaned up). With no claim of its own, this chat stops nothing.
+    await say(t, "q13b", BUGFIX);
+    await skill(t, "q13b", "mmo:bugfix", BUGFIX);
+    await new Promise((r) => setTimeout(r, 20));
+    workflowLog(t, "theirs", ["run.start", { mode: "brownfield" }], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "approved" }]);
+    mkdirSync(join(t.home, "sessions", "other"), { recursive: true });
+    writeFileSync(join(t.home, "sessions", "other", "pipeline"), JSON.stringify({ since: new Date().toISOString(), job: "docs", args: "", run_id: "theirs" }));
+    await say(t, "q13b", DOCS);
+    await answer(t, "q13b", "Replace it");
+    assert.doesNotMatch(logText(t, "theirs"), /run\.end/, "the other chat's claimed run is untouched");
+  } finally { t.cleanup(); }
+});
+
+test("the chat's workflow is read from its claimed run: another run in the folder ending does not end it", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "q13");
+    await new Promise((r) => setTimeout(r, 20));
+    workflowLog(s, "later-run", ["run.start", {}], ["run.end", { outcome: "completed" }]);
+    await turnEnd(s, "q13");
+    assert.equal(pipelineJob(s, "q13"), "bugfix", "this chat's workflow still runs");
+    endBugfix(s, "q13");
+    await turnEnd(s, "q13");
+    assert.equal(pipelineJob(s, "q13"), null, "its own run's end ends it");
+  } finally { s.cleanup(); }
 });

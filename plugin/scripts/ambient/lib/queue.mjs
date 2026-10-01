@@ -22,7 +22,7 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureSessionDir, sessionDir } from "./paths.mjs";
-import { KEEP_OUT, plainName } from "./route-flow.mjs";
+import { KEEP_OUT, plainName, startArgs } from "./route-flow.mjs";
 
 export const QUEUE_LABEL = "Queue it";
 export const REPLACE_LABEL = "Replace it";
@@ -88,8 +88,15 @@ export const readQueue = (sid) => { const q = readJson(sid, "queue.json"); retur
 /** Adds a job at the end unless the same job is already queued. Returns "added" or "duplicate". */
 export function enqueue(sid, item) {
   const q = readQueue(sid);
-  if (q.some((x) => sameJob(x, item))) return "duplicate";
-  q.push({ job: item.job, args: item.args ?? "", at: new Date().toISOString() });
+  const same = q.find((x) => sameJob(x, item));
+  if (same) {
+    // The same job typed by the person after it was queued from their words (1 Oct 2026, found in review): their own
+    // typing wins, so it starts as typed, with its own questions and rules, not with zero-touch's models.
+    if (item.via === "typed" && same.via !== "typed") { same.via = "typed"; writeJson(sid, "queue.json", q); }
+    return "duplicate";
+  }
+  // `via: "typed"`: the person typed the command; it starts later exactly as typed (hook.mjs turn-end).
+  q.push({ job: item.job, args: item.args ?? "", ...(item.via === "typed" ? { via: "typed" } : {}), at: new Date().toISOString() });
   writeJson(sid, "queue.json", q);
   return "added";
 }
@@ -108,12 +115,21 @@ export const readTyped = (sid) => readJson(sid, "typed.json");
 export const writeTyped = (sid, typed) => writeJson(sid, "typed.json", typed);
 export const dropTyped = (sid) => drop(sid, "typed.json");
 
-/** The line the model is given when a queued job is next (the Stop hook's reason: the turn continues with it). */
-export function queuedStartInstruction({ job, args }) {
-  const call = args ? `skill "mmo:${job}", args ${JSON.stringify(args)}` : `skill "mmo:${job}" (no arguments)`;
+/**
+ * The line the model is given when a queued job is next (the Stop hook's reason: the turn continues with it). A job
+ * zero-touch recognised carries this run's models and cost recording, chosen by zero-touch, exactly as a routed start
+ * does (route-flow.mjs startArgs). A command the person typed (no `policy` given) starts exactly as they typed it,
+ * with its own questions, as the queue always started one before 1 Oct 2026.
+ */
+export function queuedStartInstruction({ job, args }, { auth, policy } = {}) {
+  const chosen = Boolean(policy);
+  const call = chosen
+    ? `skill "mmo:${job}", args ${JSON.stringify(startArgs({ args, auth, policy }))}`
+    : args ? `skill "mmo:${job}", args ${JSON.stringify(args)}` : `skill "mmo:${job}" (no arguments)`;
   return (
     `The ${plainName(job)} the person queued is next: the running workflow has ended. Start it now with the Skill tool: ${call}. ` +
     `Before the call, tell the person this one plain line: "Starting the queued ${plainName(job)}." ` +
+    (chosen ? `The arguments carry this run's models and cost recording, chosen by zero-touch: do not ask about either. ` : "") +
     `Do nothing else before the workflow starts: other tools are blocked until it does. ${KEEP_OUT}`
   );
 }

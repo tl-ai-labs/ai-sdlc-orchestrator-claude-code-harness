@@ -25,13 +25,16 @@ function tmp() {
 
 // ---------- settings ----------
 
-test("the shipped default: routing on, the Flash policy for a routed workflow, cost recording estimated; no file sets the mode", () => {
+test("the shipped default: routing on, cost recording estimated; no file sets the mode, and no file sets zero-touch's models", () => {
   const t = tmp();
   try {
     const { config, sources } = loadConfig({ projectDir: t.dir, env: { MMO_HOME: t.dir } });
     assert.equal(config.mode, "off", "only the chat's own record (the zero-touch plugin) or MMO_AMBIENT switches zero-touch");
     assert.equal(config.routing, "on");
-    assert.deepEqual(config.routing_defaults, { policy: "opus-plus-flash-v38", auth: "estimated" });
+    // 1 Oct 2026: the models are the person's choice in the settings box (zero-touch/scripts/settings.mjs), stamped on
+    // each chat; nothing here names a policy any more, and hand-off's settings moved there too.
+    assert.deepEqual(config.routing_defaults, { auth: "estimated" });
+    assert.equal(config.handoff, undefined);
     assert.equal(config.retention_days, 30);
     assert.deepEqual(sources, ["defaults"]);
   } finally { t.cleanup(); }
@@ -44,18 +47,17 @@ test("the person's file sets routing and its defaults; a project file can only s
     const repo = join(t.dir, "repo");
     mkdirSync(home);
     mkdirSync(join(repo, ".sdlc"), { recursive: true });
-    writeFileSync(join(home, "ambient.json"), JSON.stringify({ routing_defaults: { policy: "opus-plus-sonnet" }, retention_days: 7, mode: "on" }));
+    writeFileSync(join(home, "ambient.json"), JSON.stringify({ routing_defaults: { policy: "opus-plus-sonnet", auth: "vendor" }, handoff: { policy: "opus-only-v5" }, retention_days: 7, mode: "on" }));
     const mine = loadConfig({ projectDir: repo, env: { MMO_HOME: home } });
-    assert.equal(mine.config.routing_defaults.policy, "opus-plus-sonnet");
-    assert.equal(mine.config.routing_defaults.auth, "estimated", "a key the file leaves out keeps its default");
+    assert.deepEqual(mine.config.routing_defaults, { auth: "vendor" }, "the person's file may set the cost recording; a policy in it is ignored");
+    assert.equal(mine.config.handoff, undefined, "hand-off settings in the file are ignored");
     assert.equal(mine.config.retention_days, 7);
     assert.equal(mine.config.mode, "off", "a mode key in a file is ignored");
 
     // A repository's file is anyone's input: it may switch routing off, and nothing else.
     writeFileSync(join(repo, ".sdlc", "ambient.json"), JSON.stringify({ routing: "on", routing_defaults: { policy: "attacker-policy", auth: "vendor" }, mode: "on", retention_days: 1 }));
     const hostile = loadConfig({ projectDir: repo, env: { MMO_HOME: home } });
-    assert.equal(hostile.config.routing_defaults.policy, "opus-plus-sonnet");
-    assert.equal(hostile.config.routing_defaults.auth, "estimated");
+    assert.deepEqual(hostile.config.routing_defaults, { auth: "vendor" }, "the project file changes nothing but routing off");
     assert.equal(hostile.config.retention_days, 7);
     assert.equal(hostile.config.mode, "off");
     writeFileSync(join(home, "ambient.json"), JSON.stringify({ routing: "off" }));
@@ -77,12 +79,12 @@ test("unreadable, oversized or wrongly typed settings fall back instead of throw
     writeFileSync(join(t.dir, "ambient.json"), JSON.stringify({ routing: 7, routing_defaults: "all", retention_days: "long" }));
     const { config } = loadConfig({ projectDir: t.dir, env: { MMO_HOME: t.dir } });
     assert.equal(config.routing, "on", "a value of the wrong type is ignored");
-    assert.deepEqual(config.routing_defaults, { policy: "opus-plus-flash-v38", auth: "estimated" });
+    assert.deepEqual(config.routing_defaults, { auth: "estimated" });
     assert.equal(config.retention_days, 30);
     writeFileSync(join(t.dir, "ambient.json"), JSON.stringify({ routing: "maybe", routing_defaults: { policy: "../../etc/passwd", auth: "free" } }));
     const odd = loadConfig({ projectDir: t.dir, env: { MMO_HOME: t.dir } }).config;
     assert.equal(odd.routing, "off", "an unknown routing value means the safe default");
-    assert.deepEqual(odd.routing_defaults, { policy: "opus-plus-flash-v38", auth: "estimated" }, "a policy name that is not a plain name is never passed to a script");
+    assert.deepEqual(odd.routing_defaults, { auth: "estimated" }, "an unknown cost-recording value means the standard one; a policy name in the file is never read");
     writeFileSync(join(t.dir, "ambient.json"), "x".repeat(70 * 1024));
     assert.equal(loadConfig({ projectDir: t.dir, env: { MMO_HOME: t.dir } }).config.routing, "on", "an oversized file is skipped");
   } finally { t.cleanup(); }

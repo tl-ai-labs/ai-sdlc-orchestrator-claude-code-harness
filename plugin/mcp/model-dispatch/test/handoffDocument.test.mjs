@@ -24,11 +24,15 @@ import { join } from "node:path";
 import { HANDOFF_TOOLS, handleHandoffTool } from "../dist/handoff/tools.js";
 import { checkDocumentForm, checkDocument, renderDocumentShared, renderDocumentInstruction } from "../dist/handoff/document.js";
 
-const FLASH = { id: "flash-completion", model: "gemini-3.8-flash", adapter: "mcp:model-dispatch" };
+const FLASH = { id: "flash-completion", model: "gemini-3.8-flash", adapter: "mcp:model-dispatch", policy: "opus-plus-flash-v38" };
 const ROUTES = { docs: FLASH, tests: FLASH, repeat: FLASH };
 
 /** A project, and a chat the zero-touch plugin marked for hand-off (its record, stamp and resolved models). */
-function sandbox({ mode = "b", policy = "opus-plus-flash-v38", routes = ROUTES } = {}) {
+/**
+ * A project, and a chat the zero-touch plugin marked for hand-off: its record, its stamp (the chat model and who types
+ * each kind, 1 Oct 2026) and its resolved models (each kind with the shipped policy that routes it).
+ */
+function sandbox({ mode = "b", chatModel = "claude-opus-5", routes = ROUTES } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "mmo-handoff-doc-"));
   const home = join(dir, "home");
   const repo = join(dir, "repo");
@@ -39,7 +43,8 @@ function sandbox({ mode = "b", policy = "opus-plus-flash-v38", routes = ROUTES }
   const session = join(home, "sessions", "chat1");
   mkdirSync(session, { recursive: true });
   if (mode) writeFileSync(join(session, "chat_mode"), mode);
-  writeFileSync(join(session, "handoff.json"), JSON.stringify({ chat_model: "claude-opus-5", pin: "default", policy, policy_file: null }));
+  const flash = { typist: "flash", policy: "opus-plus-flash-v38" };
+  writeFileSync(join(session, "handoff.json"), JSON.stringify({ chat_model: chatModel, pin: chatModel ? "setting" : "admin", typists: { documents: flash, tests: flash, repeats: flash } }));
   if (routes) writeFileSync(join(session, "handoff_models.json"), JSON.stringify({ routes }));
   return { dir, home, repo, session, env: { MMO_HOME: home, HOME: home, PATH: process.env.PATH }, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -99,9 +104,13 @@ function fake(door, modelId, modelName, script = () => ({})) {
   };
 }
 /** The typists a call may build: the policy's routed model and its Claude model, each a fake. */
-function typists({ flash = () => ({}), opus = () => ({}) } = {}) {
-  const built = { flash: fake("flash-completion", "flash-completion", "gemini-3.8-flash", flash), opus: fake("lean-opus", "opus", "claude-opus-5", opus) };
-  return { built, typistFor: (leaf) => (leaf.id === "opus" ? built.opus : built.flash) };
+function typists({ flash = () => ({}), opus = () => ({}), chat = () => ({}) } = {}) {
+  const built = {
+    flash: fake("flash-completion", "flash-completion", "gemini-3.8-flash", flash),
+    opus: fake("lean-opus", "opus", "claude-opus-5", opus),
+    chat: fake("lean-opus", "chat-model:claude-sonnet-5", "claude-sonnet-5", chat),
+  };
+  return { built, typistFor: (leaf) => (leaf.id === "opus" ? built.opus : leaf.id.startsWith("chat-model:") ? built.chat : built.flash) };
 }
 const call = async (s, args, t = typists(), extra = {}) => {
   const waits = [];
@@ -245,7 +254,29 @@ test("a refused answer goes back with the reason; the second attempt is written"
   } finally { s.cleanup(); }
 });
 
-test("the policy's model fails twice: the policy's Claude model writes it, and the receipt says so", async () => {
+test("work the person keeps in the chat is refused by the server too, whoever calls: nothing is sent", async () => {
+  const s = sandbox({ routes: { docs: { kept: true }, tests: FLASH, repeat: FLASH } });
+  try {
+    const t = typists();
+    const r = await call(s, stamped(s), t);
+    assert.equal(r.receipt.status, "refused");
+    assert.match(r.receipt.reason, /keeps this kind of work in the chat/);
+    assert.deepEqual([r.flash.calls.length, r.opus.calls.length], [0, 0]);
+  } finally { s.cleanup(); }
+});
+
+test("the last attempt is the chat's own model: a chat kept on Sonnet 5 gets Sonnet 5, never a model the person did not choose", async () => {
+  const s = sandbox({ chatModel: "claude-sonnet-5" });
+  try {
+    const t = typists({ flash: () => ({ content: GOOD_DOC.replace("npm ci", "yarn") }), chat: () => ({ cost: 0.03 }) });
+    const r = await call(s, stamped(s), t);
+    assert.equal(r.receipt.status, "written");
+    assert.equal(r.receipt.written_by, "claude-sonnet-5");
+    assert.deepEqual([r.flash.calls.length, r.opus.calls.length, r.chat.calls.length], [2, 0, 1], "Opus 5 was not used");
+  } finally { s.cleanup(); }
+});
+
+test("the policy's model fails twice: the chat's model (here Opus 5, also the policy's Claude model) writes it, and the receipt says so", async () => {
   const s = sandbox();
   try {
     const t = typists({ flash: () => ({ content: GOOD_DOC.replace("npm ci", "yarn") }), opus: () => ({ cost: 0.09 }) });
@@ -326,8 +357,9 @@ test("the tool works only in a chat marked for hand-off, with the models that ch
     const r = await call(unresolved, stamped(unresolved));
     assert.match(r.receipt.reason, /hand-off models are not resolved/);
   } finally { unresolved.cleanup(); }
-  // A policy whose only models are the routed ones has no Claude last attempt: two attempts, then failed.
-  const flashOnly = sandbox({ policy: "flash-agsdk-only", routes: { docs: { id: "flash", model: "gemini-3.8-flash", adapter: "antigravity-worker" }, tests: FLASH, repeat: FLASH } });
+  // A chat with no one chat model (an organisation's alias) and a policy whose only models are the routed ones has no
+  // Claude last attempt: two attempts, then failed.
+  const flashOnly = sandbox({ chatModel: null, routes: { docs: { id: "flash", model: "gemini-3.8-flash", adapter: "antigravity-worker", policy: "flash-agsdk-only" }, tests: FLASH, repeat: FLASH } });
   try {
     const t = typists({ flash: () => ({ error: "no answer" }) });
     const r = await call(flashOnly, stamped(flashOnly), t);

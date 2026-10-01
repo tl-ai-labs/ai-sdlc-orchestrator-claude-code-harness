@@ -99,6 +99,7 @@ test("a clear job starts its workflow: Opus is told which one, in plain words fo
     assert.match(c, /Skill tool/);
     assert.match(c, /"mmo:bugfix"/);
     assert.match(c, /fix the \/login endpoint returning 500 on missing password/, "the message goes to the workflow as its description");
+    assert.match(c, /args "\[zero-touch policy=opus-plus-flash-v38 auth=estimated\] fix the \/login endpoint/, "the person's models travel in the start arguments");
     assert.match(c, /Running this as a full bug-fix workflow\./, "the one plain line the person sees");
     assert.match(c, /estimated/, "the cost-recording mode is chosen, so the person is not asked");
     assert.match(c, /Keep the plugin, command names and model names out of what you say to the person/);
@@ -115,12 +116,12 @@ test("a clear job starts its workflow: Opus is told which one, in plain words fo
     const start = await skill(s, "c1", "mmo:bugfix", "fix the /login endpoint returning 500 on missing password");
     assert.equal(start.stdout, "", "the routed workflow starts");
     assert.ok(pipeline(s, "c1"), "from here the chat is a workflow run: zero-touch stands down");
-    assert.equal(projectPolicy(s), "opus-plus-flash-v38", "a folder with no saved policy gets the default, so the workflow does not stop to ask");
+    assert.equal(projectPolicy(s), null, "nothing is written into the project (1 Oct 2026): the run's models travel in its start arguments");
     assert.equal((await run("pre-any", { session_id: "c1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "b.js"), content: "x" } }, s)).stdout, "", "Guard A ends when the workflow starts");
   } finally { s.cleanup(); }
 });
 
-test("a new app in an empty folder starts the new-app workflow with no arguments; a saved policy is never overwritten", { skip: SKIP ?? false }, async () => {
+test("a new app in an empty folder starts the new-app workflow with only the zero-touch tag; the project's saved choice is neither used nor changed", { skip: SKIP ?? false }, async () => {
   const s = sandbox("new");
   try {
     mkdirSync(join(s.repo, ".sdlc"));
@@ -128,9 +129,9 @@ test("a new app in an empty folder starts the new-app workflow with no arguments
     const c = context(await prompt(s, "g1", "build me a todo app with a React frontend and a Node backend"));
     assert.match(c, /"mmo:greenfield"/);
     assert.match(c, /Running this as a full new-app build\./);
-    assert.doesNotMatch(c, /args/, "the new-app command takes no arguments");
-    assert.equal((await skill(s, "g1", "mmo:greenfield")).stdout, "");
-    assert.equal(projectPolicy(s), "opus-plus-sonnet", "the person's own choice stays");
+    assert.match(c, /args "\[zero-touch policy=opus-plus-flash-v38 auth=estimated\]"/, "the new-app command gets the tag and nothing else; the person's pick, not the folder's saved choice");
+    assert.equal((await skill(s, "g1", "mmo:greenfield", "[zero-touch policy=opus-plus-flash-v38 auth=estimated]")).stdout, "");
+    assert.equal(projectPolicy(s), "opus-plus-sonnet", "the project's own file is left exactly as it was");
   } finally { s.cleanup(); }
 });
 
@@ -259,7 +260,7 @@ test("while a workflow runs zero-touch is quiet; once its own log shows the last
       workflowLog(t, "bf-2", ["run.start", {}], ["gate.open", { gate: "gate-1" }], ["gate.resolved", { gate: "gate-1", response: "approved" }], ["run.end", { outcome: "completed" }]);
       const r = await prompt(t, "g2", "what does the pricing module do?");
       assert.equal(context(r), "", "an ordinary message after the workflow gets nothing added for the model");
-      assert.equal(r.json?.systemMessage, "Zero-touch: not a workflow job, handled as a normal chat.", "and the person sees it is an ordinary chat again");
+      assert.equal(r.json?.systemMessage, "Zero-touch: this isn't one of the jobs that get a full workflow, so Claude answers it normally.", "and the person sees it is an ordinary chat again");
       assert.ok(!pipeline(t, "g2"), "the chat is back to ordinary");
     } finally { t.cleanup(); }
   } finally { s.cleanup(); }
@@ -324,43 +325,52 @@ test("setup, policy, revert, pass and the generic brownfield command are never s
   } finally { s.cleanup(); }
 });
 
-test("a workflow that cannot start says the real cause and the fix that works for it", { skip: SKIP ?? false }, async () => {
+test("a workflow that cannot start says the real cause and the fix that works for it; a project's saved choice no longer decides", { skip: SKIP ?? false }, async () => {
+  // Until 1 Oct 2026 a project's saved choice (here an Opus 4.7 policy) decided, and blocked the start; a saved file
+  // that could not be read blocked it too. Zero-touch now runs the person's own pick and reads neither.
   const other = sandbox("existing");
   try {
     mkdirSync(join(other.repo, ".sdlc"));
     writeFileSync(join(other.repo, ".sdlc", "project.json"), JSON.stringify({ schema_version: 2, default_policy: "opus-plus-flash" }));
     const c = context(await prompt(other, "k2", "fix the /login endpoint returning 500 on missing password"));
-    assert.doesNotMatch(c, /"mmo:bugfix"/, "this project's saved choice (an Opus 4.7 policy) wants helpers on another model than the plugin's agent files name");
-    assert.match(c, /saved/);
-    assert.doesNotMatch(c, /one-time setting|--apply=routing|the setting|new chat/, "no setting can fix it: the choice is the project's policy");
+    assert.match(c, /"mmo:bugfix", args "\[zero-touch policy=opus-plus-flash-v38 auth=estimated\]/, "the person's pick starts, whatever the folder saved");
   } finally { other.cleanup(); }
   const broken = sandbox("existing");
   try {
     mkdirSync(join(broken.repo, ".sdlc"));
     writeFileSync(join(broken.repo, ".sdlc", "project.json"), "{not json");
-    const c = context(await prompt(broken, "k3", "fix the /login endpoint returning 500 on missing password"));
-    assert.doesNotMatch(c, /"mmo:bugfix"|--apply=routing/);
-    assert.match(c, /\.sdlc\/project\.json/);
+    assert.match(context(await prompt(broken, "k3", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/, "a saved file that cannot be read is not read at all");
   } finally { broken.cleanup(); }
   // CLAUDE_CODE_SUBAGENT_MODEL_FORCE on makes Claude Code ignore the agent files' model; with nothing set the helpers
-  // would follow the chat, so the workflow's own check refuses, and zero-touch passes on the check's own reason
-  // rather than calling it an old saved choice.
+  // would follow the chat, so the workflow's own check refuses, and zero-touch passes on the check's own reason.
   const forced = sandbox("existing");
   try {
-    const c = context(await prompt(forced, "k5", "fix the /login endpoint returning 500 on missing password", { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1" }));
-    assert.doesNotMatch(c, /"mmo:bugfix"/);
-    assert.match(c, /CLAUDE_CODE_SUBAGENT_MODEL_FORCE/);
-    assert.doesNotMatch(c, /saved workflow choice is an older one/);
+    const r = await prompt(forced, "k5", "fix the /login endpoint returning 500 on missing password", { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1" });
+    assert.doesNotMatch(context(r), /"mmo:bugfix"/);
+    assert.match(context(r), /CLAUDE_CODE_SUBAGENT_MODEL_FORCE/);
+    assert.match(r.json?.systemMessage ?? "", /^Zero-touch: the bug-fix workflow didn't start, because its start-up check failed: /);
+    assert.doesNotMatch(r.json?.systemMessage ?? "", /isn't set up on this computer/, "a failed check is never called a missing install (the mislabel found on 1 Oct 2026)");
   } finally { forced.cleanup(); }
-  const vendor = sandbox("existing", { routing_defaults: { policy: "opus-plus-flash-v38", auth: "vendor" } });
+  // No Google login, and the person's models use Flash: the workflow does not start, and both are told why.
+  const google = sandbox("existing");
+  try {
+    const r = await prompt(google, "k6", "fix the /login endpoint returning 500 on missing password");
+    rmSync(join(google.home, ".config"), { recursive: true, force: true });
+    const g = await prompt(google, "k6", "fix the /login endpoint returning 500 on missing password");
+    assert.match(context(r), /"mmo:bugfix"/, "with a login it starts");
+    assert.doesNotMatch(context(g), /"mmo:bugfix"/);
+    assert.match(context(g), /no Google login/);
+    assert.match(g.json?.systemMessage ?? "", /because your models include Google's Flash 3\.8 and this computer isn't connected to Google/);
+  } finally { google.cleanup(); }
+  const vendor = sandbox("existing", { routing_defaults: { auth: "vendor" } });
   try {
     const c = context(await prompt(vendor, "k4", "fix the /login endpoint returning 500 on missing password"));
     assert.match(c, /"mmo:bugfix"/, "under vendor the workflow skips its helpers'-model check, so routing does too");
-    assert.match(c, /cost recording "vendor"/);
+    assert.match(c, /auth=vendor\]/);
   } finally { vendor.cleanup(); }
 });
 
-test("a folder inside another project with no saved choice never gets one written into the outer project", { skip: SKIP ?? false }, async () => {
+test("a folder inside another project: the job starts with the person's pick, and nothing is written into either project", { skip: SKIP ?? false }, async () => {
   const s = sandbox("new");
   try {
     execFileSync("git", ["init", "-q"], { cwd: s.repo });
@@ -370,8 +380,7 @@ test("a folder inside another project with no saved choice never gets one writte
     mkdirSync(app);
     const inner = { home: s.home, repo: app };
     const c = context(await run("prompt", { session_id: "e1", cwd: app, prompt: "build me a todo app with a React frontend" }, inner));
-    assert.doesNotMatch(c, /"mmo:greenfield"/);
-    assert.match(c, /inside another project/);
+    assert.match(c, /"mmo:greenfield"/, "zero-touch writes no saved choice any more, so there is nothing to put in the wrong project");
     assert.ok(!existsSync(join(s.repo, ".sdlc")) && !existsSync(join(app, ".sdlc")), "nothing written anywhere");
   } finally { s.cleanup(); }
 });

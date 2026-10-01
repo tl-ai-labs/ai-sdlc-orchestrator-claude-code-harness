@@ -10,21 +10,52 @@
  * runOnce(event, payload, ...rest) sends one hook moment; keyOf(...rest) names the test's own home folder (MMO_HOME),
  * so two tests that reuse a chat id in different homes are two chats; envOf(...rest) gives that call's extra
  * environment, so a test's MMO_AMBIENT reaches the zero-touch hook too.
+ *
+ * Settings (1 Oct 2026): a person sets zero-touch up in the settings box, and the plugin keeps the choices in its own
+ * data folder (zero-touch/scripts/settings.mjs). A test person is one who has already chosen: each test home gets
+ * `<home>/zt-data/settings.json`, Workflows on the standard models, unless the test wrote its own settings first
+ * (writeZtSettings) or asks for the first chat after install (`firstRun: true`, no settings at all). A person who has
+ * chosen models with Google's Flash 3.8 has connected Google, so the test home also gets a complete gcloud login file
+ * (the file `gcloud auth application-default login` writes; nothing is ever sent anywhere); `google: false` leaves it out.
  */
 import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const ZT_START = join(ROOT, "zero-touch", "hooks", "start-chat.sh");
 
+/** The zero-touch plugin's data folder for a test home (Claude Code's ${CLAUDE_PLUGIN_DATA}). */
+export const ztData = (home) => join(home, "zt-data");
+
+/**
+ * Saves a test person's zero-touch settings, as the settings box does: mode "workflows" | "handoff" | "off", and the
+ * choices (workflows.models; handoff.chat_model / documents / tests / repeats: "flash" | "sonnet" | "chat").
+ */
+export function writeZtSettings(home, settings = {}, { google = true } = {}) {
+  const dir = ztData(home);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "settings.json"), JSON.stringify({ version: 1, mode: "workflows", ...settings }));
+  if (google) writeGoogleLogin(home);
+}
+
+/** A complete gcloud login file in a test home (its shape only: the Google check reads it offline). */
+export function writeGoogleLogin(home) {
+  const dir = join(home, ".config", "gcloud");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "application_default_credentials.json");
+  if (!existsSync(file)) writeFileSync(file, JSON.stringify({ type: "authorized_user", client_id: "test", client_secret: "test", refresh_token: "test" }));
+}
+
 /**
  * Runs the zero-touch plugin's start hook for one chat, as Claude Code does at SessionStart while it is enabled.
  * `model` is the model Claude Code says the chat starts on, when it says so. The organisation settings file is one
  * inside the test's own home (absent unless the test writes it), never this machine's real one.
  */
-export function zeroTouchStart({ home, sid, source = "startup", cwd, env = {}, model }) {
-  const childEnv = { PATH: process.env.PATH, HOME: home, MMO_HOME: home, MMO_MANAGED_SETTINGS: join(home, "managed-settings.json"), ...env };
+export function zeroTouchStart({ home, sid, source = "startup", cwd, env = {}, model, firstRun = false }) {
+  if (!firstRun && !existsSync(join(ztData(home), "settings.json"))) writeZtSettings(home);
+  const childEnv = { PATH: process.env.PATH, HOME: home, MMO_HOME: home, CLAUDE_PLUGIN_DATA: ztData(home), MMO_MANAGED_SETTINGS: join(home, "managed-settings.json"), ...env };
   for (const k of Object.keys(childEnv)) if (childEnv[k] === undefined) delete childEnv[k];
   spawnSync("sh", [ZT_START], { input: JSON.stringify({ session_id: sid, cwd, source, ...(model ? { model } : {}) }), env: childEnv, cwd });
 }

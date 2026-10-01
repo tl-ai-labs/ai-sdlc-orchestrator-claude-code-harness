@@ -26,7 +26,7 @@ import { HANDOFF_TOOLS, handleHandoffTool } from "../dist/handoff/tools.js";
 import { checkTestsForm, renderTestsShared, renderTestsInstruction } from "../dist/handoff/tests.js";
 import { checkRepeatForm, changeMarkers, checkRepeatEdits } from "../dist/handoff/repeat.js";
 
-const FLASH = { id: "flash-completion", model: "gemini-3.8-flash", adapter: "mcp:model-dispatch" };
+const FLASH = { id: "flash-completion", model: "gemini-3.8-flash", adapter: "mcp:model-dispatch", policy: "opus-plus-flash-v38" };
 const CART = "export function total(items) {\n  return items.reduce((n, i) => n + i.price, 0);\n}\n\nexport function isEmpty(items) {\n  return items.length === 0;\n}\n";
 const USES = (name) => `import { getUser } from "./users.js";\n\nexport function ${name}(id) {\n  const user = getUser(id);\n  return user.name;\n}\n`;
 
@@ -51,7 +51,8 @@ function sandbox() {
   const session = join(home, "sessions", "chat1");
   mkdirSync(session, { recursive: true });
   writeFileSync(join(session, "chat_mode"), "b");
-  writeFileSync(join(session, "handoff.json"), JSON.stringify({ chat_model: "claude-opus-5", pin: "default", policy: "opus-plus-flash-v38", policy_file: null }));
+  const flash = { typist: "flash", policy: "opus-plus-flash-v38" };
+  writeFileSync(join(session, "handoff.json"), JSON.stringify({ chat_model: "claude-opus-5", pin: "setting", typists: { documents: flash, tests: flash, repeats: flash } }));
   writeFileSync(join(session, "handoff_models.json"), JSON.stringify({ routes: { docs: FLASH, tests: FLASH, repeat: FLASH } }));
   return { dir, home, repo, session, env: { MMO_HOME: home, HOME: home, PATH: process.env.PATH }, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }

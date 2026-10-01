@@ -88,17 +88,17 @@ test("a recognised job: the person sees which workflow starts, and the model sti
   const s = sandbox();
   try {
     const r = await say(s, "l1", BUGFIX);
-    assert.equal(line(r), "Zero-touch: starting the bug-fix workflow.");
+    assert.equal(line(r), "Zero-touch: you asked for a bug fix, so Claude is starting the bug-fix workflow. It will wait for your approval at each main step.");
     assert.match(context(r), /Start it now with the Skill tool/, "the model's instruction is unchanged");
     const d = await say(s, "l1b", DOCS);
-    assert.equal(line(d), "Zero-touch: starting the documentation workflow.");
+    assert.equal(line(d), "Zero-touch: you asked for documentation, so Claude is starting the documentation workflow. It will wait for your approval at each main step.");
   } finally { s.cleanup(); }
 });
 
 test("a new app in an empty folder: the line names the new-app workflow", { skip: SKIP ?? false }, async () => {
   const s = sandbox("new");
   try {
-    assert.equal(line(await say(s, "l2", NEW_APP)), "Zero-touch: starting the new-app workflow.");
+    assert.equal(line(await say(s, "l2", NEW_APP)), "Zero-touch: you asked for a new app, so Claude is starting the new-app workflow. It will wait for your approval at each main step.");
   } finally { s.cleanup(); }
 });
 
@@ -106,7 +106,7 @@ test("an ordinary message: the person sees it is handled as a normal chat, and t
   const s = sandbox();
   try {
     const r = await say(s, "l3", QUESTION);
-    assert.equal(line(r), "Zero-touch: not a workflow job, handled as a normal chat.");
+    assert.equal(line(r), "Zero-touch: this isn't one of the jobs that get a full workflow, so Claude answers it normally.");
     assert.equal(r.json.hookSpecificOutput, undefined, "nothing is added to what the model reads");
   } finally { s.cleanup(); }
 });
@@ -116,7 +116,7 @@ test("a message while the workflow's gate is open is shown as that gate's answer
   try {
     await runningBugfix(s, "l4", { gateOpen: true });
     const r = await say(s, "l4", DOCS);
-    assert.equal(line(r), "Zero-touch: taken as your answer to the open gate.");
+    assert.equal(line(r), "Zero-touch: the workflow is waiting for your approval, so this message is taken as your answer to it, not as a new request.");
     assert.equal(r.json.hookSpecificOutput, undefined);
   } finally { s.cleanup(); }
 });
@@ -126,7 +126,7 @@ test("a second job while a workflow runs: the person is told to choose, and the 
   try {
     await runningBugfix(s, "l5");
     const r = await say(s, "l5", DOCS);
-    assert.equal(line(r), "Zero-touch: a workflow is already running. Choose Queue it or Replace it.");
+    assert.equal(line(r), "Zero-touch: a bug-fix workflow is still running in this chat. In the box, choose whether the documentation workflow you asked for should wait its turn or replace the running one.");
     assert.match(context(r), /AskUserQuestion/);
   } finally { s.cleanup(); }
 });
@@ -136,7 +136,7 @@ test("a message during a running workflow that is no new job: the person sees th
   try {
     await runningBugfix(s, "l6");
     const r = await say(s, "l6", QUESTION);
-    assert.equal(line(r), "Zero-touch: not a new workflow job; the running workflow carries on.");
+    assert.equal(line(r), "Zero-touch: this isn't a new job, so the running bug-fix workflow carries on, taking your message into account.");
     assert.equal(r.json.hookSpecificOutput, undefined);
   } finally { s.cleanup(); }
 });
@@ -146,7 +146,7 @@ test("a job while another chat runs a workflow in this folder: the person sees i
   try {
     await runningBugfix(s, "l7a");
     const r = await say(s, "l7b", DOCS);
-    assert.equal(line(r), "Zero-touch: not started. Another chat in this folder is running a workflow.");
+    assert.equal(line(r), "Zero-touch: the documentation workflow didn't start, because another chat in this project folder is already running a bug-fix workflow, and two at once would get in each other's way. When that one has finished, or after you type /clear in that chat, ask again here. Until then, Claude can help in this chat as usual.");
     assert.match(context(r), /cannot start in this chat/, "the model still explains it");
   } finally { s.cleanup(); }
 });
@@ -159,7 +159,7 @@ test("a queued job, when its turn comes: the person sees the queued workflow sta
     await say(s, "l8", "Queue it");
     endBugfix(s, "l8");
     const r = await turnEnd(s, "l8");
-    assert.equal(line(r), "Zero-touch: starting the queued documentation workflow.");
+    assert.equal(line(r), "Zero-touch: the bug-fix workflow has finished, so the documentation workflow you queued is starting now.");
     assert.equal(r.json.decision, "block", "the turn continues with the queued start, as before");
   } finally { s.cleanup(); }
 });

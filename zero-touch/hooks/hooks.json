@@ -2,11 +2,56 @@
   "hooks": {
     "SessionStart": [
       {
-        "_comment": "The whole of this plugin: at the start of each chat (and after /clear) it decides from the person's mode file whether the chat has zero-touch, marks the chat, and shows the person one message saying so (again after a compaction or a reopened chat). The mmo plugin, which holds all of zero-touch's code, hooks and tools, acts only in a chat so marked (plugin/scripts/ambient/lib/chat-mode.mjs). Always exits 0.",
+        "_comment": "At the start of each chat (a new chat, /clear, a fork) it marks the chat with the person's zero-touch mode and models from the settings box, and shows one message saying what is in force (again after a compaction or a reopened chat). The mmo plugin, which holds all of zero-touch's workflow and hand-off code, acts only in a chat so marked. Always exits 0.",
         "hooks": [
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/start-chat.sh\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "_comment": "The settings box: in the first chat after install it reminds Claude to open the box first; after a box that was closed without an answer it says nothing was saved. Leaves at once (no node) in every other chat.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/settings.sh\" prompt"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "_comment": "The settings box, before it is shown: a box about zero-touch must be exactly the one expected now (mode first, then models or the hand-off questions), or it is refused with the exact box. Other boxes pass untouched.",
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/settings.sh\" pre-ask"
+          }
+        ]
+      },
+      {
+        "_comment": "The first chat after install only: tools that change anything wait until the settings box has been shown. Leaves at once (no node) in every other chat.",
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/settings.sh\" pre-any"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "_comment": "The settings box, after the person answered: the clicks are read, checked against the fixed choices and saved, all or nothing; the person sees one line saying what is saved.",
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/settings.sh\" post-ask"
           }
         ]
       }

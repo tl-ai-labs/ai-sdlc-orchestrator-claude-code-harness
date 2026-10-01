@@ -2,6 +2,17 @@
   "hooks": {
     "PreToolUse": [
       {
+        "_comment": "Zero-touch (1 Oct 2026): inside a workflow zero-touch started, every model-server call that takes a policy is stamped with the policy the person chose, as an explicit file, which wins over a project's routing-policy.yaml; helpers' calls included. A workflow the person typed keeps its own rules.",
+        "matcher": "mcp__(plugin_mmo_)?model-dispatch__(load_policy|preflight_dispatch|execute_with_model|simulate_policy)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" pre-dispatch",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "_comment": "Brownfield write contract: refuses Write/Edit outside the confirmed allowlist when brownfield mode is active. Silent no-op (allow) when .sdlc/local/write-contract.json is absent or its active flag is false, so greenfield /mmo:greenfield behavior is unchanged.",
         "matcher": "Write|Edit",
         "hooks": [
@@ -186,6 +197,19 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" post-model-switch",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "_comment": "Zero-touch (1 Oct 2026): /clear ends the old chat id; a workflow it abandons is recorded as stopped and the project is freed for the next one.",
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" session-end",
             "timeout": 5
           }
         ]

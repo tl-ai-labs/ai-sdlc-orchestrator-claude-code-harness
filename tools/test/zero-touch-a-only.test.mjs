@@ -1,7 +1,7 @@
 /**
  * In workflow mode, zero-touch is its workflow routing and nothing else. (Hand-off mode, the plugin's other mode, is
- * chosen in the person's mode file and has its own tests: zero-touch-handoff-*.test.mjs. Everything below is about a
- * chat in workflow mode, the default.)
+ * chosen in the settings box and has its own tests: zero-touch-handoff-*.test.mjs. Everything below is about a chat
+ * in workflow mode, the default.)
  *
  * Why: until 0.8.3 a zero-touch chat whose message was not one of the eight /mmo: jobs got the generic orchestrator
  * (ask 1): a start-of-chat note, big Reads turned into outlines, by-hand typing refused and handed to a Flash or
@@ -52,7 +52,7 @@ const run = startingChats(runOnce, (s) => s.home);
 /** The matcher of the two hooks around hand-off mode's own tools. */
 const HANDOFF_TOOLS = "mcp__(plugin_mmo_)?model-dispatch__(write_document|write_tests_from_cases|repeat_edit_across_files|undo_hand_off)";
 
-test("mmo hooks only the moments zero-touch needs: eight for workflow routing, four for hand-off mode (its model pin, and around its own tools); no Read, Bash, Write or Edit hook is left", () => {
+test("mmo hooks only the moments zero-touch needs: ten for workflow routing, four for hand-off mode (its model pin, and around its own tools); no Read, Bash, Write or Edit hook is left", () => {
   const hooks = JSON.parse(readFileSync(join(PLUGIN, "hooks", "hooks.json"), "utf8")).hooks;
   const moments = [];
   for (const [event, entries] of Object.entries(hooks)) {
@@ -72,6 +72,10 @@ test("mmo hooks only the moments zero-touch needs: eight for workflow routing, f
     "PreToolUse:Skill:pre-skill",
     "SessionStart::session-start",
     "UserPromptSubmit::prompt",
+    // 1 Oct 2026: a run zero-touch started has the person's policy stamped on every model-server call that takes one,
+    // and /clear releases a workflow it abandons (zero-touch-routing tests).
+    "PreToolUse:mcp__(plugin_mmo_)?model-dispatch__(load_policy|preflight_dispatch|execute_with_model|simulate_policy):pre-dispatch",
+    "SessionEnd:clear:session-end",
     // Hand-off mode keeps a chat on its pinned model (zero-touch-handoff-chat.test.mjs); both answer nothing in a
     // workflow-mode chat.
     "PreModelSwitch::pre-model-switch",
@@ -134,10 +138,10 @@ test("in an ordinary zero-touch chat every tool runs untouched: nothing is refus
   }
 });
 
-test("the shipped settings hold only routing's keys and hand-off mode's two, and an older settings file's other keys are ignored", async () => {
+test("the shipped settings hold only routing's keys (the person's choices live in the zero-touch plugin), and an older settings file's other keys are ignored", async () => {
   const shipped = JSON.parse(readFileSync(join(PLUGIN, "config", "ambient.default.json"), "utf8"));
-  assert.deepEqual(Object.keys(shipped).sort(), ["handoff", "retention_days", "routing", "routing_defaults", "schema_version"]);
-  assert.deepEqual(Object.keys(shipped.handoff).sort(), ["chat_model", "policy"]);
+  assert.deepEqual(Object.keys(shipped).sort(), ["retention_days", "routing", "routing_defaults", "schema_version"]);
+  assert.deepEqual(Object.keys(shipped.routing_defaults), ["auth"]);
   const { loadConfig } = await import(join(AMBIENT, "lib", "config.mjs"));
   const s = sandbox();
   try {
@@ -205,7 +209,9 @@ test("the plugins describe both of zero-touch's modes, and promise no saving: no
     // some typing is handed off. A person choosing the plugin in the list must learn of both, and where to choose.
     assert.match(text, /workflow mode/i, text);
     assert.match(text, /hand-off mode/i, text);
-    assert.match(text, /~\/\.mmo-ambient\/mode/, text);
+    // Where to choose (1 Oct 2026): in the chat, never a file or a command.
+    assert.match(text, /change zero-touch settings/, text);
+    assert.doesNotMatch(text, /~\/\.mmo-ambient|ambient\.json|\/mmo:/, text);
     assert.match(text, /new chats/i, text);
   }
 });

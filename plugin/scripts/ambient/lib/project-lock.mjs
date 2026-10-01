@@ -11,10 +11,10 @@
  * workflow's own log must not show it ended. A lock that fails either test is stale and is replaced.
  */
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { ensureDir, mmoHome, sessionDir } from "./paths.mjs";
-import { workflowState } from "./workflow-log.mjs";
+import { ensureDir, mmoHome, safeId, sessionDir } from "./paths.mjs";
+import { RUN_ID, workflowState } from "./workflow-log.mjs";
 
 function key(projectDir) {
   let real = String(projectDir ?? "");
@@ -40,13 +40,37 @@ export function pipelineSinceOf(sid, env = process.env) {
   } catch { return NaN; }
 }
 
+/** The run the chat has claimed as its workflow's own (hook.mjs claimRun), or null before it has. */
+export function pipelineRunOf(sid, env = process.env) {
+  try {
+    const rec = JSON.parse(readFileSync(join(sessionDir(sid, env), "pipeline"), "utf8"));
+    return rec && typeof rec.run_id === "string" && RUN_ID.test(rec.run_id) ? rec.run_id : null;
+  } catch { return null; }
+}
+
+/**
+ * Whether another chat has claimed this run as its own (its pipeline record names it). Read only when a run is about
+ * to be stopped without a claim of this chat's (hook.mjs, "Replace it"), so a run another chat owns is never stopped.
+ */
+export function runClaimedByOther(runId, sid, env = process.env) {
+  if (!runId || !RUN_ID.test(runId)) return false;
+  const root = join(mmoHome(env), "sessions");
+  let names = [];
+  try { names = readdirSync(root); } catch { return false; }
+  for (const name of names) {
+    if (name === safeId(sid)) continue;
+    if (pipelineRunOf(name, env) === runId) return true;
+  }
+  return false;
+}
+
 /** The chat that holds this project, when it is another chat whose workflow is still running; else null. */
 export function heldByOther(projectDir, sid, env = process.env) {
   const lock = readLock(projectDir, env);
   if (!lock || lock.sid === sid) return null;
   if (!existsSync(join(sessionDir(lock.sid, env), "pipeline"))) return null;
   const since = pipelineSinceOf(lock.sid, env);
-  if (workflowState(projectDir, since).state === "ended") return null;
+  if (workflowState(projectDir, since, pipelineRunOf(lock.sid, env)).state === "ended") return null;
   return lock;
 }
 

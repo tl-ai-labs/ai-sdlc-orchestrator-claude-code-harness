@@ -23,14 +23,18 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
-const { startingChats } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
+const { startingChats, writeZtSettings } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
 const { serverBuilt } = await import(join(ROOT, "tools", "test", "lib", "server-built.mjs"));
 const { fileKind, shellTargets } = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "handoff-net.mjs"));
 // Whether a hand-off can run is asked of the workflows' own router, which needs the built server.
 const SKIP = serverBuilt();
 const SHIM = join(ROOT, "plugin", "hooks", "ambient.sh");
 
-function sandbox({ mode = "b", handoff } = {}) {
+/**
+ * A person who chose Hand-off ("b", Flash 3.8 typing every kind, the chat on Opus 5) or Workflows ("a") in the
+ * settings box.
+ */
+function sandbox({ mode = "b" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "mmo-zt-b-net-"));
   const home = join(dir, "home");
   const repo = join(dir, "repo");
@@ -40,9 +44,17 @@ function sandbox({ mode = "b", handoff } = {}) {
   writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
   writeFileSync(join(repo, "README.md"), "# Shop\n");
   writeFileSync(join(repo, "tests", "users.test.js"), "// tests\n");
-  writeFileSync(join(home, "mode"), `${mode}\n`);
-  if (handoff) writeFileSync(join(home, "ambient.json"), JSON.stringify({ handoff }));
+  writeZtSettings(home, { mode: mode === "a" ? "workflows" : "handoff", handoff: { chat_model: "claude-opus-5", documents: "flash", tests: "flash", repeats: "flash" } });
   return { dir, home, repo, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/** The chat's stamp names a policy that no longer exists (a damaged install): nothing can be handed off. */
+function breakPolicy(s, sid) {
+  const file = join(s.home, "sessions", sid, "handoff.json");
+  const st = JSON.parse(readFileSync(file, "utf8"));
+  for (const k of Object.keys(st.typists)) st.typists[k].policy = "no-such-policy";
+  writeFileSync(file, JSON.stringify(st));
+  rmSync(join(s.home, "sessions", sid, "handoff_models.json"), { force: true });
 }
 
 function runOnce(event, payload, { home, repo }, env = {}) {
@@ -112,11 +124,11 @@ test("a new document or test file typed with the Write tool is refused, and the 
     assert.match(denied(doc), /write_document/);
     assert.match(denied(doc), /kind, file, purpose, readers, sections, facts/, "the form's fields, so the next call is the right one");
     assert.match(denied(doc), /A change to a file that exists is yours to make/);
-    assert.equal(line(doc), "Zero-touch: a new document typed by hand was sent back to the hand-off (docs/setup.md).");
+    assert.equal(line(doc), "Zero-touch: Opus 5 started writing the new document docs/setup.md itself. In Hand-off mode that work goes to Flash 3.8, so zero-touch stopped it and told Opus 5 to hand it off.");
     const tests = await write(s, "n1", "tests/cart.test.js");
     assert.match(denied(tests) ?? "", /write_tests_from_cases/);
     assert.match(denied(tests), /file, target, functions, cases, test_command/);
-    assert.equal(line(tests), "Zero-touch: a new test file typed by hand was sent back to the hand-off (tests/cart.test.js).");
+    assert.equal(line(tests), "Zero-touch: Opus 5 started writing the new test file tests/cart.test.js itself. In Hand-off mode that work goes to Flash 3.8, so zero-touch stopped it and told Opus 5 to hand it off.");
     // A helper the chat started is held to the same rule: the work is the chat's.
     assert.match(denied(await write(s, "n1", "docs/guide.md", { agent_id: "helper-1" })) ?? "", /write_document/);
   } finally { s.cleanup(); }
@@ -161,9 +173,10 @@ test("the net stands down when handing off is not possible or not wanted", { ski
     assert.equal((await write(s, "r1", "docs/other.md")).stdout, "", "inside a workflow run");
   } finally { s.cleanup(); }
   // A hand-off policy that cannot be read: there is nothing to hand the file to.
-  const broken = sandbox({ handoff: { policy: "no-such-policy" } });
+  const broken = sandbox();
   try {
     await startOn(broken, "x1");
+    breakPolicy(broken, "x1");
     assert.equal((await write(broken, "x1", "docs/setup.md")).stdout, "");
   } finally { broken.cleanup(); }
   // A chat in workflow mode has no hand-offs at all.
@@ -178,7 +191,7 @@ test("the start note tells the chat's model which by-hand writes the net refuses
   // The note once said "with Write or Edit". Edit cannot create a file, and the shell, which can, was not named: a
   // model told only about Write reaches for a redirect next, and learns of the net by being refused. The note names
   // the two routes the net covers, in the words the refusal uses, and that a file that exists is the model's own.
-  const note = readFileSync(join(ROOT, "zero-touch", "scripts", "start-chat.mjs"), "utf8");
+  const note = readFileSync(join(ROOT, "zero-touch", "scripts", "messages.mjs"), "utf8"); // the rules note lives there (1 Oct 2026)
   assert.doesNotMatch(note, /with Write or Edit is refused/);
   assert.match(note, /Creating such a file yourself, with the Write tool or a shell command, is refused; a change to a file that exists is yours to make\./);
 });

@@ -43,11 +43,12 @@ import { appendEvent, setEventAgent } from "./lib/events.mjs";
 import { typedCommand, WORKFLOW_COMMANDS } from "./lib/commands.mjs";
 import { appendPrivate, ensureSessionDir, mmoHome, sessionDir } from "./lib/paths.mjs";
 import { sentWhileWorking } from "./lib/transcript.mjs";
-import { abortRun, workflowState } from "./lib/workflow-log.mjs";
+import { RUN_ID, abortRun, workflowState } from "./lib/workflow-log.mjs";
+import { stampedRunCheck } from "./lib/run-check.mjs";
 import { decideChatMode } from "./lib/chat-mode.mjs";
 import { folderKind, routeMessage } from "./lib/route.mjs";
-import { PERSON_LINE as L, cannotStartInstruction, dropRoute, KEEP_OUT, NOT_NOW_REASON, plainName, readRoute, saveWorkflowPolicy, startFirstReason, startInstruction, startProblem, typedBusyReason, writeRoute } from "./lib/route-flow.mjs";
-import { acquire, heldByOther, pipelineSinceOf, release } from "./lib/project-lock.mjs";
+import { PERSON_LINE as L, cannotStartInstruction, chatPolicy, dropRoute, KEEP_OUT, NOT_NOW_REASON, plainName, policyPath, readRoute, startFirstReason, startInstruction, startProblem, typedBusyReason, writeRoute } from "./lib/route-flow.mjs";
+import { acquire, heldByOther, pipelineRunOf, pipelineSinceOf, release, runClaimedByOther } from "./lib/project-lock.mjs";
 import * as Q from "./lib/queue.mjs";
 import { handoffMessage } from "./lib/handoff-route.mjs";
 import * as H from "./lib/handoff.mjs";
@@ -153,8 +154,10 @@ function handoffPrompt(ctx, text) {
     appendEvent(ctx.sid, "handoff.unavailable", { kinds: asked.kinds.join(","), cause: found.error });
     return void say(H.unavailableInstruction(found), H.HANDOFF_LINE.unavailable(found, chat));
   }
-  appendEvent(ctx.sid, "handoff.recognised", { kinds: asked.kinds.join(","), rest: asked.rest || undefined });
-  say(H.handoffInstruction(asked), H.HANDOFF_LINE.handoff(asked, found.routes, chat));
+  // no_google: kinds done in the chat because their model needs Google and this computer has no Google login.
+  const offline = asked.kinds.filter((k) => found.routes[{ spec: "docs", plan: "docs" }[k] ?? k]?.noGoogle).join(",") || undefined;
+  appendEvent(ctx.sid, "handoff.recognised", { kinds: asked.kinds.join(","), rest: asked.rest || undefined, kept: asked.kinds.filter((k) => H.keptInChat(stamp, k)).join(",") || undefined, no_google: offline });
+  say(H.handoffInstruction(asked, found.routes), H.HANDOFF_LINE.handoff(asked, found.routes, chat));
 }
 
 /**
@@ -162,9 +165,11 @@ function handoffPrompt(ctx, text) {
  * holds the moment the workflow started, so its run can be told from any earlier run in the project
  * (lib/workflow-log.mjs). While it runs, zero-touch stands down, exactly as for a typed command.
  */
-function markPipeline(ctx, via, { job = null, args = "" } = {}) {
+function markPipeline(ctx, via, { job = null, args = "", policy = null } = {}) {
   // The record holds the moment, and (0.8.4) which job: the replace-or-queue question names it in plain words.
-  setSessionMarker(ctx, "pipeline", JSON.stringify({ since: new Date().toISOString(), job, args }));
+  // `policy` (1 Oct 2026) is set only for a run zero-touch started: every model-server call of that run is stamped
+  // with that policy's shipped file (the "pre-dispatch" moment). A command the person typed keeps its own rules.
+  setSessionMarker(ctx, "pipeline", JSON.stringify({ since: new Date().toISOString(), job, args, ...(policy ? { policy } : {}) }));
   acquire(ctx.projectDir, ctx.sid, job);
   ctx.pipeline = true;
   appendEvent(ctx.sid, "session.pipeline", { via, job: job ?? undefined });
@@ -175,9 +180,63 @@ function pipelineSince(ctx) {
   if (Number.isFinite(ms)) return ms;
   try { return statSync(sessionMarker(ctx, "pipeline")).mtimeMs; } catch { return NaN; }
 }
+/** The chat's running-workflow record: { since, job, args, policy? } (null for none, or a bare time before 0.8.4). */
+function pipelineRecord(ctx) {
+  try { const r = JSON.parse(readFileSync(sessionMarker(ctx, "pipeline"), "utf8")); return r && typeof r === "object" ? r : null; } catch { return null; }
+}
+/** The run this chat's workflow claimed (claimRun), or null before its orchestrator has logged one. */
+function pipelineRun(ctx) {
+  return pipelineRunOf(ctx.sid);
+}
+/** Where this chat's workflow stands, read from its own run once claimed (lib/workflow-log.mjs). */
+function ownWorkflowState(ctx) {
+  return workflowState(ctx.projectDir, pipelineSince(ctx), pipelineRun(ctx));
+}
+
+/**
+ * Claims the chat's run (1 Oct 2026). A workflow's orchestrator logs every step with
+ * `node …/mmo-log.mjs --event=… --run-id=<run-id>` and records its writes with `write-provenance.mjs --run-id=<run-id>`
+ * (agents/orchestrator.md), through this chat's own tool calls, so the run id in such a call is this chat's run and no
+ * other's. Until then the run is found by time, which can pick another chat's run started later in the same folder;
+ * so stopping a run (/clear, "Replace it") needs a claimed one, and never guesses. A run id the model left as a shell
+ * variable is not read. Nothing is emitted: the call runs as it is.
+ */
+const RUN_LOGGER = /(?:^|[\s/"'])(?:mmo-log|write-provenance)\.mjs\b/;
+const RUN_ID_FLAG = /--run-id=(["']?)([^\s"'\\]+)\1(?=\s|\\|$)/;
+function claimRun(ctx) {
+  if (!ctx.pipeline || String(ctx.input.tool_name ?? "") !== "Bash") return;
+  const command = String(ctx.input.tool_input?.command ?? "");
+  if (!RUN_LOGGER.test(command)) return;
+  const id = RUN_ID_FLAG.exec(command)?.[2];
+  const rec = pipelineRecord(ctx);
+  if (!id || !RUN_ID.test(id) || !rec || rec.run_id === id) return;
+  setSessionMarker(ctx, "pipeline", JSON.stringify({ ...rec, run_id: id }));
+  appendEvent(ctx.sid, "session.run_claimed", { run_id: id, by: ctx.agent ? "helper" : "chat" });
+}
+
+/**
+ * The run-start check of a run zero-touch started gets the person's policy file too (1 Oct 2026, found in review).
+ * The orchestrator runs it as a shell command and is told to pass the run's policy file; the model server's calls are
+ * stamped by the "pre-dispatch" moment whatever the model wrote, but a shell command is not. So, as a backstop, the
+ * check's command gets `--policy-path "<the policy's shipped file>"`, and only when it is one plain call of the check
+ * that names no file yet (lib/run-check.mjs says exactly when; anything else is left untouched). Returns true when it
+ * emitted. A run the person typed is left alone.
+ */
+function stampRunCheck(ctx) {
+  if (!ctx.pipeline || String(ctx.input.tool_name ?? "") !== "Bash") return false;
+  const rec = pipelineRecord(ctx);
+  const input = ctx.input.tool_input && typeof ctx.input.tool_input === "object" && !Array.isArray(ctx.input.tool_input) ? ctx.input.tool_input : null;
+  if (!rec?.policy || typeof input?.command !== "string") return false;
+  const stamped = stampedRunCheck(input.command, policyPath(rec.policy));
+  if (!stamped) return false;
+  appendEvent(ctx.sid, "route.policy_stamped", { tool: "Bash", check: "driver-model-check", policy: rec.policy, by: ctx.agent ? "helper" : "chat" });
+  emit({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: { ...input, command: stamped } } });
+  return true;
+}
+
 /** The job the running workflow was started for (null for a record written before 0.8.4). */
 function runningJob(ctx) {
-  try { return JSON.parse(readFileSync(sessionMarker(ctx, "pipeline"), "utf8")).job ?? null; } catch { return null; }
+  return pipelineRecord(ctx)?.job ?? null;
 }
 /** The chat's workflow is over (ended, replaced or cleared): the chat is ordinary again and the project is free. */
 function endPipeline(ctx) {
@@ -193,11 +252,13 @@ function endPipeline(ctx) {
  * (lib/workflow-log.mjs says why).
  */
 function endPipelineIfOver(ctx) {
-  if (!ctx.pipeline) return;
-  const w = workflowState(ctx.projectDir, pipelineSince(ctx));
-  if (w.state !== "ended") return;
+  if (!ctx.pipeline) return null;
+  const w = ownWorkflowState(ctx);
+  if (w.state !== "ended") return null;
+  const job = runningJob(ctx) ?? "workflow";
   endPipeline(ctx);
   appendEvent(ctx.sid, "session.pipeline_ended", { run_id: w.runId, outcome: w.outcome });
+  return job;
 }
 
 /**
@@ -206,7 +267,7 @@ function endPipelineIfOver(ctx) {
  * person's next message is its answer, never a new job.
  */
 function waitingFor(ctx) {
-  const w = workflowState(ctx.projectDir, pipelineSince(ctx));
+  const w = ownWorkflowState(ctx);
   if (w.state === "not-started") return "first";
   return w.state === "running" && w.waiting === true ? "gate" : null;
 }
@@ -239,25 +300,34 @@ function settle(ctx, choice, kind) {
       ? `The ${plainName(choice.job)} is already queued; it is not added twice.`
       : `Queued: the ${plainName(choice.job)} starts by itself when the running ${running} ends.`;
     const tail = choice.via === "typed"
-      ? "Tell the person that in one short line. Do not run the command they typed now: stop here; the running workflow carries on when they answer it."
-      : "Tell the person that in one short line, then carry on with the running workflow.";
-    return `${head} ${tail} ${KEEP_OUT}`;
+      ? "The person has been shown a line saying so. Do not run the command they typed now: stop here; the running workflow carries on when they answer it."
+      : "The person has been shown a line saying so; carry on with the running workflow.";
+    return { text: `${head} ${tail} ${KEEP_OUT}`, line: res === "duplicate" ? L.queuedTwice(choice.job) : L.queued(choice.job, choice.running) };
   }
   if (kind === "replace") {
-    const w = workflowState(ctx.projectDir, pipelineSince(ctx));
-    const done = abortRun(ctx.projectDir, w.runId, "replaced");
+    // The run this chat claimed (claimRun). Without a claim (a run id the model left as a shell variable), the run found
+    // by time, as before 1 Oct 2026, unless another chat has claimed that one: the person asked to stop their
+    // workflow, so its log and its write lock must not stay open (found in review), and another chat's is never touched.
+    // /clear (session-end) stops a claimed run only: nobody asked it to stop anything.
+    let runId = pipelineRun(ctx);
+    if (!runId) {
+      const found = ownWorkflowState(ctx).runId ?? null;
+      runId = found && !runClaimedByOther(found, ctx.sid) ? found : null;
+    }
+    const done = abortRun(ctx.projectDir, runId, "replaced");
     endPipeline(ctx);
-    appendEvent(ctx.sid, "route.replaced", { job: choice.job, via: choice.via, run_id: w.runId, logged: done.logged, unlocked: done.unlocked });
+    appendEvent(ctx.sid, "route.replaced", { job: choice.job, via: choice.via, run_id: runId ?? undefined, logged: done.logged, unlocked: done.unlocked });
+    const line = L.replaced(choice.job, choice.running);
     if (choice.via === "typed") {
       markPipeline(ctx, "replace", { job: choice.job, args: choice.args });
-      return `Replaced: the running ${running} is stopped. Carry on with the command the person typed. ${KEEP_OUT}`;
+      return { text: `Replaced: the running ${running} is stopped. Carry on with the command the person typed. ${KEEP_OUT}`, line };
     }
     writeRoute(ctx.sid, { job: choice.job, args: choice.args, via: "replace", status: "pending", prompt_id: ctx.input.prompt_id ?? null });
     appendEvent(ctx.sid, "route.decided", { job: choice.job, via: "replace" });
-    return `Replaced: the running ${running} is stopped. ${startInstruction({ job: choice.job, args: choice.args, auth: ctx.config.routing_defaults.auth })}`;
+    return { text: `Replaced: the running ${running} is stopped. ${startInstruction({ job: choice.job, args: choice.args, auth: ctx.config.routing_defaults.auth, policy: chatPolicy(ctx.sid) })}`, line };
   }
   appendEvent(ctx.sid, "route.choice_neither", { job: choice.job, via: choice.via });
-  return `The person chose neither: start nothing new, and carry on. ${KEEP_OUT}`;
+  return { text: `The person chose neither: start nothing new, and carry on. ${KEEP_OUT}`, line: L.neither(choice.running) };
 }
 
 /** What the model reads while "Queue it" holds a typed command's own steps until the turn ends. */
@@ -278,6 +348,13 @@ function typedMoment(ctx, cmd) {
   const pid = ctx.input.prompt_id ?? null;
   const seen = Q.readTyped(ctx.sid);
   if (seen && pid && seen.prompt_id === pid) return seen.decision ?? {};
+  // A start zero-touch still has pending (plain words the person then stopped with Esc) ends here, as any new
+  // message ends it (1 Oct 2026, found in review): otherwise a typed command for the same job took that start over,
+  // with zero-touch's policy stamped on a run the person typed, and a typed command for another job was refused.
+  if (cmd.workflow && !ctx.pipeline) {
+    const stale = readRoute(ctx.sid);
+    if (stale?.status === "pending") { dropRoute(ctx.sid); appendEvent(ctx.sid, "route.dropped", { job: stale.job, by: "typed" }); }
+  }
   let decision = {};
   if (cmd.workflow && acts(ctx) && !ctx.agent) {
     const lock = heldByOther(ctx.projectDir, ctx.sid);
@@ -299,7 +376,8 @@ function typedMoment(ctx, cmd) {
 /** The chat becomes a workflow run: zero-touch stands down until the run ends, as for a typed command. */
 function markStarted(ctx, route) {
   writeRoute(ctx.sid, { ...route, status: "started" });
-  markPipeline(ctx, "route", { job: route.job, args: route.args ?? "" });
+  // A command the person typed and queued (route.typed) is their own run: its own rules, no zero-touch policy.
+  markPipeline(ctx, "route", { job: route.job, args: route.args ?? "", policy: route.typed ? null : chatPolicy(ctx.sid) });
   appendEvent(ctx.sid, "route.started", { job: route.job, via: route.via });
 }
 
@@ -312,12 +390,9 @@ function markStarted(ctx, route) {
 function startWorkflow(ctx, route) {
   markStarted(ctx, route);
   if (route.via === "queue") Q.removeStarted(ctx.sid, route);
-  try {
-    const saved = saveWorkflowPolicy({ projectDir: ctx.projectDir, policy: ctx.config.routing_defaults.policy });
-    appendEvent(ctx.sid, "route.policy", { policy: saved.policy, written: saved.written });
-  } catch (err) {
-    appendEvent(ctx.sid, "route.policy_not_saved", { why: String(err?.message ?? err).slice(0, 120) });
-  }
+  // Nothing is written into the project (1 Oct 2026): the run's models travel in its start arguments and on every
+  // model-server call (the "pre-dispatch" moment), never through .sdlc/project.json.
+  if (!route.typed) appendEvent(ctx.sid, "route.policy", { policy: chatPolicy(ctx.sid) });
 }
 
 /**
@@ -359,13 +434,22 @@ function typedByHandNet(ctx) {
   const paths = createdByHand(tool, ctx.input.tool_input, { cwd: ctx.cwd, projectDir: ctx.projectDir });
   if (!paths.length) return;
   const released = new Set(H.releasedPaths(ctx.sid));
-  const path = paths.find((p) => fileKind(p) && !existsSync(join(ctx.projectDir, p)) && !released.has(p));
+  const stamp = H.readStamp(ctx.sid);
+  // A kind of work the person keeps in the chat (1 Oct 2026) is the chat model's own: its new files are never refused.
+  const handed = (p) => { const k = fileKind(p); return k && !H.keptInChat(stamp, k === "document" ? "docs" : "tests"); };
+  const path = paths.find((p) => handed(p) && !existsSync(join(ctx.projectDir, p)) && !released.has(p));
   if (!path) return;
-  if (H.handoffRoutes(ctx.sid, H.readStamp(ctx.sid)).error) return;
+  const found = H.handoffRoutes(ctx.sid, stamp);
+  if (found.error) return;
   const kind = fileKind(path);
+  // A kind that cannot be handed off because Google is not connected is the chat model's own, like a kept kind: its
+  // tool is refused (pre-handoff), so typing the file by hand must pass, or the work could not be done at all.
+  if (found.routes[kind === "document" ? "docs" : "tests"]?.noGoogle) return;
+  const typist = found.routes[kind === "document" ? "docs" : "tests"]?.model ?? null;
+  const chat = H.chatState(stamp, H.chatModelNow(ctx.sid, ctx.input.transcript_path));
   appendEvent(ctx.sid, "handoff.by_hand_refused", { tool, kind, path });
   emit({
-    systemMessage: H.byHandLine(path, kind),
+    systemMessage: H.byHandLine(path, kind, chat, typist),
     hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: H.byHandReason(path, kind) },
   });
 }
@@ -428,8 +512,8 @@ const handlers = {
     const waiting = Q.readChoice(ctx.sid);
     if (waiting && waiting.prompt_id !== (ctx.input.prompt_id ?? null)) {
       const kind = Q.labelKind(text);
-      // "Replace it" for a job asked in plain words starts that workflow now; the person sees which one.
-      if (kind) return void say(settle(ctx, waiting, kind), kind === "replace" && waiting.via !== "typed" ? L.starting(waiting.job) : null);
+      // The answer written out: the person sees what happened (queued, replaced), the model what to do next.
+      if (kind) { const done = settle(ctx, waiting, kind); return void say(done.text, done.line); }
       Q.dropChoice(ctx.sid);
       appendEvent(ctx.sid, "route.choice_dropped", { job: waiting.job });
     }
@@ -440,7 +524,7 @@ const handlers = {
       if (decision.block) return void emit({ decision: "block", reason: decision.block });
       // A typed command shows no line of its own (the person named the workflow), except when it must wait for
       // the Queue-or-Replace answer.
-      if (decision.context) say(decision.context, L.alreadyRunning());
+      if (decision.context) say(decision.context, L.alreadyRunning(runningJob(ctx), cmd.name));
       return;
     }
     if (ctx.pipeline) {
@@ -450,10 +534,10 @@ const handlers = {
       const waits = waitingFor(ctx);
       if (waits) return void say(null, waits === "gate" ? L.gateAnswer() : L.workflowAnswer());
       // Hand-off mode starts no workflow from plain words, so there is no second job to queue.
-      if (ctx.config.mode === "b") return void say(null, L.duringWorkflow());
+      if (ctx.config.mode === "b") return void say(null, L.duringWorkflow(runningJob(ctx)));
       const r = routeMessage(text, folderKind(ctx.projectDir));
-      if (!r.job) return void say(null, L.duringWorkflow());
-      return void say(ask(ctx, { job: r.job, args: r.args, via: "words" }), L.alreadyRunning());
+      if (!r.job) return void say(null, L.duringWorkflow(runningJob(ctx)));
+      return void say(ask(ctx, { job: r.job, args: r.args, via: "words" }), L.alreadyRunning(runningJob(ctx), r.job));
     }
     // A message typed while Claude is still working joins the running task (29 Sep 2026): it never starts a
     // workflow and never ends a start that task has pending. Only a message sent when the chat is idle is judged,
@@ -479,19 +563,20 @@ const handlers = {
     // One workflow at a time in one project (0.8.4), then never tell Opus to start a workflow that its own
     // run-start check would stop.
     const lock = heldByOther(ctx.projectDir, ctx.sid);
+    const policy = chatPolicy(ctx.sid);
     const { problem } = lock
       ? { problem: { cause: "busy", job: lock.job } }
-      : startProblem({ projectDir: ctx.projectDir, fallback: ctx.config.routing_defaults.policy, auth: ctx.config.routing_defaults.auth });
+      : startProblem({ projectDir: ctx.projectDir, policy, auth: ctx.config.routing_defaults.auth });
     let line;
     if (!problem) {
       writeRoute(ctx.sid, { ...route, status: "pending", prompt_id: ctx.input.prompt_id ?? null });
-      appendEvent(ctx.sid, "route.decided", { job: route.job, via: route.via });
-      line = startInstruction({ ...route, auth: ctx.config.routing_defaults.auth });
+      appendEvent(ctx.sid, "route.decided", { job: route.job, via: route.via, policy });
+      line = startInstruction({ ...route, auth: ctx.config.routing_defaults.auth, policy });
     } else {
       appendEvent(ctx.sid, "route.cannot_start", { job: route.job, cause: problem.cause });
       line = cannotStartInstruction(route.job, problem);
     }
-    say(line, problem ? L.notStarted(problem) : L.starting(route.job));
+    say(line, problem ? L.notStarted(problem, route.job) : L.starting(route.job));
   },
 
   "pre-skill"(ctx) {
@@ -538,9 +623,13 @@ const handlers = {
   },
 
   "pre-any"(ctx) {
+    // The chat's workflow claims its run from its own logging calls (claimRun); it emits nothing.
+    claimRun(ctx);
     // Guard A: one catch-all, so every tool that can change something waits
     // for a routed workflow's start, whoever calls it (blockUntilStarted).
     if (blockUntilStarted(ctx)) return;
+    // A run zero-touch started: its run-start check reads the person's policy file too (stampRunCheck).
+    if (stampRunCheck(ctx)) return;
     // Hand-off mode's safety net rides on the same catch-all, so no extra hook runs in any chat.
     if (ctx.config.mode === "b") typedByHandNet(ctx);
   },
@@ -587,7 +676,8 @@ const handlers = {
     if (!waiting || !acts(ctx)) return;
     const kind = Q.answerFrom(ctx.input.tool_response, waiting.question);
     if (kind === null) return;
-    emit({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: settle(ctx, waiting, kind) } });
+    const done = settle(ctx, waiting, kind);
+    emit({ ...(showsLines ? { systemMessage: done.line } : {}), hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: done.text } });
   },
 
   "turn-end"(ctx) {
@@ -596,26 +686,68 @@ const handlers = {
     // model then does not make is not pushed again (stop_hook_active): the route is dropped, the job stays queued
     // for the next turn's end.
     Q.dropHold(ctx.sid);
-    endPipelineIfOver(ctx);
+    // The workflow that ended with this turn, if one did: the person is told (1 Oct 2026), and a queued job follows.
+    const ended = endPipelineIfOver(ctx);
     const route = readRoute(ctx.sid);
     if (ctx.input.stop_hook_active === true) {
       if (route?.status === "pending" && route.via === "queue") { dropRoute(ctx.sid); appendEvent(ctx.sid, "route.queue_not_started", { job: route.job }); }
       return;
     }
-    if (!acts(ctx) || ctx.agent || ctx.pipeline || route?.status === "pending" || Q.readChoice(ctx.sid)) return;
+    const endedOnly = () => { if (ended && showsLines) emit({ systemMessage: L.ended(ended, ctx.config.mode) }); };
+    if (!acts(ctx) || ctx.agent || ctx.pipeline || route?.status === "pending" || Q.readChoice(ctx.sid)) return void endedOnly();
     const next = Q.readQueue(ctx.sid)[0];
-    if (!next) return;
+    if (!next) return void endedOnly();
     const lock = heldByOther(ctx.projectDir, ctx.sid);
-    if (lock) return void appendEvent(ctx.sid, "route.queue_waits", { job: next.job, cause: "busy" });
-    const { problem } = startProblem({ projectDir: ctx.projectDir, fallback: ctx.config.routing_defaults.policy, auth: ctx.config.routing_defaults.auth });
+    if (lock) { appendEvent(ctx.sid, "route.queue_waits", { job: next.job, cause: "busy" }); return void endedOnly(); }
+    // A command the person typed and queued starts exactly as they typed it (1 Oct 2026, found in review): no
+    // zero-touch models, no zero-touch start checks (it runs its own), nothing stamped. Only a job zero-touch
+    // recognised carries the person's zero-touch models.
+    const typedJob = next.via === "typed";
+    const policy = typedJob ? null : chatPolicy(ctx.sid);
+    const { problem } = typedJob ? { problem: null } : startProblem({ projectDir: ctx.projectDir, policy, auth: ctx.config.routing_defaults.auth });
     if (problem) {
       Q.removeStarted(ctx.sid, next);
       appendEvent(ctx.sid, "route.cannot_start", { job: next.job, cause: problem.cause, via: "queue" });
-      return void emit({ decision: "block", reason: cannotStartInstruction(next.job, problem), systemMessage: L.notStarted(problem) });
+      return void emit({ decision: "block", reason: cannotStartInstruction(next.job, problem), systemMessage: L.notStarted(problem, next.job) });
     }
-    writeRoute(ctx.sid, { job: next.job, args: next.args, via: "queue", status: "pending", prompt_id: ctx.input.prompt_id ?? null });
-    appendEvent(ctx.sid, "route.decided", { job: next.job, via: "queue" });
-    emit({ decision: "block", reason: Q.queuedStartInstruction(next), systemMessage: L.startingQueued(next.job) });
+    writeRoute(ctx.sid, { job: next.job, args: next.args, via: "queue", ...(typedJob ? { typed: true } : {}), status: "pending", prompt_id: ctx.input.prompt_id ?? null });
+    appendEvent(ctx.sid, "route.decided", { job: next.job, via: "queue", policy: policy ?? undefined, typed: typedJob || undefined });
+    emit({ decision: "block", reason: Q.queuedStartInstruction(next, typedJob ? {} : { auth: ctx.config.routing_defaults.auth, policy }), systemMessage: L.startingQueued(next.job, ended) });
+  },
+
+  "pre-dispatch"(ctx) {
+    // A model-server call (load_policy, preflight_dispatch, execute_with_model, simulate_policy) inside a run zero-touch
+    // started (1 Oct 2026): it is stamped with that run's policy file, an explicit path, which the server and the
+    // run-start check put ahead of everything else, a project's routing-policy.yaml included. So the run uses the
+    // person's zero-touch choice whatever any instruction says, from the chat or from a helper (helpers make most of
+    // these calls). A run the person typed is left to its own rules. execute_stage takes no policy: it reuses the one
+    // pre-flight recorded, which this stamp set.
+    const rec = pipelineRecord(ctx);
+    if (!rec?.policy || !ctx.pipeline) return;
+    const input = ctx.input.tool_input && typeof ctx.input.tool_input === "object" && !Array.isArray(ctx.input.tool_input) ? ctx.input.tool_input : {};
+    const path = policyPath(rec.policy);
+    if (input.policy_path === path) return;
+    appendEvent(ctx.sid, "route.policy_stamped", { tool: String(ctx.input.tool_name ?? ""), policy: rec.policy, by: ctx.agent ? "helper" : "chat" });
+    emit({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: { ...input, policy_path: path } } });
+  },
+
+  "session-end"(ctx) {
+    // The conversation ended (SessionEnd). Claude Code sends it for the OLD chat id when the person types /clear, and
+    // gives the cleared conversation a new id (read in Claude Code's own code, 1 Oct 2026). A workflow abandoned that
+    // way would otherwise hold the project forever: every later workflow there, typed ones included, was refused with
+    // "type /clear in that chat", which could never help. So at /clear the run is recorded as stopped, as "Replace it"
+    // stops it, and the project is free. Other endings (an exit, /resume to another chat) keep it: that chat can be
+    // reopened and carry on its workflow.
+    if (ctx.input.reason !== "clear" || !ctx.pipeline) return;
+    // Only the run this chat claimed is recorded as stopped (claimRun): a run found by time alone may be another
+    // chat's, started later in the same folder. Unclaimed, the chat still lets go of the project.
+    const runId = pipelineRun(ctx);
+    const done = abortRun(ctx.projectDir, runId, "cleared");
+    endPipeline(ctx);
+    Q.dropChoice(ctx.sid);
+    Q.dropQueue(ctx.sid);
+    Q.dropHold(ctx.sid);
+    appendEvent(ctx.sid, "route.cleared", { run_id: runId ?? undefined, logged: done.logged, unlocked: done.unlocked });
   },
 
   "pre-handoff"(ctx) {
@@ -633,8 +765,15 @@ const handlers = {
     if (ctx.pipeline) return void refuse(H.NOT_IN_A_WORKFLOW, "workflow-run");
     // An undo sends nothing to a model, so it works even when the chat's hand-off policy cannot be read.
     if (tool !== H.UNDO_TOOL) {
-      const found = H.handoffRoutes(ctx.sid, H.readStamp(ctx.sid));
+      const stamp = H.readStamp(ctx.sid);
+      // Work the person keeps in the chat (1 Oct 2026) is never handed off, whoever makes the call.
+      const kind = { write_document: "docs", write_tests_from_cases: "tests", repeat_edit_across_files: "repeat" }[tool];
+      if (kind && H.keptInChat(stamp, kind)) return void refuse(H.KEPT_IN_CHAT_REASON, "kept-in-chat");
+      const found = H.handoffRoutes(ctx.sid, stamp);
       if (found.error) return void refuse(H.unavailableInstruction(found), found.error);
+      // A call that could only fail at the server (its model needs Google, and there is no Google login) is refused
+      // here; the chat's model does the work, as the start message and the line after the message said.
+      if (kind && found.routes[kind]?.noGoogle) return void refuse(H.NO_GOOGLE_REASON, "google");
     }
     appendEvent(ctx.sid, "handoff.tool_call", { tool });
     emit({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: H.stampedInput(ctx.input.tool_input, { sessionId: ctx.sid, projectDir: ctx.projectDir, auth: ctx.config.routing_defaults.auth }) } });

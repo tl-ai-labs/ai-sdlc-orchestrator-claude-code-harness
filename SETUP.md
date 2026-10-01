@@ -70,9 +70,10 @@ hands new docs, specs, plans, tests and repeated edits to the model the policy r
 /plugin install zero-touch@tilicho-ai-labs
 ```
 
-It needs `mmo` (installing it brings `mmo` along) and has nothing to build or set: it only marks each
-new chat at its start with its mode, read from `~/.mmo-ambient/mode` (`a` or no file: workflow mode;
-`b`: hand-off mode; `off`: none). Enabled, every new chat has zero-touch; disabled in the plugin list
+It needs `mmo` (installing it brings `mmo` along) and has nothing to build and no file to edit. The first
+chat after install asks for the settings in Claude's question box: the mode (Workflows, Hand-off or Off),
+then the models for it. Later, typing `change zero-touch settings` in any chat opens the same box; a choice
+applies to new chats. Enabled, every new chat has zero-touch in the chosen mode; disabled in the plugin list
 (desktop app: **+** → **Plugins** → **Manage plugins**), new chats have none. See `docs/ambient-mode.md`.
 
 ## 3. Build the bundled model server

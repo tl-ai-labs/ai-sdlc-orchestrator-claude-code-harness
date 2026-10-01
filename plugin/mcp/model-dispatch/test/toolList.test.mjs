@@ -93,8 +93,9 @@ test("a hand-off tool call reaches the real server: refused without the hook's s
     mkdirSync(repo);
     writeFileSync(join(repo, "README.md"), "# Shop\n");
     writeFileSync(join(session, "chat_mode"), "b");
-    writeFileSync(join(session, "handoff.json"), JSON.stringify({ chat_model: "claude-opus-5", pin: "default", policy: "opus-plus-flash-v38", policy_file: null }));
-    const flash = { id: "flash-completion", model: "gemini-3.8-flash", adapter: "mcp:model-dispatch" };
+    const typist = { typist: "flash", policy: "opus-plus-flash-v38" };
+    writeFileSync(join(session, "handoff.json"), JSON.stringify({ chat_model: "claude-opus-5", pin: "setting", typists: { documents: typist, tests: typist, repeats: typist } }));
+    const flash = { id: "flash-completion", model: "gemini-3.8-flash", adapter: "mcp:model-dispatch", policy: "opus-plus-flash-v38" };
     writeFileSync(join(session, "handoff_models.json"), JSON.stringify({ routes: { docs: flash, tests: flash, repeat: flash } }));
     const form = { kind: "docs", file: "README.md", purpose: "p", readers: "r", sections: [{ heading: "Install", must_say: "how" }], facts: [{ statement: "Install with `npm ci`.", source: "chat" }] };
     const call = async (args) => JSON.parse((await ask("tools/call", { name: "write_document", arguments: args }, { MMO_HOME: home })).content[0].text);

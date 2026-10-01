@@ -25,22 +25,34 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
-const { startingChats } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
+const { startingChats, writeZtSettings } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
 const { serverBuilt } = await import(join(ROOT, "tools", "test", "lib", "server-built.mjs"));
 const SKIP = serverBuilt();
 const SHIM = join(ROOT, "plugin", "hooks", "ambient.sh");
 const TOOL = "mcp__plugin_mmo_model-dispatch__write_document";
 
-function sandbox({ mode = "b", handoff } = {}) {
+/**
+ * A person who chose Hand-off ("b", Flash 3.8 typing every kind, the chat on Opus 5) or Workflows ("a") in the
+ * settings box.
+ */
+function sandbox({ mode = "b" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "mmo-zt-b-tools-"));
   const home = join(dir, "home");
   const repo = join(dir, "repo");
   mkdirSync(home);
   mkdirSync(repo);
   writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
-  writeFileSync(join(home, "mode"), `${mode}\n`);
-  if (handoff) writeFileSync(join(home, "ambient.json"), JSON.stringify({ handoff }));
+  writeZtSettings(home, { mode: mode === "a" ? "workflows" : "handoff", handoff: { chat_model: "claude-opus-5", documents: "flash", tests: "flash", repeats: "flash" } });
   return { dir, home, repo, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/** The chat's stamp names a policy that no longer exists (a damaged install): nothing can be handed off. */
+function breakPolicy(s, sid) {
+  const file = join(s.home, "sessions", sid, "handoff.json");
+  const st = JSON.parse(readFileSync(file, "utf8"));
+  for (const k of Object.keys(st.typists)) st.typists[k].policy = "no-such-policy";
+  writeFileSync(file, JSON.stringify(st));
+  rmSync(join(s.home, "sessions", sid, "handoff_models.json"), { force: true });
 }
 
 function runOnce(event, payload, { home, repo }, env = {}) {
@@ -109,11 +121,12 @@ test("outside a hand-off chat, and while a workflow runs, a hand-off tool is ref
 });
 
 test("when the chat's hand-off policy cannot be read, the call is refused and the model is told to do the work itself", { skip: SKIP ?? false }, async () => {
-  const s = sandbox({ handoff: { policy: "no-such-policy" } });
+  const s = sandbox();
   try {
     await startOn(s, "x1");
+    breakPolicy(s, "x1");
     const why = denied(await before(s, "x1")) ?? "";
-    assert.match(why, /Hand-off cannot run in this chat: the hand-off policy no-such-policy cannot be read/);
+    assert.match(why, /Hand-off cannot run in this chat: the models for this work can't be read/);
     assert.match(why, /Do this work yourself/);
   } finally { s.cleanup(); }
 });
@@ -124,12 +137,12 @@ test("after the call the person sees one line from the receipt: what was written
     await startOn(s, "r1");
     const written = { status: "written", file: "docs/setup.md", kind: "docs", written_by: "gemini-3.8-flash", routed_model: "gemini-3.8-flash", attempts: 1, cost_usd: 0.004123 };
     const r = await after(s, "r1", written);
-    assert.equal(line(r), "Zero-touch: docs/setup.md written by Flash, checked ($0.0041).");
+    assert.equal(line(r), "Zero-touch: docs/setup.md was written by Flash 3.8 and checked automatically. Cost: $0.0041.");
     assert.equal(r.json.hookSpecificOutput, undefined, "the model reads the receipt itself; the line is the person's");
     // Claude Code hands a hook the reply as a content list, as a string or as the object: each reads the same.
-    assert.equal(line(await after(s, "r1", written, (x) => JSON.stringify(x))), "Zero-touch: docs/setup.md written by Flash, checked ($0.0041).");
-    assert.equal(line(await after(s, "r1", written, (x) => ({ content: [{ type: "text", text: JSON.stringify(x) }] }))), "Zero-touch: docs/setup.md written by Flash, checked ($0.0041).");
-    assert.equal(line(await after(s, "r1", { ...written, cost_usd: 1.5 })), "Zero-touch: docs/setup.md written by Flash, checked ($1.50).");
+    assert.equal(line(await after(s, "r1", written, (x) => JSON.stringify(x))), "Zero-touch: docs/setup.md was written by Flash 3.8 and checked automatically. Cost: $0.0041.");
+    assert.equal(line(await after(s, "r1", written, (x) => ({ content: [{ type: "text", text: JSON.stringify(x) }] }))), "Zero-touch: docs/setup.md was written by Flash 3.8 and checked automatically. Cost: $0.0041.");
+    assert.equal(line(await after(s, "r1", { ...written, cost_usd: 1.5 })), "Zero-touch: docs/setup.md was written by Flash 3.8 and checked automatically. Cost: $1.50.");
   } finally { s.cleanup(); }
 });
 
@@ -138,12 +151,12 @@ test("the line says when the routed model failed and another wrote it, when the 
   try {
     await startOn(s, "f1");
     const byOpus = { status: "written", file: "docs/setup.md", written_by: "claude-opus-5", routed_model: "gemini-3.8-flash", attempts: 3, cost_usd: 0.098, note: "gemini-3.8-flash failed twice (…); done by claude-opus-5" };
-    assert.equal(line(await after(s, "f1", byOpus)), "Zero-touch: Flash failed, done by Opus: docs/setup.md written, checked ($0.10).");
+    assert.equal(line(await after(s, "f1", byOpus)), "Zero-touch: Flash 3.8 couldn't write docs/setup.md, so Opus 5 wrote it. It was checked automatically. Cost: $0.10.");
     const failed = { status: "failed", file: "docs/setup.md", routed_model: "gemini-3.8-flash", attempts: 3, reason: "the document is empty", cost_usd: 0.012 };
-    assert.equal(line(await after(s, "f1", failed)), "Zero-touch: hand-off failed for docs/setup.md ($0.01 spent); Opus writes it in the chat.");
+    assert.equal(line(await after(s, "f1", failed)), "Zero-touch: the hand-off of docs/setup.md didn't work (cost so far: $0.01), and nothing was added to your project. Opus 5 will write it directly now.");
     const form = { status: "refused", problems: ["purpose is empty", "facts needs at least one fact"] };
-    assert.equal(line(await after(s, "f1", form)), "Zero-touch: hand-off form not complete (2 to fix); nothing was sent.");
-    assert.equal(line(await after(s, "f1", { status: "refused", reason: "this chat's hand-off models are not resolved" })), "Zero-touch: hand-off refused (this chat's hand-off models are not resolved); nothing was sent.");
+    assert.equal(line(await after(s, "f1", form)), "Zero-touch: Opus 5's instructions for the hand-off were missing 2 things, so nothing was sent and nothing was charged. Opus 5 is fixing them and will try again.");
+    assert.equal(line(await after(s, "f1", { status: "refused", reason: "this chat's hand-off models are not resolved" })), "Zero-touch: the hand-off was refused (this chat's hand-off models are not resolved), so nothing was sent and nothing was charged.");
     assert.equal((await after(s, "f1", "not a receipt", (x) => x)).stdout, "", "a reply that is no receipt shows nothing");
   } finally { s.cleanup(); }
 });
@@ -153,29 +166,30 @@ test("the line for tests, for a repeated change and for an undo", async () => {
   try {
     await startOn(s, "t1");
     const tests = { status: "written", id: "h1", file: "tests/cart.test.js", kind: "tests", written_by: "gemini-3.8-flash", routed_model: "gemini-3.8-flash", attempts: 1, cost_usd: 0.004 };
-    assert.equal(line(await after(s, "t1", tests)), "Zero-touch: tests/cart.test.js written by Flash, checked ($0.0040).");
+    assert.equal(line(await after(s, "t1", tests)), "Zero-touch: tests/cart.test.js was written by Flash 3.8 and checked automatically. Cost: $0.0040. To undo it, ask Claude to undo hand-off h1.");
     const red = { status: "failed", file: "tests/cart.test.js", kind: "tests", routed_model: "gemini-3.8-flash", attempts: 3, reason: "the test command failed in a scratch copy of the project (exit 1). Its output:", output: "5 !== 6", cost_usd: 0.098 };
-    assert.equal(line(await after(s, "t1", red)), "Zero-touch: the tests in tests/cart.test.js did not pass in a scratch copy ($0.10 spent); nothing was written. Opus looks at the output.");
+    assert.equal(line(await after(s, "t1", red)), "Zero-touch: the new tests in tests/cart.test.js didn't pass in the test copy (cost: $0.10), so nothing was added. Opus 5 will look at why: if a test was wrong, it fixes the test; if the code has a real bug, it tells you.");
 
     const landed = { status: "landed", id: "h2", changed: ["a.js", "b.js", "c.js"], unchanged: [], failed: [], routed_model: "gemini-3.8-flash", check: "`npm test` passed in a scratch copy (3.2 s)", cost_usd: 0.012 };
-    assert.equal(line(await after(s, "t1", landed)), "Zero-touch: the change repeated in 3 files by Flash, checked ($0.01).");
-    assert.equal(line(await after(s, "t1", { ...landed, changed: ["a.js"], failed: [{ file: "b.js", reason: "x" }, { file: "c.js", reason: "y" }], check: "not run (no check_command was given)" })), "Zero-touch: the change repeated in 1 file by Flash, no check command run ($0.01). 2 left for Opus to change.");
-    assert.equal(line(await after(s, "t1", { ...landed, by_fallback: 1, fallback_model: "claude-opus-5" })), "Zero-touch: the change repeated in 3 files by Flash (1 by Opus after Flash failed), checked ($0.01).");
-    assert.equal(line(await after(s, "t1", { ...landed, id: undefined, changed: [], unchanged: ["a.js"] })), "Zero-touch: no file needed the change ($0.01).");
+    assert.equal(line(await after(s, "t1", landed)), "Zero-touch: Flash 3.8 made the change in 3 files, and your project's check passed on a test copy. Cost: $0.01. To undo it, ask Claude to undo hand-off h2.");
+    assert.equal(line(await after(s, "t1", { ...landed, changed: ["a.js"], failed: [{ file: "b.js", reason: "x" }, { file: "c.js", reason: "y" }], check: "not run (no check_command was given)" })), "Zero-touch: Flash 3.8 made the change in 1 file, and no automatic check was available. Cost: $0.01. To undo it, ask Claude to undo hand-off h2. 2 files still need the change, and Opus 5 will do them.");
+    assert.equal(line(await after(s, "t1", { ...landed, by_fallback: 1, fallback_model: "claude-opus-5" })), "Zero-touch: Flash 3.8 made the change in 3 files (1 file by Opus 5 after Flash 3.8 failed), and your project's check passed on a test copy. Cost: $0.01. To undo it, ask Claude to undo hand-off h2.");
+    assert.equal(line(await after(s, "t1", { ...landed, id: undefined, changed: [], unchanged: ["a.js"] })), "Zero-touch: no file needed the change. Cost: $0.01.");
     const broke = { status: "failed", reason: "the check command failed in a scratch copy with the 3 changed files (exit 1)", routed_model: "gemini-3.8-flash", would_change: ["a.js", "b.js", "c.js"], unchanged: [], failed: [], output: "boom", cost_usd: 0.012 };
-    assert.equal(line(await after(s, "t1", broke)), "Zero-touch: the repeated change failed its check in a scratch copy ($0.01 spent); nothing was changed. Opus makes the change in the chat.");
+    assert.equal(line(await after(s, "t1", broke)), "Zero-touch: the change couldn't be repeated safely (your project's check failed on the test copy; cost: $0.01), so nothing was changed. Opus 5 will make the change directly.");
     const none = { status: "failed", reason: "no target's edits passed the checks", routed_model: "gemini-3.8-flash", changed: [], unchanged: [], failed: [{ file: "a.js", reason: "x" }], cost_usd: 0.012 };
-    assert.equal(line(await after(s, "t1", none)), "Zero-touch: the repeated change could not be handed off ($0.01 spent); nothing was changed. Opus makes the change in the chat.");
+    assert.equal(line(await after(s, "t1", none)), "Zero-touch: the change couldn't be repeated safely (it couldn't be handed off; cost: $0.01), so nothing was changed. Opus 5 will make the change directly.");
 
-    assert.equal(line(await after(s, "t1", { status: "undone", id: "h2", restored: ["a.js", "b.js"], left_alone: [] })), "Zero-touch: hand-off h2 undone (2 files restored).");
-    assert.equal(line(await after(s, "t1", { status: "undone", id: "h2", restored: ["a.js"], left_alone: ["b.js"] })), "Zero-touch: hand-off h2 undone (1 file restored, 1 changed since and left alone).");
+    assert.equal(line(await after(s, "t1", { status: "undone", id: "h2", restored: ["a.js", "b.js"], left_alone: [] })), "Zero-touch: hand-off h2 was undone: 2 files are back as they were.");
+    assert.equal(line(await after(s, "t1", { status: "undone", id: "h2", restored: ["a.js"], left_alone: ["b.js"] })), "Zero-touch: hand-off h2 was undone: 1 file is back as it was. (1 file had been changed again since, so it was left as it is.)");
   } finally { s.cleanup(); }
 });
 
 test("an undo needs no model: it is stamped even when the chat's hand-off policy cannot be read", { skip: SKIP ?? false }, async () => {
-  const s = sandbox({ handoff: { policy: "no-such-policy" } });
+  const s = sandbox();
   try {
     await startOn(s, "u1");
+    breakPolicy(s, "u1");
     const undo = await before(s, "u1", { id: "h1" }, {}, "mcp__plugin_mmo_model-dispatch__undo_hand_off");
     assert.deepEqual(undo.json.hookSpecificOutput.updatedInput, { id: "h1", _mmo: { session_id: "u1", project_dir: s.repo, auth: "estimated" } });
   } finally { s.cleanup(); }
@@ -188,7 +202,7 @@ test("every tool the hooks match, the start note names and the reminders name is
   const H = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "handoff.mjs"));
   for (const tool of listed) assert.equal(H.handoffToolName(`mcp__plugin_mmo_model-dispatch__${tool}`), tool, `the hook knows ${tool}`);
   for (const tool of new Set(Object.values(H.HANDOFF_TOOL))) assert.ok(listed.includes(tool), `the reminders name ${tool}, which the server lists`);
-  const note = readFileSync(join(ROOT, "zero-touch", "scripts", "start-chat.mjs"), "utf8");
+  const note = readFileSync(join(ROOT, "zero-touch", "scripts", "messages.mjs"), "utf8"); // the rules note lives there (1 Oct 2026)
   for (const tool of listed) assert.match(note, new RegExp(`\\b${tool}\\b`), `the start note names ${tool}`);
   const hooks = JSON.parse(readFileSync(join(ROOT, "plugin", "hooks", "hooks.json"), "utf8")).hooks;
   for (const event of ["PreToolUse", "PostToolUse"]) {

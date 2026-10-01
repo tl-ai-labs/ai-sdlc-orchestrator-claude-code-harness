@@ -6,8 +6,10 @@
  * the chat may do is read from the chat's own records under MMO_HOME, which the zero-touch plugin wrote when the
  * chat started and the hook completed at the chat's first hand-off:
  *   sessions/<chat id>/chat_mode            "b" for a hand-off chat
- *   sessions/<chat id>/handoff.json         the chat's settings: its hand-off policy (a name, or a project's file)
- *   sessions/<chat id>/handoff_models.json  the model that policy gives each kind of hand-off work, resolved once
+ *   sessions/<chat id>/handoff.json         the chat's settings: the model the chat is kept on, and who types each
+ *                                           kind of work (1 Oct 2026: the person's choices in the settings box)
+ *   sessions/<chat id>/handoff_models.json  per kind of work: the model and the shipped policy that route it, or
+ *                                           { kept: true } for work the person keeps in the chat; resolved once
  * So a call with no stamp, or a stamp naming a chat that is not a hand-off chat, is refused: the hooks did not see
  * it. A stamp the chat's model wrote itself cannot widen anything, because nothing but the chat's id is taken from
  * it (the hook replaces the stamp on every call it sees).
@@ -35,8 +37,12 @@ export function safeId(id: unknown): string {
   return "x" + createHash("sha256").update(s).digest("hex").slice(0, 24);
 }
 
-/** One of a policy's routes, as the chat resolved it: the policy leaf, its model and its adapter. */
-export interface HandoffRoute { id: string; model: string; adapter: string }
+/**
+ * One kind of hand-off work, as the chat resolved it: the policy leaf, its model, its adapter and the shipped policy it
+ * comes from; or `kept` for work the person keeps in the chat (nothing is handed off).
+ */
+export interface HandoffRoute { id: string; model: string; adapter: string; policy: string; kept?: false }
+export interface KeptRoute { kept: true }
 export type HandoffWork = "docs" | "tests" | "repeat";
 
 export interface ChatHandoff {
@@ -47,17 +53,20 @@ export interface ChatHandoff {
   projectDir: string;
   /** Who pays for a Claude typist: "estimated" is the person's Claude login, "vendor" the API key. */
   authMode: "estimated" | "vendor";
-  /** The hand-off policy: a shipped policy's name, or a project's own policy file. */
-  policy: string;
-  policyFile: string | null;
-  routes: Record<HandoffWork, HandoffRoute>;
+  /**
+   * The model the chat is kept on (the person's choice, or the organisation's pinned model): it makes the last
+   * attempt when the chosen typist fails twice. Null when the organisation pinned an alias that names no one model;
+   * the policy's own Claude model then makes it, as before 1 Oct 2026.
+   */
+  chatModel: string | null;
+  routes: Record<HandoffWork, HandoffRoute | KeptRoute>;
 }
 
 function readJson(file: string): any {
   try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; }
 }
 
-const isRoute = (r: any): r is HandoffRoute => !!r && typeof r.id === "string" && !!r.id && typeof r.model === "string" && !!r.model && typeof r.adapter === "string";
+const isRoute = (r: any): boolean => !!r && (r.kept === true || (typeof r.id === "string" && !!r.id && typeof r.model === "string" && !!r.model && typeof r.adapter === "string" && typeof r.policy === "string" && !!r.policy));
 
 /**
  * The hand-off chat a stamped call belongs to, or why the call is refused. `needRoutes: false` is for a call that
@@ -76,18 +85,19 @@ export function readChatHandoff(stamp: unknown, env: Record<string, string | und
   try { mode = readFileSync(join(dir, "chat_mode"), "utf8").trim(); } catch { /* no record: not a zero-touch chat */ }
   if (mode !== "b") return { refused: "this is not a hand-off chat: the hand-off tools work only in a chat that started in zero-touch hand-off mode" };
   const settings = readJson(join(dir, "handoff.json"));
-  if (!settings || typeof settings.policy !== "string" || !settings.policy) return { refused: "this chat's hand-off settings cannot be read" };
+  if (!settings || typeof settings !== "object" || (!settings.typists && (typeof settings.policy !== "string" || !settings.policy))) {
+    return { refused: "this chat's hand-off settings cannot be read" };
+  }
   const routes = readJson(join(dir, "handoff_models.json"))?.routes;
   const resolved = isRoute(routes?.docs) && isRoute(routes?.tests) && isRoute(routes?.repeat);
   if (!resolved && needRoutes) return { refused: "this chat's hand-off models are not resolved" };
-  const none: HandoffRoute = { id: "", model: "", adapter: "" };
+  const none: KeptRoute = { kept: true };
   return {
     sessionId: s.session_id,
     dir,
     projectDir: s.project_dir,
     authMode: s.auth === "vendor" ? "vendor" : "estimated",
-    policy: settings.policy,
-    policyFile: typeof settings.policy_file === "string" && settings.policy_file ? settings.policy_file : null,
+    chatModel: typeof settings.chat_model === "string" && settings.chat_model ? settings.chat_model : null,
     routes: resolved ? { docs: routes.docs, tests: routes.tests, repeat: routes.repeat } : { docs: none, tests: none, repeat: none },
   };
 }

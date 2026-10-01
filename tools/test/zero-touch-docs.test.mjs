@@ -98,13 +98,19 @@ test("the hand-off tools the server lists are the ones the documents name, all o
   }
 });
 
-test("the documents' settings table is the shipped settings file", () => {
+test("the documents' settings table is the shipped settings file, and the settings box's choices are named where a person chooses", async () => {
   const shipped = JSON.parse(read("plugin", "config", "ambient.default.json"));
   const section = MANUAL.slice(MANUAL.indexOf("## Settings and who may change them"), MANUAL.indexOf("## Routing a recognised task"));
   const rows = [...section.matchAll(/^\| `([a-z_]+)` \|/gm)].map((m) => m[1]);
   assert.deepEqual(rows.slice().sort(), Object.keys(shipped).filter((k) => k !== "schema_version").sort());
-  assert.ok(section.includes("`" + shipped.handoff.chat_model + "`") && section.includes("`" + shipped.handoff.policy + "`"), "hand-off mode's two defaults are the shipped ones");
-  assert.ok(section.includes("`" + shipped.routing_defaults.policy + "`") && section.includes("`" + shipped.routing_defaults.auth + "`"), "routing's two defaults are the shipped ones");
+  assert.ok(section.includes("`" + shipped.routing_defaults.auth + "`"), "the cost recording's default is the shipped one");
+  // 1 Oct 2026: the person's zero-touch choices are not here: they are the settings box's (zero-touch/scripts/settings.mjs).
+  assert.equal(shipped.handoff, undefined);
+  assert.equal(shipped.routing_defaults.policy, undefined);
+  const { DEFAULTS, WORKFLOW_MODELS } = await import(join(ROOT, "zero-touch", "scripts", "settings.mjs"));
+  const choosing = MANUAL.slice(MANUAL.indexOf("## Choosing: the settings box, in the chat"), MANUAL.indexOf("## Turn it on and off"));
+  for (const p of Object.keys(WORKFLOW_MODELS)) assert.ok(choosing.includes("`" + p + "`"), `the manual names the offered policy ${p}`);
+  assert.ok(MANUAL.includes("`" + DEFAULTS.handoff.chat_model + "`"), "the manual names the standard chat model");
 });
 
 test("the version notes hold one zero-touch note, under the plugin's version, and it covers both modes", () => {

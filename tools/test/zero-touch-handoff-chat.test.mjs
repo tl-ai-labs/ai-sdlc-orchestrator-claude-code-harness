@@ -24,24 +24,31 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
-const { startingChats, zeroTouchStart } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
+const { startingChats, writeZtSettings, zeroTouchStart } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
 const { serverBuilt } = await import(join(ROOT, "tools", "test", "lib", "server-built.mjs"));
 const { formatLine } = await import(join(ROOT, "plugin", "scripts", "lib", "log.mjs"));
 // Naming the hand-off policy's models asks the workflows' own router, which needs the built server.
 const SKIP = serverBuilt();
 const SHIM = join(ROOT, "plugin", "hooks", "ambient.sh");
 
-function sandbox({ mode = "b", kind = "existing", handoff } = {}) {
+/**
+ * A person who chose Hand-off ("b") or Workflows ("a") in the settings box. `typist` is who types all three kinds of
+ * hand-off work ("flash", "sonnet" or "chat"); the chat model is Opus 5.
+ */
+function sandbox({ mode = "b", kind = "existing", typist = "flash" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "mmo-zt-b-chat-"));
   const home = join(dir, "home");
   const repo = join(dir, "repo");
   mkdirSync(home);
   mkdirSync(repo);
   if (kind === "existing") writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
-  writeFileSync(join(home, "mode"), `${mode}\n`);
-  if (handoff) writeFileSync(join(home, "ambient.json"), JSON.stringify({ handoff }));
+  writeZtSettings(home, { mode: mode === "a" ? "workflows" : "handoff", handoff: { chat_model: "claude-opus-5", documents: typist, tests: typist, repeats: typist } });
   return { dir, home, repo, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
+const NOT_HANDED = "this isn't the kind of work zero-touch hands off (new documents, specs, plans, tests, or one change repeated in many files)";
+const DOC = (typist, n = "document") => `Opus 5 will collect the facts and give ${typist} instructions to write the new ${n}. It's checked automatically before it's added to your project.`;
+const TESTS = (typist) => `Opus 5 will decide what to test, and ${typist} will write the tests. They're run in a test copy of your project first, and only added if they pass.`;
+const REPEAT = (typist) => `Opus 5 will make the change in one file, and ${typist} will repeat it in the others. If your project has an automatic check (such as its tests), it's run on a test copy first, and nothing is changed unless it passes.`;
 
 function runOnce(event, payload, { home, repo }, env = {}) {
   return new Promise((done) => {
@@ -81,7 +88,7 @@ test("plain words start no workflow: a bug fix or a new app is the chat's own wo
     try {
       await startOn(s, "w1", "claude-opus-5");
       const r = await say(s, "w1", text);
-      assert.equal(line(r), "Zero-touch: Opus handles this in the chat.", text);
+      assert.equal(line(r), `Zero-touch: ${NOT_HANDED}, so Opus 5 does it directly.`, text);
       assert.equal(r.json.hookSpecificOutput, undefined, "nothing is added to what the model reads");
       assert.ok(!existsSync(join(s.home, "sessions", "w1", "route.json")), "no workflow is waiting for its start");
       const write = await run("pre-any", { session_id: "w1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "a.js"), content: "x" } }, s);
@@ -93,7 +100,7 @@ test("plain words start no workflow: a bug fix or a new app is the chat's own wo
 test("a chat whose model is not known says so without naming one", async () => {
   const s = sandbox();
   try {
-    assert.equal(line(await say(s, "u1", QUESTION)), "Zero-touch: handled in the chat; nothing is handed off.");
+    assert.equal(line(await say(s, "u1", QUESTION)), `Zero-touch: ${NOT_HANDED}, so the chat's model does it directly.`, "a model Claude Code has not named is never guessed");
   } finally { s.cleanup(); }
 });
 
@@ -102,14 +109,14 @@ test("hand-off work is recognised: the person sees where it goes, and the model 
   try {
     await startOn(s, "h1", "claude-opus-5");
     const cases = [
-      [README, "Zero-touch: this goes to Flash (docs).", /write_document/],
-      ["draft a design doc for the cache layer", "Zero-touch: this goes to Flash (spec).", /write_document/],
-      ["draft release notes for v2.3", "Zero-touch: this goes to Flash (plans and reports).", /write_document/],
-      ["write unit tests for parseCart in src/cart.js", "Zero-touch: the tests go to Flash.", /write_tests_from_cases/],
-      ["rename getUser to fetchUser everywhere", "Zero-touch: Opus makes the change once; Flash repeats it in the other files.", /repeat_edit_across_files/],
-      ["write a README and add tests for the parser", "Zero-touch: this goes to Flash (docs). The tests go to Flash.", /write_document[\s\S]*write_tests_from_cases/],
-      ["draft the design doc, then write a migration plan", "Zero-touch: this goes to Flash (spec, plans and reports).", /write_document/],
-      ["fix the login bug and write tests for it", "Zero-touch: the tests go to Flash. Opus handles the rest in the chat.", /The rest of the message is yours/],
+      [README, `Zero-touch: ${DOC("Flash 3.8")}`, /write_document/],
+      ["draft a design doc for the cache layer", `Zero-touch: ${DOC("Flash 3.8")}`, /write_document/],
+      ["draft release notes for v2.3", `Zero-touch: ${DOC("Flash 3.8")}`, /write_document/],
+      ["write unit tests for parseCart in src/cart.js", `Zero-touch: ${TESTS("Flash 3.8")}`, /write_tests_from_cases/],
+      ["rename getUser to fetchUser everywhere", `Zero-touch: ${REPEAT("Flash 3.8")}`, /repeat_edit_across_files/],
+      ["write a README and add tests for the parser", `Zero-touch: ${DOC("Flash 3.8")} ${TESTS("Flash 3.8")}`, /write_document[\s\S]*write_tests_from_cases/],
+      ["draft the design doc, then write a migration plan", `Zero-touch: ${DOC("Flash 3.8", "documents")}`, /write_document/],
+      ["fix the login bug and write tests for it", `Zero-touch: ${TESTS("Flash 3.8")} Opus 5 does the rest directly.`, /The rest of the message is yours/],
     ];
     for (const [text, expected, reminder] of cases) {
       const r = await say(s, "h1", text);
@@ -122,29 +129,39 @@ test("hand-off work is recognised: the person sees where it goes, and the model 
   } finally { s.cleanup(); }
 });
 
-test("the line names the models that really do the work: the hand-off policy's, asked once per chat", { skip: SKIP ?? false }, async () => {
-  const s = sandbox({ handoff: { policy: "opus-plus-sonnet" } });
+test("the line names the models that really do the work: each kind's own choice, asked once per chat", { skip: SKIP ?? false }, async () => {
+  const s = sandbox({ typist: "sonnet" });
   try {
     await startOn(s, "n1", "claude-opus-5");
-    assert.equal(line(await say(s, "n1", README)), "Zero-touch: this goes to Sonnet (docs).");
+    assert.equal(line(await say(s, "n1", README)), `Zero-touch: ${DOC("Sonnet 5")}`);
     const kept = JSON.parse(readFileSync(join(s.home, "sessions", "n1", "handoff_models.json"), "utf8"));
     assert.equal(kept.routes.docs.model, "claude-sonnet-5");
+    assert.equal(kept.routes.docs.policy, "opus-plus-sonnet", "each kind carries the shipped policy it is routed by");
     assert.equal(kept.routes.tests.model, "claude-sonnet-5");
     assert.ok(kept.routes.repeat.model, "the repeated change has a model too");
     // The chat keeps what it resolved: a settings change reaches the next new chat only.
-    writeFileSync(join(s.home, "ambient.json"), JSON.stringify({ handoff: { policy: "opus-plus-flash-v38" } }));
-    assert.equal(line(await say(s, "n1", README)), "Zero-touch: this goes to Sonnet (docs).");
+    writeZtSettings(s.home, { mode: "handoff", handoff: { chat_model: "claude-opus-5", documents: "flash", tests: "chat", repeats: "flash" } });
+    assert.equal(line(await say(s, "n1", README)), `Zero-touch: ${DOC("Sonnet 5")}`);
     await startOn(s, "n2", "claude-opus-5");
-    assert.equal(line(await say(s, "n2", README)), "Zero-touch: this goes to Flash (docs).");
+    assert.equal(line(await say(s, "n2", README)), `Zero-touch: ${DOC("Flash 3.8")}`);
+    const tests = await say(s, "n2", "write unit tests for parseCart in src/cart.js");
+    assert.equal(line(tests), "Zero-touch: new tests are set to stay in this chat (your setting), so Opus 5 writes them directly.", "work kept in the chat is said so");
+    assert.match(context(tests), /The person keeps this work in the chat: do it yourself/);
+    assert.doesNotMatch(context(tests), /write_tests_from_cases/, "and its tool is not named");
   } finally { s.cleanup(); }
 });
 
 test("a hand-off policy that cannot be read: the person is told, and the model is told to do the work itself", { skip: SKIP ?? false }, async () => {
-  const s = sandbox({ handoff: { policy: "no-such-policy" } });
+  const s = sandbox();
   try {
     await startOn(s, "x1", "claude-opus-5");
+    // The box offers shipped policies only; a stamp naming one that no longer exists (a damaged install) is the case.
+    const stampFile = join(s.home, "sessions", "x1", "handoff.json");
+    const st = JSON.parse(readFileSync(stampFile, "utf8"));
+    st.typists.documents.policy = "no-such-policy";
+    writeFileSync(stampFile, JSON.stringify(st));
     const r = await say(s, "x1", README);
-    assert.equal(line(r), "Zero-touch: hand-off cannot run (the hand-off policy no-such-policy cannot be read); Opus handles this in the chat.");
+    assert.equal(line(r), "Zero-touch: this can't be handed off right now, because the models for this work can't be read. So Opus 5 does it directly.");
     assert.match(context(r), /Hand-off cannot run in this chat/);
     assert.match(context(r), /do this work yourself/i);
     assert.ok(!existsSync(join(s.home, "sessions", "x1", "handoff_models.json")), "a failure is not kept: a repaired setup works at the next message");
@@ -156,7 +173,7 @@ test("a typed workflow command still runs in a hand-off chat; the chat starting 
   try {
     await startOn(s, "t1", "claude-opus-5");
     const byItself = await skill(s, "t1", "mmo:bugfix", BUGFIX);
-    assert.match(denied(byItself) ?? "", /starts only when the person types its command/);
+    assert.match(denied(byItself) ?? "", /no full workflow starts from the person's plain words/);
 
     const typed = await say(s, "t1", "/mmo:bugfix the login 500");
     assert.equal(line(typed), null, "a typed command shows no line: the person named the workflow");
@@ -169,10 +186,10 @@ test("a typed workflow command still runs in a hand-off chat; the chat starting 
     const log = (event, fields) => appendFileSync(join(dirRun, "orchestrator.log"), formatLine("info", event, { run_id: "bf-t1", ...fields }) + "\n");
     log("run.start", { mode: "brownfield" });
     log("gate.open", { gate: "gate-0", title: "scope" });
-    assert.equal(line(await say(s, "t1", README)), "Zero-touch: taken as your answer to the open gate.");
+    assert.equal(line(await say(s, "t1", README)), "Zero-touch: the workflow is waiting for your approval, so this message is taken as your answer to it, not as a new request.");
     log("gate.resolved", { gate: "gate-0", response: "approved" });
     const during = await say(s, "t1", BUGFIX);
-    assert.equal(line(during), "Zero-touch: not a new workflow job; the running workflow carries on.");
+    assert.equal(line(during), "Zero-touch: this isn't a new job, so the running bug-fix workflow carries on, taking your message into account.");
     assert.equal(during.json.hookSpecificOutput, undefined, "plain words never raise the queue-or-replace question here");
   } finally { s.cleanup(); }
 });
@@ -183,8 +200,7 @@ test("the chat stays on its pinned model: a switch to another model is refused, 
     await startOn(s, "g1", "claude-opus-5");
     const refused = await switchTo(s, "g1", "claude-sonnet-5");
     assert.equal(refused.json?.hookSpecificOutput?.hookEventName, "PreModelSwitch");
-    assert.match(denied(refused) ?? "", /hand-off mode keeps this chat on claude-opus-5/);
-    assert.match(denied(refused) ?? "", /put a or off in \S+mode and start a new chat/, "how to use another model");
+    assert.equal(denied(refused), 'Zero-touch keeps this Hand-off chat on Opus 5, the chat model you chose, because it does the development and decides the hand-offs. To use a different model, type "change zero-touch settings", then start a new chat.');
     assert.equal((await switchTo(s, "g1", "claude-opus-5[1m]")).stdout, "", "the 1M-context tag is the same model");
     assert.equal((await run("pre-model-switch", { session_id: "g1", cwd: s.repo }, s)).stdout, "", "a switch whose target cannot be read is never refused");
   } finally { s.cleanup(); }
@@ -200,11 +216,11 @@ test("while the chat is on another model, every line says so and how to switch b
     await startOn(s, "o1", "claude-opus-5");
     // A switch that happened anyway (an older Claude Code has no switch hooks to refuse it) is recorded when seen.
     await switchTo(s, "o1", "claude-sonnet-5", "post-model-switch");
-    const reminder = " This chat is on claude-sonnet-5; hand-off mode expects claude-opus-5: type /model claude-opus-5.";
-    assert.equal(line(await say(s, "o1", QUESTION)), `Zero-touch: Sonnet handles this in the chat.${reminder}`);
-    assert.equal(line(await say(s, "o1", README)), `Zero-touch: this goes to Flash (docs).${reminder}`);
+    const reminder = " This chat is on Sonnet 5, not Opus 5: switch it using the model menu next to the message box (in the terminal, type /model claude-opus-5).";
+    assert.equal(line(await say(s, "o1", QUESTION)), `Zero-touch: ${NOT_HANDED}, so Sonnet 5 does it directly.${reminder}`);
+    assert.equal(line(await say(s, "o1", README)), `Zero-touch: ${DOC("Flash 3.8").replace(/^Opus 5/, "Sonnet 5")}${reminder}`);
     await switchTo(s, "o1", "claude-opus-5", "post-model-switch");
-    assert.equal(line(await say(s, "o1", QUESTION)), "Zero-touch: Opus handles this in the chat.");
+    assert.equal(line(await say(s, "o1", QUESTION)), `Zero-touch: ${NOT_HANDED}, so Opus 5 does it directly.`);
   } finally { s.cleanup(); }
 });
 
@@ -214,12 +230,12 @@ test("with no switch hook ever seen, the chat's own transcript says which model 
     const transcript = join(s.dir, "chat.jsonl");
     const entry = (model, text, at) => JSON.stringify({ type: "assistant", timestamp: at, message: { role: "assistant", model, content: [{ type: "text", text }] } }) + "\n";
     writeFileSync(transcript, JSON.stringify({ type: "user", message: { role: "user", content: "hello" } }) + "\n" + entry("claude-opus-5", "hi", "2026-09-30T10:00:00.000Z"));
-    assert.equal(line(await say(s, "tr1", QUESTION, { transcript_path: transcript })), "Zero-touch: Opus handles this in the chat.");
+    assert.equal(line(await say(s, "tr1", QUESTION, { transcript_path: transcript })), `Zero-touch: ${NOT_HANDED}, so Opus 5 does it directly.`);
     // A helper's reply and a made-up entry are not the chat's model; the newest real reply is.
     appendFileSync(transcript, entry("claude-sonnet-5", "later", "2026-09-30T10:05:00.000Z"));
     appendFileSync(transcript, JSON.stringify({ type: "assistant", isSidechain: true, timestamp: "2026-09-30T10:06:00.000Z", message: { model: "claude-haiku-4-5", content: [] } }) + "\n");
     appendFileSync(transcript, entry("<synthetic>", "note", "2026-09-30T10:07:00.000Z"));
-    assert.match(line(await say(s, "tr1", QUESTION, { transcript_path: transcript })), /^Zero-touch: Sonnet handles this in the chat\. This chat is on claude-sonnet-5;/);
+    assert.match(line(await say(s, "tr1", QUESTION, { transcript_path: transcript })), /so Sonnet 5 does it directly\. This chat is on Sonnet 5, not Opus 5:/);
   } finally { s.cleanup(); }
 });
 
@@ -247,7 +263,7 @@ test("a hand-off chat started by the zero-touch hook alone is found by mmo at it
     await runOnce("session-start", { session_id: "late1", cwd: s.repo, source: "startup" }, s);
     zeroTouchStart({ home: s.home, sid: "late1", cwd: s.repo, model: "claude-opus-5" });
     const r = await runOnce("prompt", { session_id: "late1", cwd: s.repo, prompt: README, prompt_id: "late-p1" }, s);
-    assert.equal(line(r), "Zero-touch: this goes to Flash (docs).");
+    assert.equal(line(r), `Zero-touch: ${DOC("Flash 3.8")}`);
   } finally { s.cleanup(); }
 });
 
@@ -256,11 +272,12 @@ test("a machine too busy to answer in time is not reported as a broken policy, a
   const s = sandbox();
   try {
     const env = { MMO_HOME: s.home, HOME: s.home, PATH: process.env.PATH };
-    const stamp = { chat_model: "claude-opus-5", pin: "default", policy: "opus-plus-flash-v38", policy_file: null };
+    const flash = { typist: "flash", policy: "opus-plus-flash-v38" };
+    const stamp = { chat_model: "claude-opus-5", pin: "setting", typists: { documents: flash, tests: flash, repeats: flash } };
     // One millisecond is never enough to start the router: the same outcome as a machine under heavy load.
     const busy = H.handoffRoutes("busy1", stamp, env, { timeoutMs: 1 });
     assert.equal(busy.error, "busy");
-    assert.equal(H.HANDOFF_LINE.unavailable(busy, { name: "Opus", reminder: "" }), "Zero-touch: hand-off cannot run (this machine was too busy to check the hand-off policy; ask again); Opus handles this in the chat.");
+    assert.equal(H.HANDOFF_LINE.unavailable(busy, { name: "Opus 5", reminder: "" }), "Zero-touch: this can't be handed off right now, because the computer was too busy to check; ask again. So Opus 5 does it directly.");
     assert.ok(!existsSync(join(s.home, "sessions", "busy1", "handoff_models.json")));
     assert.equal(H.handoffRoutes("busy1", stamp, env).routes.docs.model, "gemini-3.8-flash", "the next ask, with time to answer, works");
   } finally { s.cleanup(); }

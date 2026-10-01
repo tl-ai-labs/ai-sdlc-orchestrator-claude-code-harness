@@ -11,7 +11,8 @@
  * workflow (the chat's `pipeline` record holds that moment). No such run means the workflow never reached its run
  * (it was stopped at its first questions, or is still asking them): the chat stays the workflow's, so an answer to
  * one of its questions is never taken for a new job. Two chats running workflows in one project at once could see
- * each other's run; the answer is then the latest run's.
+ * each other's run by time alone; so (1 Oct 2026) a chat claims its run by the run id its own orchestrator logs with
+ * (hook.mjs claimRun), and once claimed only that run is read.
  */
 import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,6 +21,8 @@ import { formatLine } from "../../lib/log.mjs";
 /** One log line: an optional prefix, an ISO timestamp, a level, the event, then key=value fields (log.mjs). */
 const LINE = /^(?:\S+\s+)?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s+[A-Z]+\s+(\S+)(.*)$/;
 const FIELD = /([A-Za-z_][\w-]*)=("(?:[^"\\]|\\.)*"|\S+)/g;
+/** A run id as the workflows write it: a folder name under .sdlc/runs, never a path. */
+export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** A log file older than the chat's start by more than this cannot hold its run (its file time is only a first filter). */
 const SLACK_MS = 2_000;
 
@@ -50,14 +53,16 @@ export function readWorkflowLog(file) {
 /**
  * "ended", "running" (a run of this workflow is logged and not over), or "not-started" (none logged yet). A running
  * run also says `waiting: true` while one of its gates is open: the workflow has asked the person something, so the
- * person's next message is its answer (0.8.4, the replace-or-queue question).
+ * person's next message is its answer (0.8.4, the replace-or-queue question). `runId`, when the chat has claimed its
+ * run, limits the reading to that run's own log; without it the latest run since the chat's start is taken.
  */
-export function workflowState(projectDir, sinceMs) {
+export function workflowState(projectDir, sinceMs, runId = null) {
   const root = join(projectDir, ".sdlc", "runs");
   if (!Number.isFinite(sinceMs) || !existsSync(root)) return { state: "not-started" };
   let best = null;
   let names = [];
-  try { names = readdirSync(root); } catch { return { state: "not-started" }; }
+  if (runId && RUN_ID.test(runId)) names = [runId];
+  else try { names = readdirSync(root); } catch { return { state: "not-started" }; }
   for (const name of names) {
     const file = join(root, name, "orchestrator.log");
     try { if (statSync(file).mtimeMs < sinceMs - SLACK_MS) continue; } catch { continue; }

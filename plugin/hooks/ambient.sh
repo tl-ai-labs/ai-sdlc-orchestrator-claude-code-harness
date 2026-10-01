@@ -32,7 +32,9 @@ if ! command -v node >/dev/null 2>&1; then
   # Say it once per machine, at a session start, and stay quiet afterwards.
   if [ "$event" = "session-start" ] && [ ! -f "$home/node-missing-said" ]; then
     mkdir -p "$home" 2>/dev/null && : > "$home/node-missing-said" 2>/dev/null
-    printf '%s' '{"systemMessage":"Starting workflows from plain requests is on but cannot run here (Node.js was not found), so it is doing nothing. Everything else works as normal."}'
+    # Each apostrophe is written '\'' (close the quote, a quoted apostrophe, reopen): a bare one would end the quoting
+    # and run the words together (found 1 Oct 2026; the test runs this script without node and reads what it prints).
+    printf '%s' '{"systemMessage":"Zero-touch can'\''t run on this computer, because a program it needs, Node.js, isn'\''t installed. Claude works as normal without it. To use zero-touch, install Node.js from nodejs.org, then start a new chat."}'
   fi
   exit 0
 fi

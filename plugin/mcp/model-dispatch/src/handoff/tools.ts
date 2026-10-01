@@ -22,7 +22,7 @@
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ModelConfig, Policy, SelectOverrides, TelemetryEvent } from "../types.js";
-import { loadPolicy, loadPolicyFromPath } from "../policy.js";
+import { loadPolicy } from "../policy.js";
 import { appendEvent } from "../telemetry.js";
 import { log } from "../log.js";
 import { executorView } from "../executor/run.js";
@@ -182,24 +182,49 @@ function lazyTypist(leaf: ModelConfig, build: () => Typist): Typist {
   };
 }
 
-/** The chat's policy as the executor reads it, and the typists for one kind of hand-off work. */
+/**
+ * The typists for one kind of hand-off work. The kind's own shipped policy (the one whose typist the person chose; a
+ * project's policy file is never used by zero-touch, decided 1 Oct 2026) routes the typing, read as the executor reads
+ * it. The last attempt, after the typist fails twice, is the chat's own model (the person's chat model, or the
+ * organisation's), so no model the person did not choose ever works on their project; a chat with no one chat model
+ * keeps the policy's own Claude model for it, as before.
+ */
 function typistsFor(chat: ChatHandoff, work: HandoffWork, ctx: HandoffContext): { policy: Policy; routed: Typist; fallback: Typist | null } | { refused: string } {
+  const route = chat.routes[work];
+  if (route.kept) return { refused: "the person keeps this kind of work in the chat (their zero-touch setting), so it is not handed off" };
   let policy: Policy;
   try {
-    policy = executorView(chat.policyFile ? loadPolicyFromPath(chat.policyFile) : loadPolicy({ policyName: chat.policy })).policy;
+    policy = executorView(loadPolicy({ policyName: route.policy })).policy;
   } catch (e: any) {
     return { refused: `the hand-off policy cannot be read: ${String(e?.message ?? e).split("\n")[0].slice(0, 200)}` };
   }
-  const route = chat.routes[work];
   const leaf = policy.models.find((m) => m.id === route.id);
   if (!leaf) return { refused: `the hand-off policy no longer has the model this chat resolved for ${work} work (${route.id}); start a new chat` };
   if (!typistDoorFor(leaf)) return { refused: `the hand-off tools have no typist for adapter '${leaf.adapter}' (model ${leaf.id})` };
   const build = ctx.typistFor ?? typistForLeaf;
   const routed = lazyTypist(leaf, () => build(leaf, chat.authMode));
-  const last = fallbackLeaf(policy, ctx.overrides);
-  // The Claude last attempt and the routed attempts share one typist when the policy routes this work to that model.
-  const fallback = !last ? null : last.id === leaf.id ? routed : lazyTypist(last, () => build(last, chat.authMode));
+  const last = chatModelLeaf(chat, policy, ctx);
+  // The last attempt and the routed attempts share one typist when both are the same model.
+  const fallback = !last ? null : last.model_name === leaf.model_name ? routed : lazyTypist(last, () => build(last, chat.authMode));
   return { policy, routed, fallback };
+}
+
+/**
+ * The leaf the last attempt types with: the chat's own model through the Claude command line (the same door, login
+ * and billing as the policy's Claude model, with the chat's model named), or the policy's own Claude model when the
+ * chat has no one model (an organisation's alias).
+ */
+function chatModelLeaf(chat: ChatHandoff, policy: Policy, ctx: HandoffContext): ModelConfig | null {
+  const claude = fallbackLeaf(policy, ctx.overrides);
+  if (!chat.chatModel) return claude;
+  if (claude && claude.model_name === chat.chatModel) return claude;
+  return {
+    id: `chat-model:${chat.chatModel}`,
+    adapter: claude?.adapter ?? "builtin-anthropic",
+    model_name: chat.chatModel,
+    ...(claude?.auth ? { auth: claude.auth } : {}),
+    ...(claude?.max_output_tokens_absolute ? { max_output_tokens_absolute: claude.max_output_tokens_absolute } : {}),
+  };
 }
 
 const refusedCall = (reason: string) => receipt({ status: "refused", reason, next: "Nothing was sent. Do this work yourself." });
