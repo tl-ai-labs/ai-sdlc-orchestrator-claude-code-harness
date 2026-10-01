@@ -705,6 +705,35 @@ function blockUntilStarted(ctx) {
 }
 
 /**
+ * The chat's model, confirmed once its workflow has started. A new chat's first message comes before the chat has
+ * answered, and Claude Code passes no model to these hooks, so the start may have been checked with the model
+ * unknown (and at the Skill call the app may not have saved Claude's reply yet). By the workflow's first step that
+ * changes or spends anything, Claude's earlier reply, which names the model, is in the transcript. On another model
+ * than the policy plans with, the workflow is stopped there, before any of its work, and the rest of the turn is
+ * held like any start that cannot happen (holdRefused); the person reads the usual line. Checked once per workflow
+ * of zero-touch's own (a typed run is mmo's), and only while the model is known; a helper setting decides instead
+ * when there is one.
+ */
+function wrongModelAfterStart(ctx) {
+  if (!ctx.pipeline || CHANGES_NOTHING.has(String(ctx.input.tool_name ?? ""))) return false;
+  const rec = pipelineRecord(ctx);
+  if (!rec?.policy || !rec.needed || rec.model_ok) return false;
+  const helper = helperModel({ chatModel: chatModel(ctx) });
+  if (!helper) return false;
+  if (helper.model === rec.needed) {
+    setSessionMarker(ctx, "pipeline", JSON.stringify({ ...rec, model_ok: true }));
+    return false;
+  }
+  const job = rec.job ?? "workflow";
+  const problem = { cause: "chat-model", have: helper.model, needed: rec.needed, via: helper.via, policy: rec.policy };
+  stopWorkflow(ctx, "chat-model");
+  holdRefused(ctx, job, problem);
+  appendEvent(ctx.sid, "route.cannot_start", { job, cause: problem.cause, at: "first-step", have: helper.model });
+  deny(ctx, "route.tool_blocked_refused", L.notStarted(problem, job), cannotStartInstruction(job, problem));
+  return true;
+}
+
+/**
  * A job that cannot start (another chat's workflow in the folder, the chat's model, Google, git...). The person reads
  * why and what to do; for the rest of this turn nothing that changes files runs (blockUntilStarted), and a workflow
  * call is refused with the same reason (pre-skill). Cleared when the turn ends and at the next message.
@@ -1139,6 +1168,8 @@ const handlers = {
     noteEarlyStop(ctx);
     // The chat's own step in its running workflow, kept until the turn ends (cutOffStep); it emits nothing.
     if (ctx.pipeline && !ctx.agent && typeof ctx.input.tool_name === "string") setSessionMarker(ctx, STEP_MARK, ctx.input.tool_name);
+    // The chat's model, confirmed at the workflow's first step (wrongModelAfterStart).
+    if (wrongModelAfterStart(ctx)) return;
     // Guard A: one catch-all, so every tool that can change something waits
     // for a routed workflow's start, whoever calls it (blockUntilStarted).
     if (blockUntilStarted(ctx)) return;

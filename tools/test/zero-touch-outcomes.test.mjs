@@ -206,6 +206,50 @@ test("judged message while another chat's workflow holds the folder × Claude st
   } finally { s.cleanup(); }
 });
 
+// A new chat's first message comes before the chat has answered, and Claude Code passes hooks no model, so a start
+// can be allowed with the model unknown. At the workflow's first step that does anything, Claude's earlier reply,
+// which names the model, is in the transcript: the model is confirmed there.
+function chatTranscript(s, sid, model) {
+  const file = join(s.dir, `${sid}.jsonl`);
+  writeFileSync(file, [
+    { type: "user", timestamp: new Date().toISOString(), message: { role: "user", content: JOB } },
+    { type: "assistant", timestamp: new Date().toISOString(), message: { role: "assistant", model, content: [{ type: "text", text: "Running this as a full bug-fix workflow." }] } },
+  ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  return file;
+}
+const step = (s, sid, transcript, tool = "Bash", tool_input = { command: "git status" }) => run("pre-any", { session_id: sid, cwd: s.repo, tool_name: tool, tool_input, transcript_path: transcript }, s);
+
+test("first message of a new chat on another model × the workflow starts with the model unknown → stopped at its first step, C for the turn", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await prompt(s, "mw", JOB);
+    assert.ok(!denied(await skill(s, "mw", "mmo:bugfix", JOB)), "allowed: nothing tells the model yet");
+    assert.ok(started(s, "mw"));
+    const t = chatTranscript(s, "mw", "claude-sonnet-5-5");
+    assert.ok(!denied(await step(s, "mw", t, "Read", { file_path: join(s.repo, "package.json") })), "reading changes nothing");
+    const first = await step(s, "mw", t);
+    assert.ok(denied(first), "the first step that does anything is refused");
+    assert.match(reason(first), /^Zero-touch: the bug-fix workflow didn't start, because this chat is on Sonnet 5\.5/);
+    assert.match(context(first), /Do not do the job yourself now/);
+    assert.ok(!started(s, "mw"), "the workflow is stopped, before any of its work");
+    assert.ok(denied(await write(s, "mw", "src/fix.js")), "and nothing is done by hand in that turn");
+    await turnEnd(s, "mw");
+    assert.ok(!denied(await write(s, "mw", "src/fix.js")), "the next turn is free again");
+  } finally { s.cleanup(); }
+});
+
+test("first message of a new chat on the planning model × the first step confirms it once, and the workflow carries on", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await prompt(s, "mr", JOB);
+    assert.ok(!denied(await skill(s, "mr", "mmo:bugfix", JOB)));
+    const t = chatTranscript(s, "mr", "claude-opus-5");
+    assert.ok(!denied(await step(s, "mr", t)));
+    assert.ok(started(s, "mr"));
+    assert.equal(JSON.parse(readFileSync(join(s.home, "sessions", "mr", "pipeline"), "utf8")).model_ok, true, "confirmed once");
+  } finally { s.cleanup(); }
+});
+
 // A job that cannot start is outcome C for its whole turn: Claude cannot do the job by hand instead, whatever it makes
 // of zero-touch's note (a model may take the note for an instruction slipped into a tool's output and ignore it).
 test("recognised job that cannot start × Claude writes files or calls a workflow → refused with the same line, for that turn only", { skip: SKIP ?? false }, async () => {
