@@ -17,11 +17,12 @@
  * (lib/handoff.mjs). The chat is kept on its pinned model: a switch to another model is refused (pre-model-switch).
  * A workflow command the person types runs as in any chat.
  *
- * A second job while a workflow runs (lib/queue.mjs): plain words recognised as a job, a typed /mmo:
- * workflow command, or the model starting one is held, and the model asks the person "Queue it" or "Replace it";
- * the answer is read from the multiple-choice result (post-question). A queued job starts by itself at the end of
- * the turn in which the running workflow ended (turn-end); a replace stops the running workflow as mmo's own abort
- * does (lib/workflow-log.mjs abortRun). One workflow at a time per project (lib/project-lock.mjs).
+ * A second job while a workflow runs (lib/queue.mjs): plain words recognised as a job, or the model starting one,
+ * are queued at once and said. A typed /mmo: workflow command is held, and the model asks the person "Queue it" or
+ * "Replace it"; the answer is read from the multiple-choice result (post-question). A queued job starts by itself
+ * at the end of the turn in which the running workflow finished (turn-end); a workflow that ended any other way
+ * drops the queue. A replace stops the running workflow as mmo's own abort does (lib/workflow-log.mjs abortRun).
+ * One workflow at a time per project (lib/project-lock.mjs).
  *
  * Contract held by every handler:
  *   - Decisions are JSON on stdout with exit 0. The shell shim in front of this file turns ANY exit into 0, so a
@@ -1429,8 +1430,9 @@ const handlers = {
 /**
  * Judges a message the person typed while the chat was idle, in workflow mode: { note, line } (what the model is told,
  * what the person reads), or null for ordinary chat, which gets nothing. A recognised job that can start becomes the
- * chat's pending route. Only the rules route: a request they do not recognise is an ordinary chat, never an
- * offer and never the chat model's guess. Used for a message as it arrives, and for the first chat's first message
+ * chat's pending route. A request the rules cannot place but that reads as one is left to the chat's own judgement
+ * (a "judge" route, checked at the Skill call like any start); anything else is an ordinary chat, never an offer.
+ * Used for a message as it arrives, and for the first chat's first message
  * once its settings are saved (turn-end, `replay`).
  */
 function judgeMessage(ctx, text, { replay = false } = {}) {
