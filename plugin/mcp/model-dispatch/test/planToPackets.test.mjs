@@ -11,7 +11,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const { parsePlan, parseRef, parseAnchors, editSites, splitVerify, formatCommands, crlfAware, classify, moduleOf, buildPackets, main } = await import(
+const { parsePlan, parseRef, parseAnchors, editSites, splitVerify, placeholderPath, formatCommands, crlfAware, classify, moduleOf, buildPackets, main } = await import(
   join(HERE, "..", "..", "..", "scripts", "plan-to-packets.mjs")
 );
 
@@ -365,6 +365,36 @@ test("splitVerify keeps a shell-escaped or quoted path file-scoped", () => {
   ], path);
   assert.equal(scoped.length, 2);
   assert.deepEqual(deferred, ["pnpm --filter @kaneo/web typecheck"]);
+});
+
+test("placeholderPath rewrites the file's path to '{path}' in every quoting form, so the shell cannot expand $segments", () => {
+  const path = "apps/web/src/routes/workspace/$workspaceId/workload.tsx";
+  const out = placeholderPath([
+    `pnpm exec biome check "${path}"`,
+    `pnpm exec biome check '${path}'`,
+    `pnpm exec biome check ${path}`,
+    "pnpm exec biome check apps/web/src/routes/workspace/\\$workspaceId/workload.tsx",
+    "pnpm exec biome check '{path}'",
+    "pnpm exec biome check apps/web/src/routes/workspace/$workspaceId/workload.tsx.bak",
+  ], path);
+  assert.deepEqual(out.slice(0, 5), Array(5).fill("pnpm exec biome check '{path}'"));
+  assert.equal(out[5], "pnpm exec biome check apps/web/src/routes/workspace/$workspaceId/workload.tsx.bak");
+  assert.deepEqual(formatCommands([out[0]]), ["pnpm exec biome check --write '{path}'"]);
+});
+
+test("buildPackets: a double-quoted $-segment path in a Verify bullet reaches the packet as '{path}'", () => {
+  const plan = PLAN + `
+## A9 — apps/web/src/routes/$wid/page.tsx
+
+- **File** \`apps/web/src/routes/$wid/page.tsx\` · **Action** \`new_file\` · **Depends on** —
+- **Behavior**
+  - A route page.
+- **Verify** \`pnpm exec biome check "apps/web/src/routes/$wid/page.tsx"\`
+`;
+  const { packets } = buildPackets(parsePlan(plan), { runId: "r1", intent: "feature-extend", planPath: ".sdlc/runs/r1/change_plan.md" });
+  const page = packets.find((p) => p.artifact_path === "apps/web/src/routes/$wid/page.tsx");
+  assert.deepEqual(page.apply.verify, ["pnpm exec biome check '{path}'"]);
+  assert.deepEqual(page.apply.format, ["pnpm exec biome check --write '{path}'"]);
 });
 
 test("formatCommands derives the write form of biome / prettier checks and nothing else", () => {

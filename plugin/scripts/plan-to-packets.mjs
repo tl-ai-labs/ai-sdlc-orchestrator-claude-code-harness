@@ -324,6 +324,19 @@ export function splitVerify(cmds, path) {
 }
 
 /**
+ * A literal path in double quotes (or bare) lets the shell expand a `$segment`, so rewrite the
+ * file's own path — quoted, bare, or with `\$` escapes — to the single-quoted placeholder.
+ */
+export function placeholderPath(cmds, path) {
+  if (!path?.includes("$")) return cmds;
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Each `$` may appear escaped (`\$`) or not.
+  const body = path.split("$").map(esc).join("\\\\?\\$");
+  const re = new RegExp(`"${body}"|'${body}'|(?<![\\w./-])${body}(?![\\w./-])`, "g");
+  return cmds.map((c) => c.replace(re, "'{path}'"));
+}
+
+/**
  * The formatter pass the server runs on a written file before verify, derived
  * from the verify commands' own check: `biome check X` → `biome check --write X`
  * (safe fixes + format), `prettier --check X` → `prettier --write X`. 4 of 6
@@ -528,7 +541,7 @@ export function buildPackets(plan, opts) {
     const split = splitVerify(cmds, path);
     const { deferred } = split;
     let { scoped } = split;
-    scoped = dropUnsupportedBiome(scoped, path);
+    scoped = placeholderPath(dropUnsupportedBiome(scoped, path), path);
     if (action === "edit" && projectRoot && lineCount(path) > 0 && readFileSync(resolve(projectRoot, path), "utf8").includes("\r\n")) {
       // Not a warning: the orchestrator touches packets a warning names, and this one needs nothing.
       scoped = crlfAware(scoped);
