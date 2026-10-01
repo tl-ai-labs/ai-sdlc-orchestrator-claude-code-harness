@@ -222,6 +222,11 @@ function postAsk(input, env) {
   // choice made later in the first chat never re-judges it).
   const replay = applied && saved.mode === "workflows" && !answersNow && !switchLine && typeof st.setup?.first_prompt === "string" && !st.setup?.closed_said;
   if (replay) writeJson(sid, FILES.replay, { prompt: st.setup.first_prompt }, env);
+  // The first message waits for a model switch: kept all the same, marked `waits`, so the mmo plugin holds a job in it
+  // like any start that cannot happen (no file changes in this turn) and never judges it at the turn's end.
+  else if (applied && saved.mode === "workflows" && !answersNow && switchLine && typeof st.setup?.first_prompt === "string" && !st.setup?.closed_said) {
+    writeJson(sid, FILES.replay, { prompt: st.setup.first_prompt, waits: "chat-model" }, env);
+  }
   // Off chosen in an open chat, said here: the mmo plugin does not say it again at the next message.
   if (!applied && saved.mode === "off") writeText(sid, FILES.offSaid, "1", env);
   const switchModel = switchLine ? { have: chatModelNow, want: WORKFLOW_MODELS[saved.workflows.models]?.plans ?? null } : null;

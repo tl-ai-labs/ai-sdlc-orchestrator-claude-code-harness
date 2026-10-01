@@ -682,10 +682,45 @@ function blockUntilStarted(ctx) {
   if (choice) return void deny(ctx, "route.tool_blocked", REFUSAL.waitAnswer, Q.askInstruction(choice)) ?? true;
   if (Q.hasHold(ctx.sid)) return void deny(ctx, "route.tool_held", REFUSAL.hold, HOLD_REASON) ?? true;
   if (ctx.pipeline) return false;
+  heldFirstMessage(ctx);
   const route = readRoute(ctx.sid);
+  // A job zero-touch said cannot start: for the rest of this turn nothing that changes files runs either, so Claude
+  // cannot do the job by hand instead, whatever it makes of the note (holdRefused).
+  if (route?.status === "refused") {
+    deny(ctx, "route.tool_blocked_refused", L.notStarted(route.problem, route.job), cannotStartInstruction(route.job, route.problem));
+    return true;
+  }
   if (route?.status !== "pending") return false;
   deny(ctx, "route.tool_blocked", REFUSAL.startFirst(route.job), startFirstReason(route.job));
   return true;
+}
+
+/**
+ * A job that cannot start (another chat's workflow in the folder, the chat's model, Google, git...). The person reads
+ * why and what to do; for the rest of this turn nothing that changes files runs (blockUntilStarted), and a workflow
+ * call is refused with the same reason (pre-skill). Cleared when the turn ends and at the next message.
+ */
+function holdRefused(ctx, job, problem, extra = {}) {
+  writeRoute(ctx.sid, { job, status: "refused", problem, prompt_id: ctx.input.prompt_id ?? null, ...extra });
+}
+
+/**
+ * The first chat's first message, kept by the settings box with `waits` when the chat must switch model first
+ * (zero-touch/scripts/settings-hook.mjs): a job the rules recognise in it cannot start in this turn, so it is held
+ * like any refused start. Read once; never judged at the turn's end (takeReplay).
+ */
+function heldFirstMessage(ctx) {
+  const file = join(sessionDir(ctx.sid), REPLAY_FILE);
+  let rec;
+  try { rec = JSON.parse(readFileSync(file, "utf8")); } catch { return; }
+  if (!rec?.waits || typeof rec.prompt !== "string") return;
+  try { rmSync(file, { force: true }); } catch { /* read once all the same */ }
+  const r = routeMessage(rec.prompt, folderKind(ctx.projectDir));
+  if (!r.job) return;
+  const { problem } = canStart(ctx, chatPolicy(ctx.sid), r.job);
+  if (!problem) return;
+  appendEvent(ctx.sid, "route.cannot_start", { job: r.job, cause: problem.cause, at: "first-message" });
+  holdRefused(ctx, r.job, problem, { replay: true });
 }
 
 /**
@@ -831,7 +866,7 @@ const handlers = {
     const cutOff = working || ctx.agent ? null : cutOffStep(ctx);
     if (!working && !ctx.agent && !ctx.pipeline) {
       const stale = readRoute(ctx.sid);
-      if (stale?.status === "pending" || stale?.status === "judge") { dropRoute(ctx.sid); appendEvent(ctx.sid, "route.dropped", { job: stale.job ?? null, status: stale.status }); }
+      if (stale?.status === "pending" || stale?.status === "judge" || stale?.status === "refused") { dropRoute(ctx.sid); appendEvent(ctx.sid, "route.dropped", { job: stale.job ?? null, status: stale.status }); }
     }
     // A chat made by /branch while a workflow runs in this folder: the workflow carries on only in
     // the chat that runs it, so the branch is told once, at its first message, and its message is answered normally.
@@ -1014,6 +1049,11 @@ const handlers = {
     // A helper agent never starts the chat's workflow: the person asked the chat, not the helper.
     if (ctx.agent) { appendEvent(ctx.sid, "route.refused", { job, by: "helper" }); return void refuse(notNow); }
     const route = readRoute(ctx.sid);
+    // A job zero-touch said cannot start in this turn: any workflow call gets the same reason (holdRefused).
+    if (route?.status === "refused" && !typedNow && !ctx.pipeline) {
+      appendEvent(ctx.sid, "route.refused", { job, by: "chat", why: "refused start" });
+      return void refuse([L.notStarted(route.problem, route.job), cannotStartInstruction(route.job, route.problem)]);
+    }
     if (route?.status === "judge" && !typedNow && !ctx.pipeline) {
       // Claude judged the message a job (judgeInstruction). Zero-touch checks the start as it would its own:
       // a job this folder allows, then the same start checks and the same one-workflow-per-folder rule.
@@ -1027,6 +1067,7 @@ const handlers = {
       const { problem, needed } = lock ? { problem: { cause: "busy", job: lock.job } } : canStart(ctx, policy, job);
       if (problem) {
         appendEvent(ctx.sid, "route.cannot_start", { job, cause: problem.cause, at: "judge" });
+        holdRefused(ctx, job, problem);
         return void refuse([L.notStarted(problem, job), cannotStartInstruction(job, problem)]);
       }
       // The request in Claude's words, or the message's first line; a new app takes none (its message is the brief).
@@ -1047,7 +1088,7 @@ const handlers = {
       if (helper && helper.model !== route.needed) {
         // The chat's policy too, so the line names the models the person chose.
         const problem = { cause: "chat-model", have: helper.model, needed: route.needed, via: helper.via, policy: chatPolicy(ctx.sid) };
-        dropRoute(ctx.sid);
+        holdRefused(ctx, job, problem);
         appendEvent(ctx.sid, "route.cannot_start", { job, cause: problem.cause, at: "skill" });
         return void refuse([L.notStarted(problem, job), cannotStartInstruction(job, problem)]);
       }
@@ -1161,6 +1202,8 @@ const handlers = {
     // model then does not make is not pushed again (stop_hook_active): the route is dropped, the job stays queued
     // for the next turn's end.
     Q.dropHold(ctx.sid);
+    // A refused start holds file changes for its own turn only (holdRefused).
+    if (readRoute(ctx.sid)?.status === "refused") dropRoute(ctx.sid);
     dropSessionMarker(ctx, STEP_MARK); // the turn reached its end: it was not cut off (cutOffStep)
     // A stop the person asked for while the workflow was working: carried out now that the turn is over.
     if (ctx.pipeline && hasSessionMarker(ctx, "stop_requested")) {
@@ -1249,6 +1292,7 @@ const handlers = {
     // turn-end, so a queued typed command's hold would refuse every tool in the next turn. The same clean-up runs
     // here; Claude Code ignores this hook's output, so nothing is said.
     Q.dropHold(ctx.sid);
+    if (readRoute(ctx.sid)?.status === "refused") dropRoute(ctx.sid);
     dropSessionMarker(ctx, STEP_MARK); // the turn reached its end, even if failed (cutOffStep)
     // A stop asked for while the workflow was working: carried out here too (this hook's output is ignored; the person
     // was told at the time that it stops once Claude's current step ends).
@@ -1487,6 +1531,7 @@ function judgeMessage(ctx, text, { replay = false } = {}) {
     return { note: startInstruction({ ...route, auth: auth(ctx), policy }), line: L.starting(route.job) };
   }
   appendEvent(ctx.sid, "route.cannot_start", { job: route.job, cause: problem.cause });
+  holdRefused(ctx, route.job, problem, replay ? { replay } : {});
   return { note: cannotStartInstruction(route.job, problem), line: L.notStarted(problem, route.job) };
 }
 
@@ -1530,6 +1575,7 @@ function carriedStart(ctx, text, carried) {
   const { problem, needed } = lock ? { problem: { cause: "busy", job: lock.job } } : canStart(ctx, policy, carried.job);
   if (problem) {
     appendEvent(ctx.sid, "route.cannot_start", { job: carried.job, cause: problem.cause, at: "carry" });
+    holdRefused(ctx, carried.job, problem);
     return { note: cannotStartInstruction(carried.job, problem), line: L.notStarted(problem, carried.job) };
   }
   writeRoute(ctx.sid, { job: carried.job, args: carried.args, via: "carry", status: "pending", prompt_id: ctx.input.prompt_id ?? null, ...(needed ? { needed } : {}) });
@@ -1549,6 +1595,8 @@ function takeReplay(sid) {
   try { rec = JSON.parse(readFileSync(file, "utf8")); } catch { return null; }
   try { rmSync(file, { force: true }); } catch { /* read once all the same */ }
   const age = Date.now() - Date.parse(rec?.at ?? "");
+  // A first message that waits for a model switch is never judged here: the person sends it again (heldFirstMessage).
+  if (rec?.waits) return null;
   return typeof rec?.prompt === "string" && rec.prompt.trim() && age >= 0 && age < 60 * 60 * 1000 ? rec : null;
 }
 

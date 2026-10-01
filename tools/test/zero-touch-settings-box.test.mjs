@@ -106,7 +106,8 @@ test("the first chat on another model than the chosen workflow models plan with:
     assert.match(done.message, /This chat is on Opus 5\.5, but you chose Opus 5 \+ Sonnet 5, where Opus 5 plans and reviews, and that part runs on this chat's own model\./, "why, naming the choice");
     assert.match(done.message, /Your first message hasn't been started as a workflow yet/);
     assert.doesNotMatch(done.message, /full workflow starts|looks at your first message/, "never promises a start that cannot happen");
-    assert.equal(existsSync(join(s.home, "sessions", "m1", "zt_replay.json")), false, "the first message is not judged at the end of the turn");
+    const kept = JSON.parse(readFileSync(join(s.home, "sessions", "m1", "zt_replay.json"), "utf8"));
+    assert.deepEqual([kept.prompt, kept.waits], ["build me a todo app", "chat-model"], "kept as waiting: held by the mmo plugin in this turn, never judged at its end");
     assert.match(done.note, /Do not do their first request yourself and do not start a workflow/);
     assert.match(done.note, /switch this chat's model to Opus 5/);
     assert.equal(chatMode("m1", { MMO_HOME: s.home }), "on", "the settings still apply to this chat");

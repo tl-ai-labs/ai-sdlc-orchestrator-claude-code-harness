@@ -201,7 +201,46 @@ test("judged message while another chat's workflow holds the folder × Claude st
       assert.match(reason(k), /didn't start, because another chat in this project folder is already running a bug-fix workflow/, sid);
       assert.match(context(k), /Do not do the job yourself now/, sid);
       assert.ok(!started(s, sid), "C");
+      assert.ok(denied(await write(s, sid, "src/cart.js")), `${sid}: and not done by hand in that turn`);
     }
+  } finally { s.cleanup(); }
+});
+
+// A job that cannot start is outcome C for its whole turn: Claude cannot do the job by hand instead, whatever it makes
+// of zero-touch's note (a model may take the note for an instruction slipped into a tool's output and ignore it).
+test("recognised job that cannot start × Claude writes files or calls a workflow → refused with the same line, for that turn only", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await prompt(s, "ra", JOB);
+    assert.ok(!denied(await skill(s, "ra", "mmo:bugfix", JOB)), "another chat's workflow now holds the folder");
+    const r = await prompt(s, "rb", JOB);
+    assert.match(line(r) ?? "", /didn't start, because another chat in this project folder is already running a bug-fix workflow/);
+    const w = await write(s, "rb", "src/fix.js");
+    assert.ok(denied(w), "no file changes: the job is not done by hand");
+    assert.equal(reason(w), line(r), "the person reads the same reason");
+    assert.match(context(w), /Do not do the job yourself now/);
+    const k = await skill(s, "rb", "mmo:docs", "x");
+    assert.ok(denied(k));
+    assert.equal(reason(k), line(r), "a workflow call gets the same reason");
+    assert.equal((await turnEnd(s, "rb")).stdout, "");
+    assert.ok(!denied(await write(s, "rb", "src/fix.js")), "the next turn is free again");
+  } finally { s.cleanup(); }
+});
+
+test("the first chat's first message waiting for a model switch → no file changes in that turn, never judged at its end", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("new");
+  try {
+    await run("session-start", { session_id: "fw", cwd: s.repo, source: "startup", model: "claude-sonnet-5" }, s);
+    // What the settings box leaves when Workflows is saved on another model than the choice plans with.
+    const hello = "build a smallest hello world app: one HTML file that shows Hello, world. No server, no build step, no libraries.";
+    writeFileSync(join(s.home, "sessions", "fw", "zt_replay.json"), JSON.stringify({ prompt: hello, waits: "chat-model", at: new Date().toISOString() }));
+    const w = await write(s, "fw", "index.html");
+    assert.ok(denied(w), "Claude cannot build it by hand");
+    assert.match(reason(w), /^Zero-touch: the new-app workflow didn't start, because this chat is on Sonnet 5/);
+    assert.ok(!existsSync(join(s.home, "sessions", "fw", "zt_replay.json")), "read once");
+    const end = await turnEnd(s, "fw");
+    assert.equal(context(end), "", "never judged at the turn's end: the person sends it again after switching");
+    assert.ok(!denied(await write(s, "fw", "index.html")), "the next turn is free again");
   } finally { s.cleanup(); }
 });
 

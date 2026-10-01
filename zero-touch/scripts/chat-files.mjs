@@ -20,7 +20,8 @@
  *   zt_held         the first chat's one refusal of a tool was used
  *   zt_forked       this chat was made by /branch (a fork): the mmo plugin says once, at its first message, when a
  *                   workflow runs in another chat of the folder (the one it was branched from, most likely)
- *   zt_replay.json  the first chat's first message, left for the mmo plugin when Workflows is saved there: { prompt, at }
+ *   zt_replay.json  the first chat's first message, left for the mmo plugin when Workflows is saved there: { prompt, at },
+ *                   plus `waits` when the chat must switch model first (then held, never judged)
  *                   (its end-of-turn hook judges it once and removes it; plugin/scripts/ambient/hook.mjs takeReplay)
  *   zt_off          not written (an Off chat leaves nothing); one found is removed with the other marks
  */

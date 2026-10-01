@@ -414,7 +414,10 @@ test("the workflows' helpers follow the chat's model: a chat on another model th
     assert.ok(denied(call), "refused before anything runs");
     assert.match(reason(call), /^Zero-touch: the bug-fix workflow didn't start, because this chat is on Opus 5\.5, but you chose Opus 5 \+ Flash 3\.8, where Opus 5 plans and reviews/);
     assert.ok(!pipeline(late, "w4"), "no workflow is marked as running");
-    assert.equal((await run("pre-any", { session_id: "w4", cwd: late.repo, tool_name: "Write", tool_input: { file_path: join(late.repo, "a.js"), content: "x" } }, late)).stdout, "", "the start it was waiting for is dropped: nothing stays blocked");
+    const write = () => run("pre-any", { session_id: "w4", cwd: late.repo, tool_name: "Write", tool_input: { file_path: join(late.repo, "a.js"), content: "x" } }, late);
+    assert.match(reason(await write()), /^Zero-touch: the bug-fix workflow didn't start, because this chat is on Opus 5\.5/, "the job is not done by hand in that turn");
+    await run("turn-end", { session_id: "w4", cwd: late.repo, transcript_path: path }, late);
+    assert.equal((await write()).stdout, "", "the start it was waiting for is dropped at the turn's end: nothing stays blocked");
   } finally { late.cleanup(); }
 });
 
