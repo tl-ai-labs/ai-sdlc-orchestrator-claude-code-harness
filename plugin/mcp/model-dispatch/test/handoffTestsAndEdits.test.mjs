@@ -342,6 +342,7 @@ test("a project that is not a git repository: the hand-off is refused with the r
     const r = await call(s, "write_tests_from_cases", TESTS_FORM(), t);
     assert.equal(r.receipt.status, "refused");
     assert.match(r.receipt.reason, /not a git repository/);
+    assert.equal(r.receipt.cause, "no-git", "a fixed code, so the person's line is the plain one, not this reason");
     assert.equal(r.flash.calls.length, 0);
     assert.deepEqual(JSON.parse(readFileSync(join(s.session, "handoff_released.json"), "utf8")), ["tests/cart.test.js"], "the chat's model may write the test file itself");
   } finally { s.cleanup(); }

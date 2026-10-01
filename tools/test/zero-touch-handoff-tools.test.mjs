@@ -35,14 +35,14 @@ const TOOL = "mcp__plugin_mmo_model-dispatch__write_document";
  * A person who chose Hand-off ("b", Flash 3.8 typing every kind, the chat on Opus 5) or Workflows ("a") in the
  * settings box.
  */
-function sandbox({ mode = "b" } = {}) {
+function sandbox({ mode = "b", handoff = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "mmo-zt-b-tools-"));
   const home = join(dir, "home");
   const repo = join(dir, "repo");
   mkdirSync(home);
   mkdirSync(repo);
   writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
-  writeZtSettings(home, { mode: mode === "a" ? "workflows" : "handoff", handoff: { chat_model: "claude-opus-5", documents: "flash", tests: "flash", repeats: "flash" } });
+  writeZtSettings(home, { mode: mode === "a" ? "workflows" : "handoff", handoff: { chat_model: "claude-opus-5", documents: "flash", tests: "flash", repeats: "flash", ...handoff } });
   return { dir, home, repo, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -224,4 +224,24 @@ test("mmo registers both moments for the hand-off tools, through the same shim a
     }
     assert.ok(!matcher.test("mcp__plugin_mmo_model-dispatch__execute_stage"), "the workflow's own tools are not touched");
   }
+});
+
+test("a project not set up with git: the person reads the plain line, not the server's reason", async () => {
+  // 1 Oct 2026: the line was "the hand-off was refused (the project is not a git repository, so a scratch copy cannot
+  // tell its own files from installed dependencies …)": technical, and it did not say who does the work now. The
+  // approved words (MESSAGES-REVIEW.md 6.4) are shown instead; the documents sentence only when documents hand off.
+  const reason = "the project is not a git repository, so a scratch copy cannot tell its own files from installed dependencies and the hand-off cannot be checked";
+  const refused = { status: "refused", reason, cause: "no-git", next: "Nothing was sent. Write tests/cart.test.js yourself." };
+  const s = sandbox();
+  try {
+    await startOn(s, "g1");
+    assert.equal(line(await after(s, "g1", refused)), "Zero-touch: this can't be handed off here, because the test copy it needs only works in a project set up with git. So Opus 5 does it directly. (New documents can still be handed off.)");
+    // Any other refusal keeps its own line.
+    assert.match(line(await after(s, "g1", { status: "refused", reason: "something else" })), /the hand-off was refused \(something else\)/);
+  } finally { s.cleanup(); }
+  const k = sandbox({ handoff: { documents: "chat" } });
+  try {
+    await startOn(k, "g2");
+    assert.equal(line(await after(k, "g2", refused)), "Zero-touch: this can't be handed off here, because the test copy it needs only works in a project set up with git. So Opus 5 does it directly.", "documents are kept in the chat: no promise about them");
+  } finally { k.cleanup(); }
 });

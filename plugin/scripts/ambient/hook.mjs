@@ -784,8 +784,9 @@ const handlers = {
     // the receipt itself, so nothing is added for it.
     if (ctx.config.mode !== "b" || !H.handoffToolName(ctx.input.tool_name)) return;
     const receipt = H.toolReceipt(ctx.input.tool_response);
-    const chat = H.chatState(H.readStamp(ctx.sid), H.chatModelNow(ctx.sid, ctx.input.transcript_path));
-    const shown = H.receiptLine(receipt, chat);
+    const stamp = H.readStamp(ctx.sid);
+    const chat = H.chatState(stamp, H.chatModelNow(ctx.sid, ctx.input.transcript_path));
+    const shown = H.receiptLine(receipt, chat, { documentsHandedOff: Boolean(stamp) && !H.keptInChat(stamp, "docs") });
     if (!shown) return;
     appendEvent(ctx.sid, "handoff.receipt", { status: receipt.status, file: typeof receipt.file === "string" ? receipt.file : undefined, cost_usd: typeof receipt.cost_usd === "number" ? receipt.cost_usd : undefined });
     emit({ systemMessage: shown });

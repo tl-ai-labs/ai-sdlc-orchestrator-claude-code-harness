@@ -323,7 +323,7 @@ async function writeTests(args: Record<string, unknown>, chat: ChatHandoff, ctx:
   if (scratch.refused !== undefined) {
     releasePath(chat.dir, form.file);
     log("warn", "handoff.refused", { tool: "write_tests_from_cases", reason: scratch.refused });
-    return receipt({ status: "refused", reason: scratch.refused, next: `Nothing was sent. Write ${form.file} yourself.` });
+    return receipt({ status: "refused", reason: scratch.refused, ...(scratch.cause ? { cause: scratch.cause } : {}), next: `Nothing was sent. Write ${form.file} yourself.` });
   }
 
   const maxOut = maxOutOf(typists);
@@ -391,7 +391,7 @@ async function repeatEdit(args: Record<string, unknown>, chat: ChatHandoff, ctx:
   const scratch = makeScratchCopy(chat.projectDir);
   if (scratch.refused !== undefined) {
     log("warn", "handoff.refused", { tool: "repeat_edit_across_files", reason: scratch.refused });
-    return receipt({ status: "refused", reason: scratch.refused, next: "Nothing was sent. Make the change in the other files yourself." });
+    return receipt({ status: "refused", reason: scratch.refused, ...(scratch.cause ? { cause: scratch.cause } : {}), next: "Nothing was sent. Make the change in the other files yourself." });
   }
 
   try {

@@ -336,9 +336,15 @@ const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
  * work; that the hand-off failed and the chat's model does the work itself; that the brief was incomplete; or that a
  * hand-off was undone. Null for a reply that is no receipt.
  */
-export function receiptLine(receipt, chat) {
+export function receiptLine(receipt, chat, { documentsHandedOff = false } = {}) {
   if (!receipt || typeof receipt.status !== "string") return null;
   const me = who(chat);
+  // The project is not set up with git (1 Oct 2026): the approved words, not the server's reason. Tests and a repeated
+  // change are tried in a test copy first, and git is what tells the project's own files from downloaded packages.
+  // "New documents can still be handed off" is said only when this chat hands documents off.
+  if (receipt.status === "refused" && receipt.cause === "no-git") {
+    return `${LABEL} this can't be handed off here, because the test copy it needs only works in a project set up with git. So ${me} does it directly.${documentsHandedOff ? " (New documents can still be handed off.)" : ""}`;
+  }
   const Me = capital(me);
   const cost = dollars(receipt.cost_usd);
   const routed = displayName(receipt.routed_model);

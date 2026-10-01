@@ -19,7 +19,9 @@ import { constants, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readlinkSyn
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-export type ScratchCopy = { dir: string; remove(): void; refused?: undefined } | { refused: string; dir?: undefined };
+// `cause: "no-git"` (1 Oct 2026): the one refusal the person is told about in their own words (the hook's receipt
+// line), so it travels as a fixed code beside the reason the model reads.
+export type ScratchCopy = { dir: string; remove(): void; refused?: undefined } | { refused: string; cause?: "no-git"; dir?: undefined };
 
 function gitList(projectDir: string, args: string[]): string[] {
   const out = execFileSync("git", ["ls-files", "-z", ...args], { cwd: projectDir, stdio: ["ignore", "pipe", "ignore"], timeout: 30_000, maxBuffer: 256 << 20 }).toString("utf8");
@@ -37,7 +39,7 @@ export function makeScratchCopy(projectDir: string): ScratchCopy {
     // What git ignores, a wholly ignored folder as one entry ("node_modules/").
     ignored = gitList(root, ["--others", "--ignored", "--exclude-standard", "--directory"]);
   } catch {
-    return { refused: "the project is not a git repository, so a scratch copy cannot tell its own files from installed dependencies and the hand-off cannot be checked" };
+    return { refused: "the project is not a git repository, so a scratch copy cannot tell its own files from installed dependencies and the hand-off cannot be checked", cause: "no-git" };
   }
   const dir = mkdtempSync(join(tmpdir(), "mmo-handoff-scratch-"));
   const remove = () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* left for the system's temp cleanup */ } };
