@@ -166,6 +166,10 @@ test("the line says when the routed model failed and another wrote it, when the 
     assert.equal(line(await after(s, "f1", byOpus)), "Zero-touch: Flash 3.8 couldn't write docs/setup.md, so Opus 5 wrote it. It was checked automatically. Estimated cost: $0.10.");
     const failed = { status: "failed", file: "docs/setup.md", routed_model: "gemini-3.8-flash", attempts: 3, reason: "the document is empty", cost_usd: 0.012 };
     assert.equal(line(await after(s, "f1", failed)), "Zero-touch: the hand-off of docs/setup.md didn't work (estimated cost so far: $0.01), and nothing was added to your project. Opus 5 will write it directly now.");
+    // A Claude typist whose sign-in on this computer has expired: the cause and the one step that fixes it.
+    const signIn = { status: "failed", file: "docs/overview.md", routed_model: "claude-sonnet-5", attempts: 3, reason: "success: Failed to authenticate: OAuth session expired and could not be refreshed", cost_usd: 0 };
+    assert.equal(line(await after(s, "f1", signIn)), "Zero-touch: the hand-off of docs/overview.md didn't run: the Claude sign-in this computer uses for Sonnet 5 has expired, so nothing was added (estimated cost: $0.0000). To fix it, sign in again: in a terminal, run claude and type /login. Opus 5 will write it directly now.");
+    assert.match(line(await after(s, "f1", { ...signIn, file: undefined, changed_meanwhile: [] })), /^Zero-touch: the repeated change didn't run: the Claude sign-in this computer uses for Sonnet 5 has expired/);
     const form = { status: "refused", problems: ["purpose is empty", "facts needs at least one fact"] };
     assert.equal(line(await after(s, "f1", form)), "Zero-touch: Opus 5's instructions for the hand-off were missing 2 things, so nothing was sent and nothing was charged. Opus 5 is fixing them and will try again.");
     // Any other refusal: plain words only, never the server's own reason (Claude reads that in the reply).

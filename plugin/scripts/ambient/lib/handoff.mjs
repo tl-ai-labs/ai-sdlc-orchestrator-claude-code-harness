@@ -506,6 +506,12 @@ function dollars(n) {
 const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
+ * The reasons a Claude typist gives when this computer's `claude` sign-in can no longer be used: an expired or
+ * missing login, or a rejected key, as `claude -p` reports them.
+ */
+const SIGN_IN_FAILED = /failed to authenticate|oauth (?:session|token)[^.]*(?:expired|revoked)|not (?:logged|signed) in|please run \/login|authentication_error|invalid (?:x-)?api[ -]?key/i;
+
+/**
  * The one line the person sees after a hand-off tool call, written from the tool's receipt: what was written or
  * changed, by which model and what it cost, and how to undo it; that the chosen model failed and another did the
  * work; that the hand-off failed and the chat's model does the work itself; that the brief was incomplete; or that a
@@ -565,6 +571,14 @@ export function receiptLine(receipt, chat, { documentsHandedOff = false } = {}) 
     const checked = String(receipt.check ?? "").startsWith("not run") ? "no automatic check was available" : "your project's check passed on a test copy";
     const left = (receipt.failed ?? []).length ? ` ${count(receipt.failed.length, "file")} still ${receipt.failed.length === 1 ? "needs" : "need"} the change, and ${me} will do ${receipt.failed.length === 1 ? "it" : "them"}.` : "";
     return `${LABEL} ${routed} made the change in ${count(receipt.changed.length, "file")}${helped}, and ${checked}. Estimated cost: ${cost}.${undo}${left}`;
+  }
+  // A hand-off to a Claude model runs through this computer's `claude` command and its sign-in. When that sign-in has
+  // expired every attempt fails the same way, so the line names the cause and the one step that fixes it, instead
+  // of a bare "didn't work" the person cannot act on.
+  const signInExpired = receipt.status === "failed" && SIGN_IN_FAILED.test(String(receipt.reason ?? ""));
+  if (signInExpired) {
+    const what = typeof receipt.file === "string" ? `the hand-off of ${receipt.file}` : "the repeated change";
+    return `${LABEL} ${what} didn't run: the Claude sign-in this computer uses for ${routed} has expired, so nothing was added (estimated cost: ${cost}). To fix it, sign in again: in a terminal, run claude and type /login. ${Me} will ${typeof receipt.file === "string" ? "write it" : "make the change"} directly now.`;
   }
   if (receipt.status === "failed" && typeof receipt.file === "string") {
     // Tests that ran and did not pass are not a typing failure: the output may show a real bug.
