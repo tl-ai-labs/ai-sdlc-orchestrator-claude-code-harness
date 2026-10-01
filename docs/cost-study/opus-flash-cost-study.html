@@ -164,29 +164,29 @@
     <h2>What every run built</h2>
     <p>Up to 25 Sep, each run did the same medium-sized task on the Kaneo codebase, started with this command in Claude Code:</p>
     <div class="cmd">/mmo:brownfield "add a new public profile page with default profile image"</div>
-    <p>From 28 Sep we added three more jobs to see whether job size changes the answer: a <b>small</b> one (task count and &ldquo;last updated&rdquo; on the public project page, 7 files) and two <b>large</b> ones (a project insights page, and a team workload page, about 25 files each).</p>
+    <p>From 28 Sep we added three more jobs to see whether job size changes the answer: a <b>small</b> one (task count and &ldquo;last updated&rdquo; on the public project page, 7 files) and two <b>large</b> ones (a project insights page, and a team workload page, about 25 files each). The last pair (30 Sep) ran the team workload page plus three docs files, 28 files.</p>
   </section>
 
   <section>
     <div class="lbl">Final verdict &middot; 30 Sep</div>
     <h2>Opus&nbsp;+&nbsp;Flash is a little cheaper, not a lot</h2>
-    <p>Across eight same-job pairs, Opus&nbsp;+&nbsp;Flash won 5, one was a tie, and Opus-only won 2. Most wins were by $1&ndash;3, about the size of normal run-to-run noise. The saving shrinks as jobs get bigger, because on large jobs the Opus planner is the main cost, and it is the same on both sides.</p>
+    <p>Across nine same-job pairs, Opus&nbsp;+&nbsp;Flash won 6, one was a tie, and Opus-only won 2. Most wins were by $1&ndash;3, about the size of normal run-to-run noise. The saving is smaller on large jobs, because there the Opus planner is the main cost, and it is the same on both sides.</p>
     <div class="tw">
       <table class="fit">
         <thead><tr><th>Job size</th><th class="n">Pairs</th><th class="n">Opus + Flash</th><th class="n">Opus-only</th><th>Result</th></tr></thead>
         <tbody>
           <tr><td>Small (7 files)</td><td class="n">2</td><td class="n">&asymp; $8.69</td><td class="n">&asymp; $9.70</td><td><span class="chip c wrap">Flash &asymp; 10% cheaper</span></td></tr>
           <tr><td>Medium (14&ndash;17 files)</td><td class="n">3</td><td class="n">&asymp; $8.14</td><td class="n">&asymp; $10.07</td><td><span class="chip c wrap">Flash &asymp; 19% cheaper</span></td></tr>
-          <tr><td>Large (25 files, 2 jobs)</td><td class="n">3</td><td class="n">&asymp; $15.50</td><td class="n">&asymp; $15.03</td><td><span class="chip e wrap">About even</span></td></tr>
+          <tr><td>Large (25&ndash;28 files, 2 jobs)</td><td class="n">4</td><td class="n">&asymp; $14.32</td><td class="n">&asymp; $15.54</td><td><span class="chip c wrap">Flash &asymp; 8% cheaper</span></td></tr>
         </tbody>
       </table>
     </div>
     <div class="stats">
-      <div class="stat hi"><div class="stat-v">5&ndash;1&ndash;2</div><div class="stat-k">Pairs won by Flash &ndash; tied &ndash; won by Opus-only</div></div>
+      <div class="stat hi"><div class="stat-v">6&ndash;1&ndash;2</div><div class="stat-k">Pairs won by Flash &ndash; tied &ndash; won by Opus-only</div></div>
       <div class="stat hi"><div class="stat-v">&asymp; 10%</div><div class="stat-k">Typical Flash saving, work itself</div></div>
       <div class="stat"><div class="stat-v">100%</div><div class="stat-k">Runs that passed their tests, on both sides</div></div>
     </div>
-    <p class="note"><b>One large pair was biased.</b> Opus-only won it by 28%, but the Flash run went first and hit a file-format problem (Windows line endings) the Opus-only run never met. Plugin 0.8.11 fixed that, and on the re-run pair Flash was 14% cheaper ($12.64 vs $14.63). Figures are &ldquo;work itself&rdquo;, leaving out our own chat that landed in a run&rsquo;s time window. <b>Advice:</b> Opus&nbsp;+&nbsp;Flash is a fine default. Opus-only costs only slightly more and has one less thing to go wrong.</p>
+    <p class="note"><b>One large pair was biased.</b> Opus-only won it by 28%, but the Flash run went first and hit a file-format problem (Windows line endings) the Opus-only run never met. Plugin 0.8.11 fixed that, and on the re-run pair Flash was 14% cheaper ($12.64 vs $14.63). A final check pair on plugin 0.8.12 had Flash 37% cheaper ($10.78 vs $17.09) &mdash; one sample, so read it as &ldquo;Flash ahead&rdquo;, not as 37%. Figures are &ldquo;work itself&rdquo;, leaving out our own chat that landed in a run&rsquo;s time window. <b>Advice:</b> Opus&nbsp;+&nbsp;Flash is a fine default. Opus-only costs only slightly more and has one less thing to go wrong.</p>
   </section>
 
   <section>
@@ -206,6 +206,9 @@
           <tr><td>Large2-B</td><td>large 2</td><td>Opus-only</td><td class="n">$14.66</td><td class="n">&asymp; $11.94</td><td class="n">85</td><td>96% right first try</td></tr>
           <tr><td>Large2-C</td><td>large 2</td><td>Opus + Flash</td><td class="n">$13.81</td><td class="n">&asymp; $12.64</td><td class="n">75</td><td>plugin 0.8.11</td></tr>
           <tr><td>Large2-D</td><td>large 2</td><td>Opus-only</td><td class="n">$15.26</td><td class="n">&asymp; $14.63</td><td class="n">74</td><td>plugin 0.8.11, 0 repair rounds</td></tr>
+          <tr><td>Large2-E</td><td>large 2 + docs</td><td>Opus + Flash</td><td class="n">$11.71</td><td class="n">&asymp; $10.78</td><td class="n">79</td><td>plugin 0.8.12, 28 files, 1 repair round</td></tr>
+          <tr><td>Large2-F</td><td>large 2 + docs</td><td>Opus-only</td><td class="n">$17.77</td><td class="n">&asymp; $17.09</td><td class="n">72</td><td>plugin 0.8.12, 28 files, 0 repair rounds</td></tr>
+          <tr><td>Large2-G</td><td>large 2 + docs</td><td>Opus-only</td><td class="n">$18.15</td><td class="n">&asymp; $16.99</td><td class="n">87</td><td>repeat of Large2-F: confirms &asymp; $17</td></tr>
         </tbody>
       </table>
     </div>
@@ -492,7 +495,21 @@
           <div><h3 class="good">Advantages</h3><ul><li>No plan trimming, no line-ending workarounds.</li><li>All tests passed; security review clean on both runs.</li></ul></div>
           <div><h3 class="bad">Defects</h3><ul><li>Flash wasted 6 attempts on a check that can never pass: the formatter skips docs (.mdx) files.</li><li>Repair steps written by the manager lacked the auto-format instruction.</li><li>Two reviewer issues couldn&rsquo;t be fixed: the files (API spec, assistant-tool docs) weren&rsquo;t on the allowed list.</li></ul></div>
         </div>
-        <div class="next"><b>Next:</b> fix those three issues. The comparison runs are finished.</div>
+        <div class="next"><b>Next row fixes:</b> Row 21 &mdash; fix those three issues, then one check pair.</div>
+      </article>
+      <article class="stage">
+        <div class="stage-h"><div class="lbl">Plugin 0.8.12 &middot; 30 Sep</div><h3>Row 21 &middot; Docs skip the formatter, repairs auto-format, companion files allowed</h3></div>
+        <div class="stage-b">
+          <div><h4>What we implemented</h4><ul><li>Docs files no longer get a formatting check they can never pass.</li><li>The server adds the auto-format step to repair tasks the manager writes by hand.</li><li>At the start, the plugin proposes the API spec and assistant-tool docs as allowed files.</li></ul></div>
+          <div><h4>Runs and results</h4><ul><li>Opus + Flash (Large2-E): <b>$11.71</b> (about $10.78 for the run itself), 79 min</li><li>Opus-only (Large2-F): <b>$17.77</b> (about $17.09 for the run itself), 72 min</li></ul></div>
+          <div><h4>What happened</h4><p>All three fixes held on both sides. Same job as Row 20 plus three docs files (28 files). Flash was <b>37% cheaper</b>. A repeat Opus-only run (Large2-G) cost &asymp; $16.99, the same as Large2-F, so the $17 is real for this job size, not a fluke and not caused by the fixes. Opus-only did all 28 tasks itself, one after another, and its helpers re-read about 22 million cached tokens against about 9 million for the Flash run.</p></div>
+          <div><h4>Before &rarr; after</h4><div class="outcome"><span class="fig">Opus + Flash $12.64 &rarr; $10.78</span><span class="fig">Opus-only $14.63 &rarr; $17.09</span></div></div>
+        </div>
+        <div class="pair">
+          <div><h3 class="good">Advantages</h3><ul><li>No wasted docs attempts; hand-written repairs passed first time.</li><li>API spec and both assistant-tool lists updated; no reviewer complaints about off-limits files.</li><li>All tests passed; security review clean on both runs.</li></ul></div>
+          <div><h3 class="bad">Defects</h3><ul><li>A file path containing <code>$</code> (the <code>$workspaceId</code> route folder) was double-quoted in the automatic check, so the shell dropped part of it: 3 wasted Flash attempts, and a real accessibility error stayed hidden.</li><li>The plan&rsquo;s end-of-run checks (whole-project type checks) were not carried into the tasks, in either run. The managers ran them by hand; in the Flash run they caught its only real mistakes.</li></ul></div>
+        </div>
+        <div class="next"><b>Next:</b> fix those two issues. The comparison runs are finished.</div>
       </article>
     </div>
   </section>
@@ -554,14 +571,14 @@
         <li>Depends on a second provider: Google's Flash service was too busy 8 times in Row 18.</li>
       </ul></div>
     </div>
-    <p class="note">Every comparison rests on one to three runs per setup. Identical runs differ by up to $2.50, so a single gap under that means little. Over all eight same-job pairs from 24&ndash;30 Sep, Opus&nbsp;+&nbsp;Flash won 5, tied 1 and lost 2. On large jobs Opus-only got more tasks right first time (92&ndash;96% vs 79&ndash;83%).</p>
+    <p class="note">Every comparison rests on one to three runs per setup. Identical runs differ by up to $2.50, so a single gap under that means little. Over all nine same-job pairs from 24&ndash;30 Sep, Opus&nbsp;+&nbsp;Flash won 6, tied 1 and lost 2. On large jobs Opus-only got more tasks right first time (92&ndash;96% vs 79&ndash;83%).</p>
   </section>
 
   <section>
     <div class="lbl">Reading the numbers</div>
     <h2>What we learned</h2>
     <ul class="findings">
-      <li><b>Opus + Flash is a little cheaper, not a lot.</b><span>About 10% on small jobs, 19% on the medium task, and about even on large jobs. It won 5 of 8 pairs.</span></li>
+      <li><b>Opus + Flash is a little cheaper, not a lot.</b><span>About 10% on small jobs, 19% on the medium task, and about 8% on large jobs. It won 6 of 9 pairs.</span></li>
       <li><b>Bigger jobs don&rsquo;t grow the saving.</b><span>On large jobs the Opus planner is the main cost, and it is the same Opus on both sides.</span></li>
       <li><b>Watch for hidden differences inside a pair.</b><span>A line-ending difference made one large pair look 28% worse for Flash until we found it.</span></li>
       <li><b>Both setups became far cheaper.</b><span>Opus + Flash fell from $26.02 to $8.37, down 68%. Opus-only fell from $19.16 to $9.55 at its best, down 50%.</span></li>
@@ -581,7 +598,7 @@
       <table>
         <thead><tr><th>Step</th><th>Why</th></tr></thead>
         <tbody>
-          <tr><td>Fix the three issues from Row 20</td><td>Removes the last known waste on the Flash side and the reviewer issues that couldn&rsquo;t be fixed.</td></tr>
+          <tr><td>Fix the two issues from Row 21</td><td>Quote file paths safely in automatic checks, and carry the plan&rsquo;s end-of-run checks into the tasks.</td></tr>
           <tr><td>Measure a new project built from scratch</td><td>A teammate&rsquo;s from-scratch runs showed Flash 27&ndash;38% cheaper on ~100-file projects; worth confirming on this setup.</td></tr>
         </tbody>
       </table>
@@ -593,7 +610,7 @@
     <h2>Where these numbers come from</h2>
     <h3>Tools used</h3>
     <ul class="src">
-      <li><b>Claude Code</b> running the <b>mmo</b> plugin (versions 0.7.3 &rarr; 0.8.11), started with <code>/mmo:brownfield</code>.</li>
+      <li><b>Claude Code</b> running the <b>mmo</b> plugin (versions 0.7.3 &rarr; 0.8.12), started with <code>/mmo:brownfield</code>.</li>
       <li><b>Claude Opus 5</b> for planning, reviews and (in Opus-only) all coding; <b>Gemini Flash</b> for coding in the Opus + Flash setup.</li>
       <li><b>model-dispatch</b> server (part of the plugin) that sends work to Flash, checks it and retries.</li>
       <li>Kaneo's own checks: <code>pnpm test</code> (Vitest), TypeScript type checks and the Biome formatter.</li>
