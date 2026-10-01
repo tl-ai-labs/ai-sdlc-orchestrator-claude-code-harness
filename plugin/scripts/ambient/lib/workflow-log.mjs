@@ -4,8 +4,12 @@
  * Every /mmo: workflow logs its life through plugin/scripts/mmo-log.mjs into <project>/.sdlc/runs/<run-id>/
  * orchestrator.log, one line per event as plugin/scripts/lib/log.mjs renders it: `run.start`, each `gate.open`
  * and `gate.resolved` (response approved | revise | abort), and `run.end` (outcome completed | aborted | failed).
- * A greenfield run logs `run.end` before its final gate opens, so "ended" is: an abort at any gate, a `run.end`
- * that says aborted or failed, or a `run.end` with every gate it opened answered.
+ * A run logs `run.end` right before its final report, and its final acceptance gate (gate-4) after that report
+ * (agents/orchestrator.md), so "ended" is: an abort at any gate, a `run.end` that says aborted or failed, or a
+ * completed `run.end` whose final acceptance is answered. A completed run that never logs its final gate is over
+ * once nothing in it is open (no gate, no phase) and its log has been quiet for QUIET_MS, so a chat never waits on
+ * a gate line that will not come. Between `run.end` and the final gate the run is still writing its report, often
+ * from a helper working in the background while the chat's own turns end: it is running, not over.
  *
  * The run is found by time: the latest run whose `run.start` is not earlier than the moment the chat started its
  * workflow (the chat's `pipeline` record holds that moment). No such run means the workflow never reached its run
@@ -25,6 +29,10 @@ const FIELD = /([A-Za-z_][\w-]*)=("(?:[^"\\]|\\.)*"|\S+)/g;
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** A log file older than the chat's start by more than this cannot hold its run (its file time is only a first filter). */
 const SLACK_MS = 2_000;
+/** The final acceptance gate, which closes a completed run. */
+const FINAL_GATE = "gate-4";
+/** How long a completed run that never logged its final gate stays quiet, with nothing open, before it counts as over. */
+export const QUIET_MS = 10 * 60 * 1000;
 
 function fields(rest) {
   const out = {};
@@ -56,7 +64,7 @@ export function readWorkflowLog(file) {
  * person's next message is its answer. `runId`, when the chat has claimed its
  * run, limits the reading to that run's own log; without it the latest run since the chat's start is taken.
  */
-export function workflowState(projectDir, sinceMs, runId = null) {
+export function workflowState(projectDir, sinceMs, runId = null, nowMs = Date.now()) {
   const root = join(projectDir, ".sdlc", "runs");
   if (!Number.isFinite(sinceMs) || !existsSync(root)) return { state: "not-started" };
   let best = null;
@@ -77,24 +85,46 @@ export function workflowState(projectDir, sinceMs, runId = null) {
   }
   if (!best) return { state: "not-started" };
   const open = new Set();
-  let ended = false, outcome = null;
+  const phases = new Set();
+  let ended = false, outcome = null, finalOpened = false, finalAnswered = false, lastMs = best.startMs;
   for (const e of best.events) {
+    lastMs = e.ms;
     const gate = e.fields.gate;
-    if (e.event === "gate.open" && gate) open.add(gate);
+    if (e.event === "phase.start" && e.fields.phase) phases.add(e.fields.phase);
+    if ((e.event === "phase.end" || e.event === "phase.skip") && e.fields.phase) phases.delete(e.fields.phase);
+    if (e.event === "gate.open" && gate) { open.add(gate); if (gate === FINAL_GATE) finalOpened = true; }
     if (e.event === "gate.resolved" && gate) {
       const response = String(e.fields.response ?? "");
       if (response.startsWith("abort")) { ended = true; outcome = "aborted"; }
       // A gate answered "revise" (Gate 4's "reject: …" is logged as revise) stays open until the revision is
       // approved: the run is not over, even when a turn ends between a Gate 4 reject and the gate opening again.
-      if (!response.startsWith("revise") && !response.startsWith("reject")) open.delete(gate);
+      if (!response.startsWith("revise") && !response.startsWith("reject")) {
+        open.delete(gate);
+        if (gate === FINAL_GATE) finalAnswered = true;
+      }
     }
     if (e.event === "run.end") {
       outcome = e.fields.outcome ?? "completed";
       if (outcome === "aborted" || outcome === "failed") ended = true;
     }
   }
-  if (!ended && outcome && open.size === 0) ended = true;
+  // A completed run: over once its final acceptance is answered; one that never logs that gate, once nothing in it
+  // is open and its log has been quiet for QUIET_MS.
+  if (!ended && outcome && open.size === 0) {
+    if (finalAnswered) ended = true;
+    else if (!finalOpened && phases.size === 0 && nowMs - lastMs >= QUIET_MS) ended = true;
+  }
   return ended ? { state: "ended", runId: best.runId, outcome } : { state: "running", runId: best.runId, outcome, waiting: open.size > 0 };
+}
+
+/**
+ * When a run's latest `run.start` was logged (ms), or null when its log has none yet (its run.start call is the one
+ * being made). Lets a chat claim only a run that belongs to its current workflow (hook.mjs claimRun).
+ */
+export function runStartMs(projectDir, runId) {
+  if (!runId || !RUN_ID.test(runId)) return null;
+  const starts = readWorkflowLog(join(projectDir, ".sdlc", "runs", runId, "orchestrator.log")).filter((e) => e.event === "run.start");
+  return starts.length ? starts[starts.length - 1].ms : null;
 }
 
 /**

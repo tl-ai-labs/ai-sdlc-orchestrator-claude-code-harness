@@ -187,7 +187,7 @@ test("the queue is first-in-first-out and a duplicate is not added", { skip: SKI
     endBugfix(s, "q4");
     assert.match(queuedStart(await turnEnd(s, "q4")), /"mmo:docs"/, "first in, first out");
     await skill(s, "q4", "mmo:docs", DOCS);
-    workflowLog(s, "docs-1", ["run.start", {}], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "approved" }], ["run.end", { outcome: "completed" }]);
+    workflowLog(s, "docs-1", ["run.start", {}], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "approved" }], ["run.end", { outcome: "completed" }], ["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]);
     assert.match(queuedStart(await turnEnd(s, "q4")), /"mmo:test"/, "then the next one");
   } finally { s.cleanup(); }
 });
@@ -267,6 +267,45 @@ test("a typed command queued with Queue it is pushed again exactly as typed: no 
     const again = queuedStart(await turnEnd(s, "qt"));
     assert.ok(again.includes(`skill "mmo:docs", args ${JSON.stringify(DOCS)}, exactly as they typed it`), again);
     assert.doesNotMatch(again, /\[zero-touch|do not ask|chose a full workflow/i);
+  } finally { s.cleanup(); }
+});
+
+// mmo logs run.end right before its final report and opens its final acceptance gate after the report, often from a
+// helper working in the background while the chat's own turns end. A queued job waits for that final answer.
+test("a queued job waits through the running workflow's final report and final approval, in mmo's own order of log lines", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "qr");
+    await say(s, "qr", DOCS);
+    assert.deepEqual(queue(s, "qr").map((q) => q.job), ["docs"]);
+    workflowLog(s, "bf-qr", ["gate.open", { gate: "gate-3" }], ["gate.resolved", { gate: "gate-3", response: "approved" }],
+      ["phase.start", { phase: "generate_final_report" }], ["run.end", { outcome: "completed", total_cost_usd: 0.65 }]);
+    const mid = await turnEnd(s, "qr");
+    assert.equal(mid.stdout, "", "still writing its final report: nothing starts, nothing is said");
+    assert.equal(pipelineJob(s, "qr"), "bugfix");
+    workflowLog(s, "bf-qr", ["phase.end", { phase: "generate_final_report" }], ["gate.open", { gate: "gate-4", title: "Final Acceptance" }]);
+    assert.equal((await turnEnd(s, "qr")).stdout, "", "waiting for the final answer: nothing starts");
+    assert.deepEqual(queue(s, "qr").map((q) => q.job), ["docs"]);
+    workflowLog(s, "bf-qr", ["gate.resolved", { gate: "gate-4", response: "approved" }]);
+    const end = await turnEnd(s, "qr");
+    assert.match(end.json?.systemMessage ?? "", /the bug-fix workflow has finished, so the documentation workflow you queued is starting now/);
+    assert.match(queuedStart(end), /"mmo:docs"/);
+  } finally { s.cleanup(); }
+});
+
+test("a finished workflow's late log lines are never taken for the next workflow's run; the next run's own start is", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "qn");
+    await say(s, "qn", DOCS);
+    endBugfix(s, "qn");
+    assert.match(queuedStart(await turnEnd(s, "qn")), /"mmo:docs"/);
+    assert.equal((await skill(s, "qn", "mmo:docs", DOCS)).stdout, "", "the queued documentation workflow starts");
+    // The bug fix's run, which started before this workflow, logs one more line (its close-out, from a helper).
+    await logCall(s, "qn", "bf-qn", "phase.end");
+    assert.equal(read(s, "qn", "pipeline")?.run_id, undefined, "not claimed: an earlier workflow's run");
+    await logCall(s, "qn", "docs-qn", "run.start");
+    assert.equal(read(s, "qn", "pipeline")?.run_id, "docs-qn", "the documentation workflow's own run is claimed");
   } finally { s.cleanup(); }
 });
 
@@ -504,7 +543,7 @@ test("the chat's workflow is read from its claimed run: another run in the folde
   try {
     await runningBugfix(s, "q13");
     await new Promise((r) => setTimeout(r, 20));
-    workflowLog(s, "later-run", ["run.start", {}], ["run.end", { outcome: "completed" }]);
+    workflowLog(s, "later-run", ["run.start", {}], ["run.end", { outcome: "completed" }], ["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]);
     await turnEnd(s, "q13");
     assert.equal(pipelineJob(s, "q13"), "bugfix", "this chat's workflow still runs");
     endBugfix(s, "q13");

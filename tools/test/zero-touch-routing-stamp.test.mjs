@@ -176,7 +176,7 @@ test("a job asked for while a workflow runs is said at once, and starts with the
     await startedBugfix(s, "q1");
     const asked = await say(s, "q1", TESTS);
     assert.equal(asked.json?.systemMessage, "Zero-touch: noted. The test-writing workflow will start by itself when the bug-fix workflow finishes, and it will wait for your approval at its first main step.");
-    workflowLog(s, "bf-q1", ["run.end", { outcome: "completed" }]);
+    workflowLog(s, "bf-q1", ["run.end", { outcome: "completed" }], ["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]);
     const end = await run("turn-end", { session_id: "q1", cwd: s.repo, stop_hook_active: false }, s);
     assert.match(end.json?.systemMessage ?? "", /the bug-fix workflow has finished, so the test-writing workflow you queued is starting now/);
     assert.match(end.json?.hookSpecificOutput?.additionalContext ?? "", /"mmo:test", args "\[zero-touch policy=opus-plus-flash-v38 auth=estimated\]/, "the queued workflow carries the person's pick");

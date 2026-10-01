@@ -132,7 +132,7 @@ async function newAppRun(s, sid, { typed = false, outcome = "completed" } = {}) 
   }
   const dir = join(s.repo, ".sdlc", "runs", `gf-${sid}`);
   mkdirSync(dir, { recursive: true });
-  for (const [event, fields] of [["run.start", { mode: "greenfield" }], ["run.end", { outcome }]]) appendFileSync(join(dir, "orchestrator.log"), formatLine("info", event, { run_id: `gf-${sid}`, ...fields }) + "\n");
+  for (const [event, fields] of [["run.start", { mode: "greenfield" }], ["run.end", { outcome }], ...(outcome === "completed" ? [["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]] : [])]) appendFileSync(join(dir, "orchestrator.log"), formatLine("info", event, { run_id: `gf-${sid}`, ...fields }) + "\n");
   return hook("turn-end", { session_id: sid, cwd: s.repo, stop_hook_active: false }, s);
 }
 function emptyFolder() {

@@ -311,7 +311,7 @@ test("while a workflow runs zero-touch is quiet; once its own log shows the last
     try {
       await prompt(t, "g2", JOB);
       await skill(t, "g2", "mmo:bugfix", JOB);
-      workflowLog(t, "bf-2", ["run.start", {}], ["gate.open", { gate: "gate-1" }], ["gate.resolved", { gate: "gate-1", response: "approved" }], ["run.end", { outcome: "completed" }]);
+      workflowLog(t, "bf-2", ["run.start", {}], ["gate.open", { gate: "gate-1" }], ["gate.resolved", { gate: "gate-1", response: "approved" }], ["run.end", { outcome: "completed" }], ["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]);
       const r = await prompt(t, "g2", "what does the pricing module do?");
       assert.equal(context(r), "", "an ordinary message after the workflow gets nothing added for the model");
       assert.equal(r.stdout, "", "and nothing is shown: a question is ordinary chat (quiet by default)");
@@ -330,7 +330,7 @@ test("an abort at any gate ends the workflow; a typed command's run ends the sam
     // The typed line itself (the prompt hook alone decides a typed command; the expansion hook is not zero-touch's).
     await prompt(s, "a2", "/mmo:refactor extract the date helpers");
     assert.ok(pipeline(s, "a2"));
-    workflowLog(s, "rf-1", ["run.start", {}], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "approved" }], ["run.end", { outcome: "completed" }]);
+    workflowLog(s, "rf-1", ["run.start", {}], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "approved" }], ["run.end", { outcome: "completed" }], ["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]);
     assert.match(context(await prompt(s, "a2", JOB)), /"mmo:bugfix"/, "after a typed run has ended, routing works in that chat too");
   } finally { s.cleanup(); }
 });
@@ -338,7 +338,7 @@ test("an abort at any gate ends the workflow; a typed command's run ends the sam
 test("a workflow stopped before its run began keeps the chat quiet, and a run that ended before this chat's workflow started does not count", { skip: SKIP ?? false }, async () => {
   const s = sandbox("existing");
   try {
-    workflowLog(s, "old-1", ["run.start", {}], ["gate.open", { gate: "gate-1" }], ["gate.resolved", { gate: "gate-1", response: "approved" }], ["run.end", { outcome: "completed" }]);
+    workflowLog(s, "old-1", ["run.start", {}], ["gate.open", { gate: "gate-1" }], ["gate.resolved", { gate: "gate-1", response: "approved" }], ["run.end", { outcome: "completed" }], ["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]);
     await new Promise((r) => setTimeout(r, 20));
     await prompt(s, "n1", JOB);
     await skill(s, "n1", "mmo:bugfix", JOB);

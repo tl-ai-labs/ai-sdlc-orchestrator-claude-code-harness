@@ -473,7 +473,10 @@ test("the queued job starts when the running workflow ends; not started even whe
   try {
     const dir = await running(s, "q4");
     await midTurn(s, "q4", README);
-    appendFileSync(join(dir, "orchestrator.log"), formatLine("info", "run.end", { run_id: "bf-q4", outcome: "completed" }) + "\n");
+    // As mmo logs a finished run: run.end before its final report, then its final acceptance gate, answered.
+    for (const [event, fields] of [["run.end", { outcome: "completed" }], ["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]]) {
+      appendFileSync(join(dir, "orchestrator.log"), formatLine("info", event, { run_id: "bf-q4", ...fields }) + "\n");
+    }
     const end = await turnEnd(s, "q4");
     assert.match(line(end) ?? "", /the bug-fix workflow has finished, so the documentation workflow you queued is starting now/);
     assert.match(context(end), /Start it now with the Skill tool: skill "mmo:docs"/);

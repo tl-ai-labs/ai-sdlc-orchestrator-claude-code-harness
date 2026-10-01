@@ -41,7 +41,7 @@ import { appendEvent, setEventAgent } from "./lib/events.mjs";
 import { typedCommand, WORKFLOW_COMMANDS } from "./lib/commands.mjs";
 import { appendPrivate, ensureSessionDir, mmoHome, sessionDir } from "./lib/paths.mjs";
 import { onActiveChain, sentWhileWorking } from "./lib/transcript.mjs";
-import { RUN_ID, abortRun, workflowState } from "./lib/workflow-log.mjs";
+import { RUN_ID, abortRun, runStartMs, workflowState } from "./lib/workflow-log.mjs";
 import { stampedRunCheck } from "./lib/run-check.mjs";
 import { decideChatMode, dropChatMode } from "./lib/chat-mode.mjs";
 import { folderKind, isStopRequest, mentionsZeroTouch, requestLead, routeMessage } from "./lib/route.mjs";
@@ -296,6 +296,15 @@ function claimRun(ctx) {
   const id = RUN_ID_FLAG.exec(command)?.[2];
   const rec = pipelineRecord(ctx);
   if (!id || !RUN_ID.test(id) || !rec || rec.run_id === id) return;
+  // Only a run of this workflow: a run that started before this workflow did is an earlier workflow's, still logging
+  // its last steps (its final report and gate, often from a helper in the background), and is never claimed. The
+  // workflow's own run.start call claims a new run, and a reused id with it.
+  const startedMs = runStartMs(ctx.projectDir, id);
+  const sinceMs = Date.parse(rec.since ?? "");
+  if (!/--event=run\.start\b/.test(command) && startedMs !== null && Number.isFinite(sinceMs) && startedMs < sinceMs) {
+    appendEvent(ctx.sid, "session.run_not_claimed", { run_id: id, why: "an earlier workflow's run" });
+    return;
+  }
   setSessionMarker(ctx, "pipeline", JSON.stringify({ ...rec, run_id: id }));
   appendEvent(ctx.sid, "session.run_claimed", { run_id: id, by: ctx.agent ? "helper" : "chat" });
 }

@@ -177,3 +177,35 @@ test("workflowState: ended on the last gate answered, an abort, or a failed end;
     } finally { rmSync(d2, { recursive: true, force: true }); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a completed run is over at its answered final acceptance; one that never logs that gate, after a quiet stretch with nothing open", async () => {
+  const { workflowState, QUIET_MS } = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "workflow-log.mjs"));
+  const { formatLine } = await import(join(ROOT, "plugin", "scripts", "lib", "log.mjs"));
+  const dir = mkdtempSync(join(tmpdir(), "mmo-wflog-"));
+  try {
+    const log = (runId, ...lines) => {
+      const d = join(dir, ".sdlc", "runs", runId);
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, "orchestrator.log"), lines.map(([ev, f]) => formatLine("info", ev, { run_id: runId, ...f })).join("\n") + "\n", { flag: "a" });
+    };
+    const since = Date.now() - 1000;
+    // mmo's own order: run.end right before the final report, then the final acceptance gate.
+    log("d1", ["run.start", {}], ["gate.open", { gate: "gate-3" }], ["gate.resolved", { gate: "gate-3", response: "approved" }],
+      ["phase.start", { phase: "generate_final_report" }], ["run.end", { outcome: "completed" }]);
+    assert.equal(workflowState(dir, since).state, "running", "still writing its final report: not over at run.end");
+    assert.equal(workflowState(dir, since, null, Date.now() + QUIET_MS * 2).state, "running", "a phase still open is never over, however quiet");
+    log("d1", ["phase.end", { phase: "generate_final_report" }], ["gate.open", { gate: "gate-4" }]);
+    assert.deepEqual(workflowState(dir, since), { state: "running", runId: "d1", outcome: "completed", waiting: true }, "waiting for the final answer");
+    log("d1", ["gate.resolved", { gate: "gate-4", response: "approved" }]);
+    assert.deepEqual(workflowState(dir, since), { state: "ended", runId: "d1", outcome: "completed" });
+    // A run that never logs its final gate: over once nothing is open and its log has been quiet long enough.
+    const d2 = mkdtempSync(join(tmpdir(), "mmo-wflog-"));
+    try {
+      const d = join(d2, ".sdlc", "runs", "q1");
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, "orchestrator.log"), [["run.start", {}], ["run.end", { outcome: "completed" }]].map(([ev, f]) => formatLine("info", ev, { run_id: "q1", ...f })).join("\n") + "\n");
+      assert.equal(workflowState(d2, since).state, "running", "just ended: its final gate may still come");
+      assert.equal(workflowState(d2, since, null, Date.now() + QUIET_MS + 1000).state, "ended", "quiet with nothing open: over");
+    } finally { rmSync(d2, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
