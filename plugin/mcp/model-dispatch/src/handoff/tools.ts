@@ -464,6 +464,21 @@ async function repeatEdit(args: Record<string, unknown>, chat: ChatHandoff, ctx:
       check = `\`${form.check_command}\` passed in a scratch copy (${seconds(run)})`;
     }
 
+    // A file changed in the project while the hand-off ran (the person in their editor, another chat) is never written
+    // over (1 Oct 2026): the edits were made against the file as it was at the start. Nothing lands then, not even the
+    // other files: the check above ran on all the edits together, so landing only some of them would be a set nobody
+    // checked. A file that is gone counts as changed.
+    const stillAsBefore = (path: string) => { try { return readTarget(chat.projectDir, path) === results.get(path)!.before; } catch { return false; } };
+    const meanwhile = changed.map((c) => c.path).filter((path) => !stillAsBefore(path));
+    if (meanwhile.length) {
+      log("warn", "handoff.repeat", { status: "failed", targets: form.targets.length, changed_meanwhile: meanwhile.length, cost_usd: cost });
+      return receipt({
+        status: "failed", reason: `${meanwhile.join(", ")} changed while the hand-off ran`, routed_model: routedModel,
+        changed_meanwhile: meanwhile, would_change: changedPaths, unchanged, failed, cost_usd: cost,
+        next: `Nothing was changed in the project: ${meanwhile.join(", ")} changed while the hand-off ran, so nothing was written over. Read ${meanwhile.length === 1 ? "it" : "them"}, then make the change yourself where it is still needed.`,
+      });
+    }
+
     const id = changed.length ? recordLanding(chat.dir, chat.projectDir, { tool: "repeat_edit_across_files", files: changed }) : undefined;
     log("info", "handoff.repeat", { status: "landed", id, changed: changed.length, unchanged: unchanged.length, failed: failed.length, cost_usd: cost });
     return receipt({

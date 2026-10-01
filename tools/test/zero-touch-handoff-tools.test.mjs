@@ -245,3 +245,13 @@ test("a project not set up with git: the person reads the plain line, not the se
     assert.equal(line(await after(k, "g2", refused)), "Zero-touch: this can't be handed off here, because the test copy it needs only works in a project set up with git. So Opus 5 does it directly.", "documents are kept in the chat: no promise about them");
   } finally { k.cleanup(); }
 });
+
+test("a repeated change that found a file changed while it ran: the person reads that nothing was written over", async () => {
+  // 1 Oct 2026: the server lands nothing then (handoffTestsAndEdits.test.mjs); the line says why, in plain words.
+  const s = sandbox();
+  try {
+    await startOn(s, "m1");
+    const r = await after(s, "m1", { status: "failed", reason: "src/reports.js changed while the hand-off ran", changed_meanwhile: ["src/reports.js"], would_change: ["src/invoices.js", "src/reports.js"], cost_usd: 0.008 });
+    assert.equal(line(r), "Zero-touch: the change couldn't be repeated safely (1 file changed while it was running; cost: $0.0080), so nothing was changed. Opus 5 will make the change directly.");
+  } finally { s.cleanup(); }
+});

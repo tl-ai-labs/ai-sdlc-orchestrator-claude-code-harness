@@ -320,6 +320,32 @@ test("a target whose edits never pass is named back; the others land. A failing 
   } finally { s2.cleanup(); }
 });
 
+test("a file you change while the hand-off runs is never written over: nothing lands, and the hand-off says why", async () => {
+  // 1 Oct 2026: the edits are made against each file as it was when the hand-off started. A file someone changed in
+  // the meantime (the person in their editor, another chat) was written over. Now nothing lands: the project's check
+  // ran on all the edits together, so landing only the others would be a set nobody checked.
+  const s = sandbox();
+  try {
+    changeOnce(s);
+    const mine = "// my own edit, made while the hand-off ran\n";
+    const t = typists({
+      flash: (req) => {
+        if (req.unit.path === "src/reports.js") writeFileSync(join(s.repo, "src", "reports.js"), mine + readFileSync(join(s.repo, "src", "reports.js"), "utf8"));
+        return { answer: RENAME(req.unit.path) };
+      },
+    });
+    const r = await call(s, "repeat_edit_across_files", REPEAT_FORM(), t);
+    assert.equal(r.receipt.status, "failed", JSON.stringify(r.receipt));
+    assert.deepEqual(r.receipt.changed_meanwhile, ["src/reports.js"]);
+    assert.match(r.receipt.reason, /changed while the hand-off ran/);
+    assert.match(r.receipt.next, /Nothing was changed in the project/);
+    assert.ok(readFileSync(join(s.repo, "src", "reports.js"), "utf8").startsWith(mine), "your edit is kept");
+    assert.match(readFileSync(join(s.repo, "src", "reports.js"), "utf8"), /getUser\(id\)/, "and the hand-off's edits are not in it");
+    assert.match(readFileSync(join(s.repo, "src", "invoices.js"), "utf8"), /getUser\(id\)/, "the other file is untouched too: all or nothing");
+    assert.equal(r.receipt.id, undefined, "no landing to undo");
+  } finally { s.cleanup(); }
+});
+
 test("a file that needs no change is reported unchanged, not failed", async () => {
   const s = sandbox();
   try {

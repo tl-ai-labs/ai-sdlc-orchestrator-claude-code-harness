@@ -369,7 +369,9 @@ export function receiptLine(receipt, chat, { documentsHandedOff = false } = {}) 
     return `${LABEL} the hand-off of ${receipt.file} didn't work (cost so far: ${cost}), and nothing was added to your project. ${Me} will write it directly now.`;
   }
   if (receipt.status === "failed") {
-    const why = typeof receipt.output === "string" ? "your project's check failed on the test copy" : "it couldn't be handed off";
+    // A file changed while the hand-off ran is never written over (1 Oct 2026): said in those words.
+    const meanwhile = Array.isArray(receipt.changed_meanwhile) && receipt.changed_meanwhile.length;
+    const why = meanwhile ? `${count(receipt.changed_meanwhile.length, "file")} changed while it was running` : typeof receipt.output === "string" ? "your project's check failed on the test copy" : "it couldn't be handed off";
     return `${LABEL} the change couldn't be repeated safely (${why}; cost: ${cost}), so nothing was changed. ${Me} will make the change directly.`;
   }
   if (receipt.status === "undone" && Array.isArray(receipt.restored)) {
