@@ -109,7 +109,9 @@ test("both tools are listed with their forms, and the undo", () => {
   assert.deepEqual(Object.keys(byName).sort(), ["repeat_edit_across_files", "undo_hand_off", "write_document", "write_tests_from_cases"]);
   assert.deepEqual([...byName.write_tests_from_cases.inputSchema.required].sort(), ["cases", "file", "functions", "target", "test_command"]);
   assert.deepEqual([...byName.repeat_edit_across_files.inputSchema.required].sort(), ["change", "example", "targets"]);
-  assert.deepEqual([...byName.undo_hand_off.inputSchema.required], ["id"]);
+  // The file or the id: the person can name the file instead of a code they cannot know.
+  assert.equal(byName.undo_hand_off.inputSchema.required, undefined);
+  assert.ok(byName.undo_hand_off.inputSchema.properties.file && byName.undo_hand_off.inputSchema.properties.id);
   for (const t of HANDOFF_TOOLS) assert.ok(t.inputSchema.properties._mmo, `${t.name} takes the hook's stamp`);
 });
 
@@ -165,10 +167,21 @@ test("a test file that passes in a scratch copy is written; the receipt says wha
     assert.equal(r.receipt.status, "written", JSON.stringify(r.receipt));
     assert.equal(r.receipt.file, "tests/cart.test.js");
     assert.equal(r.receipt.written_by, "gemini-3.8-flash");
-    assert.equal(r.receipt.id, "h1");
+    assert.match(r.receipt.id, /^h[abcdefghjkmnpqrstuvwxyz23456789]{4}$/);
     assert.match(r.receipt.checked.join("; "), /3 cases present/);
     assert.match(r.receipt.checked.join("; "), /`node --test tests\/cart\.test\.js` passed in a scratch copy/);
     assert.equal(readFileSync(join(s.repo, "tests", "cart.test.js"), "utf8"), TEST_FILE());
+    // Claude is told who wrote it, so it does not say "I've written".
+    assert.match(r.receipt.next, /When you tell the person, say that Flash 3\.8 wrote it, not you\./);
+    // Undo by the file the person names: its latest hand-off is taken back.
+    const undone = await call(s, "undo_hand_off", { file: "tests/cart.test.js" }, t);
+    assert.equal(undone.receipt.status, "undone", JSON.stringify(undone.receipt));
+    assert.equal(undone.receipt.id, r.receipt.id);
+    assert.equal(existsSync(join(s.repo, "tests", "cart.test.js")), false, "a file the hand-off created is removed");
+    const none = await call(s, "undo_hand_off", { file: "tests/cart.test.js" }, t);
+    assert.equal(none.receipt.status, "refused");
+    assert.equal(none.receipt.cause, "no-id");
+    assert.equal(none.receipt.file, "tests/cart.test.js");
     const req = r.flash.calls[0];
     assert.equal(req.packet.phase, "tests");
     assert.deepEqual(req.packet.inputs.map((i) => i.path), ["src/cart.js", "tests/users.test.js"], "the code under test and the style file travel with the brief");
@@ -183,6 +196,7 @@ test("a failing test goes back with the run's output; a file missing a case is r
     const r = await call(s, "write_tests_from_cases", TESTS_FORM(), t);
     assert.equal(r.receipt.status, "written");
     assert.equal(r.receipt.written_by, "claude-opus-5");
+    assert.match(r.receipt.next, /say that the hand-off to Flash 3\.8 failed twice, so Opus 5 wrote it/, "the truth when the chat's own model wrote it");
     assert.match(r.flash.calls[1].packet.instruction, /the case "total of no items is zero" has no test with that name/);
     assert.match(r.opus.calls[0].packet.instruction, /the test command failed in a scratch copy of the project/);
     assert.match(r.opus.calls[0].packet.instruction, /5 !== 6|Expected values to be strictly equal/, "the run's own output is what the next attempt reads");
@@ -225,7 +239,7 @@ const RENAME = (path) => ({ path, edits: [{ search: 'import { getUser } from "./
 test("the repeat form: the example must really be changed, every target a file of the project", () => {
   const s = sandbox();
   try {
-    assert.match((checkRepeatForm(REPEAT_FORM(), s.repo).problems ?? []).join("\n"), /example src\/orders\.js has no change since the last commit: make the change in it first/);
+    assert.match((checkRepeatForm(REPEAT_FORM(), s.repo).problems ?? []).join("\n"), /example src\/orders\.js has no change to repeat: make the change in it first/);
     changeOnce(s);
     const ok = checkRepeatForm(REPEAT_FORM(), s.repo);
     assert.ok(ok.form, (ok.problems ?? []).join("\n"));
@@ -269,7 +283,7 @@ test("the change is repeated in every target, checked in a scratch copy, then wr
     assert.deepEqual(r.receipt.changed, ["src/invoices.js", "src/reports.js"]);
     assert.deepEqual(r.receipt.failed, []);
     assert.match(r.receipt.check, /`node scripts\/check-imports\.mjs` passed in a scratch copy/);
-    assert.equal(r.receipt.id, "h1");
+    assert.match(r.receipt.id, /^h[abcdefghjkmnpqrstuvwxyz23456789]{4}$/);
     assert.equal(r.receipt.cost_usd, 0.008);
     assert.match(readFileSync(join(s.repo, "src", "invoices.js"), "utf8"), /fetchUser\(id\)/);
     assert.equal(r.flash.calls.length, 2, "one job per target");
@@ -280,11 +294,12 @@ test("the change is repeated in every target, checked in a scratch copy, then wr
     assert.match(req.shared, /\+import \{ fetchUser \}/, "the example's change is shown to every job, in the block they share");
     assert.equal(req.packet.inputs[0].content, USES(req.unit.path.replace(/^src\/|\.js$/g, "")), "the target's current text travels with its job");
 
-    const undone = await call(s, "undo_hand_off", { id: "h1" });
+    const undone = await call(s, "undo_hand_off", { id: r.receipt.id });
     assert.equal(undone.receipt.status, "undone");
     assert.deepEqual(undone.receipt.restored.sort(), ["src/invoices.js", "src/reports.js"]);
     assert.match(readFileSync(join(s.repo, "src", "invoices.js"), "utf8"), /getUser\(id\)/);
-    assert.match((await call(s, "undo_hand_off", { id: "h1" })).receipt.reason, /already undone/);
+    const again = (await call(s, "undo_hand_off", { id: r.receipt.id })).receipt;
+    assert.deepEqual([again.status, again.cause], ["refused", "already-undone"]);
   } finally { s.cleanup(); }
 });
 
@@ -321,8 +336,8 @@ test("a target whose edits never pass is named back; the others land. A failing 
 });
 
 test("a file you change while the hand-off runs is never written over: nothing lands, and the hand-off says why", async () => {
-  // 1 Oct 2026: the edits are made against each file as it was when the hand-off started. A file someone changed in
-  // the meantime (the person in their editor, another chat) was written over. Now nothing lands: the project's check
+  // The edits are made against each file as it was when the hand-off started, so a file someone changed in the
+  // meantime (the person in their editor, another chat) is never written over. Nothing lands: the project's check
   // ran on all the edits together, so landing only the others would be a set nobody checked.
   const s = sandbox();
   try {
@@ -371,5 +386,145 @@ test("a project that is not a git repository: the hand-off is refused with the r
     assert.equal(r.receipt.cause, "no-git", "a fixed code, so the person's line is the plain one, not this reason");
     assert.equal(r.flash.calls.length, 0);
     assert.deepEqual(JSON.parse(readFileSync(join(s.session, "handoff_released.json"), "utf8")), ["tests/cart.test.js"], "the chat's model may write the test file itself");
+  } finally { s.cleanup(); }
+});
+
+// ─── hand-off safety ────────────────────────────────────────────────────
+
+test("a test file that appeared while its hand-off ran is never written over, nor handed back to be overwritten", async () => {
+  const s = sandbox();
+  try {
+    const t = typists({ flash: (req) => {
+      writeFileSync(join(s.repo, "tests", "cart.test.js"), "// someone else's file\n");
+      return { answer: { path: req.unit.path, content: TEST_FILE() } };
+    } });
+    const r = await call(s, "write_tests_from_cases", TESTS_FORM(), t);
+    assert.deepEqual([r.receipt.status, r.receipt.cause], ["failed", "appeared"], JSON.stringify(r.receipt));
+    assert.equal(r.receipt.output, undefined, "no test output: nothing failed");
+    assert.match(r.receipt.next, /Do not overwrite it/);
+    assert.equal(readFileSync(join(s.repo, "tests", "cart.test.js"), "utf8"), "// someone else's file\n");
+    assert.ok(!existsSync(join(s.session, "handoff_released.json")), "not handed back to be written over");
+  } finally { s.cleanup(); }
+});
+
+test("a hand-off the person stopped lands nothing, hands its file back, and leaves the person a line for their next message", async () => {
+  const s = sandbox();
+  try {
+    const stop = new AbortController();
+    const t = typists({ flash: (req) => { stop.abort(); return { answer: { path: req.unit.path, content: TEST_FILE() } }; } });
+    const r = await handleHandoffTool("write_tests_from_cases", { ...TESTS_FORM(), _mmo: { session_id: "chat1", project_dir: s.repo, auth: "estimated" } }, { env: s.env, overrides: {}, typistFor: t.typistFor, sleep: async () => {}, random: () => 0.5, signal: stop.signal });
+    const receipt = JSON.parse(r.content[0].text);
+    assert.equal(receipt.status, "stopped", JSON.stringify(receipt));
+    assert.ok(!existsSync(join(s.repo, "tests", "cart.test.js")), "nothing lands after a stop");
+    assert.deepEqual(JSON.parse(readFileSync(join(s.session, "handoff_released.json"), "utf8")), ["tests/cart.test.js"]);
+    const said = JSON.parse(readFileSync(join(s.session, "handoff_stopped.json"), "utf8"));
+    assert.deepEqual(said.map((e) => e.files), [["tests/cart.test.js"]]);
+    assert.equal(t.built.flash.calls.length, 1, "no further attempt after the stop");
+  } finally { s.cleanup(); }
+});
+
+test("a call the hook marked as interrupted lands nothing, even when the server was never told of the cancel", async () => {
+  const s = sandbox();
+  try {
+    writeFileSync(join(s.session, "handoff_interrupted.json"), JSON.stringify(["tu-9"]));
+    const t = typists({ flash: (req) => ({ answer: { path: req.unit.path, content: TEST_FILE() } }) });
+    const r = await handleHandoffTool("write_tests_from_cases", { ...TESTS_FORM(), _mmo: { session_id: "chat1", project_dir: s.repo, auth: "estimated", tool_use_id: "tu-9" } }, { env: s.env, overrides: {}, typistFor: t.typistFor, sleep: async () => {}, random: () => 0.5 });
+    assert.equal(JSON.parse(r.content[0].text).status, "stopped");
+    assert.ok(!existsSync(join(s.repo, "tests", "cart.test.js")));
+    // Another call id is not stopped.
+    const other = await handleHandoffTool("write_tests_from_cases", { ...TESTS_FORM(), _mmo: { session_id: "chat1", project_dir: s.repo, auth: "estimated", tool_use_id: "tu-10" } }, { env: s.env, overrides: {}, typistFor: t.typistFor, sleep: async () => {}, random: () => 0.5 });
+    assert.equal(JSON.parse(other.content[0].text).status, "written");
+  } finally { s.cleanup(); }
+});
+
+test("a regression test written before the fix lands when it fails on its own cases, and only then", async () => {
+  const s = sandbox();
+  try {
+    const form = TESTS_FORM({ fails_until_fixed: true });
+    // The code is right for these cases, so a truthful test passes: refused, because it shows no bug.
+    let r = await call(s, "write_tests_from_cases", form, typists({ flash: (req) => ({ answer: { path: req.unit.path, content: TEST_FILE() } }) }));
+    assert.equal(r.receipt.status, "failed");
+    // A test that asserts the expected result the code does not give yet fails on its case: written.
+    r = await call(s, "write_tests_from_cases", form, typists({ flash: (req) => ({ answer: { path: req.unit.path, content: TEST_FILE(6) } }) }));
+    assert.equal(r.receipt.status, "written", JSON.stringify(r.receipt));
+    assert.equal(r.receipt.fails_until_fixed, true);
+    assert.match(r.receipt.checked.join("; "), /failed in a scratch copy, as expected before the fix, naming: total adds the prices/);
+    assert.match(r.receipt.next, /Its tests fail until you fix src\/cart\.js/);
+    assert.match(r.flash.calls[0].packet.instruction, /written BEFORE the bug they show is fixed/);
+    // A file that does not even load names no case: refused.
+    rmSync(join(s.repo, "tests", "cart.test.js"));
+    r = await call(s, "write_tests_from_cases", form, typists({ flash: (req) => ({ answer: { path: req.unit.path, content: "this is not javascript (\n// total adds the prices total of no items is zero isEmpty is true for no items\n" } }) }));
+    assert.notEqual(r.receipt.status, "written");
+  } finally { s.cleanup(); }
+});
+
+test("a form refused twice for the same new file hands it back, and so does a command whose program is missing", async () => {
+  const s = sandbox();
+  try {
+    const bad = TESTS_FORM({ functions: ["nope"] });
+    let r = await call(s, "write_tests_from_cases", bad);
+    assert.equal(r.receipt.handed_back, undefined);
+    assert.match(r.receipt.next, /Fix these in the form/);
+    r = await call(s, "write_tests_from_cases", bad);
+    assert.equal(r.receipt.handed_back, "tests/cart.test.js");
+    assert.match(r.receipt.next, /write tests\/cart\.test\.js yourself/);
+    assert.deepEqual(JSON.parse(readFileSync(join(s.session, "handoff_released.json"), "utf8")), ["tests/cart.test.js"]);
+    r = await call(s, "write_tests_from_cases", TESTS_FORM({ file: "tests/other.test.js", test_command: "no-such-program-zt tests/other.test.js" }));
+    assert.equal(r.receipt.handed_back, "tests/other.test.js", "a missing program is not the form's to fix: handed back at once");
+  } finally { s.cleanup(); }
+});
+
+test("a repeated change copies only the chat's own edit, never the person's uncommitted work in the example", () => {
+  const s = sandbox();
+  try {
+    // The person's own unsaved work in the example, then the chat's edit; the hook kept the file as it was before it.
+    const personal = USES("orders").replace("return user.name;", "// TODO(person): wip debugging\n  console.log(user);\n  return user.name;");
+    writeFileSync(join(s.repo, "src", "orders.js"), personal);
+    const before = join(s.dir, "before-orders.js");
+    writeFileSync(before, personal);
+    writeFileSync(join(s.repo, "src", "orders.js"), personal.replaceAll("getUser", "fetchUser"));
+    const ok = checkRepeatForm(REPEAT_FORM(), s.repo, { before: (p) => (p === "src/orders.js" ? before : join(s.dir, "none")) });
+    assert.ok(ok.form, (ok.problems ?? []).join("\n"));
+    // The person's lines may show as unchanged context; they are never a line the change adds or removes.
+    const changes = ok.form.diff.split("\n").filter((l) => /^[+-](?![+-]{2} )/.test(l));
+    assert.ok(changes.length && !changes.some((l) => /wip debugging|console\.log/.test(l)), changes.join("\n"));
+    assert.match(ok.form.diff, /^--- a\/src\/orders\.js$/m, "the pattern names the example");
+    assert.match(ok.form.diff, /-import \{ getUser \}[\s\S]*\+import \{ fetchUser \}/);
+    // Without the kept text, the change since the last commit (and it carries the person's lines).
+    assert.match(checkRepeatForm(REPEAT_FORM(), s.repo).form.diff, /^\+.*wip debugging/m);
+  } finally { s.cleanup(); }
+});
+
+test("a repeated change in a project without git is refused for git first, never sent round the form", async () => {
+  const s = sandbox();
+  try {
+    rmSync(join(s.repo, ".git"), { recursive: true, force: true });
+    const r = await call(s, "repeat_edit_across_files", REPEAT_FORM());
+    assert.deepEqual([r.receipt.status, r.receipt.cause], ["refused", "no-git"], JSON.stringify(r.receipt));
+    assert.equal(r.receipt.problems, undefined, "no form problems: nothing for the chat's model to fix");
+  } finally { s.cleanup(); }
+});
+
+test("a kept copy from before a commit never carries the old, committed edit into the pattern", () => {
+  // The text kept before the chat's first edit of a file can be reused turns later, after the person committed that
+  // edit; a new repeated change must then not send the typist the old edit too, or the check would let matching
+  // deletions through. Of the two differences (since the kept copy, since the last commit), the smaller is the change
+  // to repeat.
+  const s = sandbox();
+  try {
+    const file = join(s.repo, "src", "orders.js");
+    const original = readFileSync(file, "utf8");
+    const before = join(s.dir, "before-orders.js");
+    writeFileSync(before, original); // kept before the chat's first edit, long ago
+    // That first edit (a debug line removed, here: a comment added) was committed by the person.
+    writeFileSync(file, `// orders, reviewed\n${original}`);
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "reviewed"], { cwd: s.repo });
+    // Many turns later, the chat's new edit: the rename to repeat.
+    writeFileSync(file, `// orders, reviewed\n${original}`.replaceAll("getUser", "fetchUser"));
+    const ok = checkRepeatForm(REPEAT_FORM(), s.repo, { before: (p) => (p === "src/orders.js" ? before : join(s.dir, "none")) });
+    assert.ok(ok.form, (ok.problems ?? []).join("\n"));
+    const changes = ok.form.diff.split("\n").filter((l) => /^[+-](?![+-]{2} )/.test(l));
+    assert.ok(!changes.some((l) => /orders, reviewed/.test(l)), `the committed edit is not part of the change:\n${changes.join("\n")}`);
+    assert.ok(changes.some((l) => /fetchUser/.test(l)));
   } finally { s.cleanup(); }
 });

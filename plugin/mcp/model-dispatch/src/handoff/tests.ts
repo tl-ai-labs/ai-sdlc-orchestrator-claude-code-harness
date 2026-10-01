@@ -33,6 +33,11 @@ export interface TestsForm {
   test_command: string;
   /** Anything else the typist must know (one line). */
   notes?: string;
+  /**
+   * A regression test written before the fix of the bug it shows: the file must fail now, on its own cases, and is
+   * written for the chat's model to make pass with its fix.
+   */
+  fails_until_fixed?: boolean;
 }
 
 /** Whether `name` stands in `text` as a whole name, not as a piece of a longer one. */
@@ -83,9 +88,11 @@ export function checkTestsForm(raw: unknown, projectDir: string): { form: TestsF
   }
   const command = f.command(a.test_command, "test_command", projectDir);
   const notes = a.notes === undefined || a.notes === "" ? undefined : f.line(a.notes, "notes") ?? undefined;
+  if (a.fails_until_fixed !== undefined && typeof a.fails_until_fixed !== "boolean") f.add("fails_until_fixed is true or false");
+  const failing = a.fails_until_fixed === true;
 
   if (f.problems.length || !file || !target || !command) return { problems: f.problems };
-  return { form: { file, target, functions, cases, ...(style ? { style_from: style } : {}), test_command: command, ...(notes ? { notes } : {}) } };
+  return { form: { file, target, functions, cases, ...(style ? { style_from: style } : {}), test_command: command, ...(notes ? { notes } : {}), ...(failing ? { fails_until_fixed: true } : {}) } };
 }
 
 /** The block every tests brief starts with. */
@@ -111,6 +118,7 @@ export function renderTestsInstruction(form: TestsForm, refusal?: string): strin
     `- test command: ${form.test_command}`,
     ...(form.style_from ? [`- style: follow ${form.style_from}, whose text is under Inputs`] : []),
     ...(form.notes ? [`- note: ${form.notes}`] : []),
+    ...(form.fails_until_fixed ? ["- these tests are written BEFORE the bug they show is fixed: the code under test is expected to fail them now. Write each case's assertion exactly as expected; do not make the tests pass against the current code."] : []),
     "",
     "## Cases, one test each",
     ...form.cases.map((c, i) => `${i + 1}. ${c.name} — given: ${c.given} → expect: ${c.expect}`),

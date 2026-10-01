@@ -1,11 +1,11 @@
 /**
  * Zero-touch's four hand-off tools are listed only where a Hand-off chat can use them (src/handoff/listing.ts).
  *
- * Why (1 Oct 2026): their descriptions are about 1,600 tokens, given to the model with every message in every chat
- * where the mmo plugin is on, also for people who never installed zero-touch. Claude Code does not tell a server which
- * chat it serves, so the rule reads what Claude Code and zero-touch keep on disk; when in doubt it lists them (the old
- * behaviour). A saved mode that later becomes Hand-off adds them while the server runs, and Claude Code is told
- * (notifications/tools/list_changed; probed live on Claude Code 2.1.286: it lists the tools again at once).
+ * Why: their descriptions are about 1,600 tokens, given to the model with every message in every chat where the mmo
+ * plugin is on, also for people who never installed zero-touch. Claude Code does not tell a server which chat it
+ * serves, so the rule reads what Claude Code and zero-touch keep on disk; when in doubt it lists them. A saved mode
+ * that later becomes Hand-off adds them while the server runs, and Claude Code is told
+ * (notifications/tools/list_changed; Claude Code then lists the tools again at once).
  *
  * Offline: temporary folders; the last test runs the built server.
  */
@@ -39,7 +39,8 @@ function machine({ installed = { "mmo@m": [{}], "zero-touch@m": [{}] }, user = {
   const save = (value) => { mkdirSync(data, { recursive: true }); const tmp = settingsFile + ".tmp"; writeFileSync(tmp, typeof value === "string" ? value : JSON.stringify(value)); renameSync(tmp, settingsFile); };
   if (saved !== undefined) save(saved);
   if (raw !== undefined) save(raw);
-  const env = { HOME: dir, CLAUDE_CONFIG_DIR: config, CLAUDE_PROJECT_DIR: repo, MMO_MANAGED_SETTINGS: managedFile };
+  // MMO_HOME inside the sandbox: the listing reads the chats' hand-off records, so it reads these, never the real ones.
+  const env = { HOME: dir, CLAUDE_CONFIG_DIR: config, CLAUDE_PROJECT_DIR: repo, MMO_MANAGED_SETTINGS: managedFile, MMO_HOME: join(dir, ".mmo-ambient") };
   return { dir, env, save, settingsFile, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 function decide(opts) {
@@ -71,11 +72,13 @@ test("Workflows or Off saved: not listed, and the settings file is watched for a
   }
 });
 
-test("when in doubt, listed: the old behaviour is the worst case", () => {
-  assert.equal(decide({ installed: "none" }).reason, "unreadable", "no record of installed plugins");
-  assert.equal(decide({ installed: "garbage" }).reason, "unreadable");
-  assert.equal(decide({ raw: "{ half" }).reason, "unreadable", "a settings file that cannot be read");
-  assert.equal(decide({ saved: { mode: "something-new" } }).reason, "unreadable", "a mode this server does not know");
+test("when in doubt about the install, listed where zero-touch has run; a setup without it lists nothing", () => {
+  // A developer's clone or --plugin-dir setup without zero-touch lists none of the four tools.
+  assert.deepEqual(decide({ installed: "none" }), { list: false, reason: "no-zero-touch", watch: [] }, "no record and no zero-touch data folder");
+  assert.equal(decide({ installed: "garbage" }).list, false);
+  // Zero-touch has a data folder here (it has run): when in doubt, listed.
+  assert.equal(decide({ installed: "none", saved: { version: 1, mode: "workflows" } }).reason, "unreadable", "no record of installed plugins");
+  assert.equal(decide({ installed: "garbage", saved: { version: 1, mode: "workflows" } }).list, true);
   assert.deepEqual(handoffListing({ MMO_HANDOFF_TOOLS: "on" }), { list: true, reason: "override", watch: [] });
   assert.deepEqual(handoffListing({ MMO_HANDOFF_TOOLS: "off" }), { list: false, reason: "override", watch: [] });
   assert.equal(dataFolderName("zero-touch@tilicho-ai-labs"), "zero-touch-tilicho-ai-labs", "the folder name Claude Code uses (seen on disk)");
@@ -114,4 +117,57 @@ test("the real server: hidden while Workflows is saved; saving Hand-off adds the
     const after = await names();
     assert.deepEqual(HANDOFF.filter((t) => after.includes(t)), HANDOFF, "now all four are listed");
   } finally { p.kill(); m.cleanup(); }
+});
+
+test("settings zero-touch cannot use follow zero-touch's fail-safe rule: the last good save decides, else Off, not listed", () => {
+  // zero-touch switches nothing on from a file it cannot use (a damaged file, a mode it does not know); it falls back
+  // to its last good save, else it is Off, so listing the tools there would cost every chat their 1,600 tokens for a
+  // mode no chat can be in.
+  for (const [what, opts] of [["a file that cannot be read", { raw: "{ half" }], ["a mode zero-touch does not know", { saved: { mode: "OFF" } }]]) {
+    const m = machine(opts);
+    try {
+      const d = handoffListing(m.env);
+      assert.deepEqual([d.list, d.reason], [false, "unreadable-off"], `${what}, no last good save: Off`);
+      assert.deepEqual(d.watch, [m.settingsFile], `${what}: watched, so choosing Hand-off later adds the tools`);
+      writeFileSync(join(dirname(m.settingsFile), "settings.last-good.json"), JSON.stringify({ mode: "handoff" }));
+      assert.deepEqual([handoffListing(m.env).list, handoffListing(m.env).reason], [true, "handoff"], `${what}, last good save Hand-off: listed`);
+      writeFileSync(join(dirname(m.settingsFile), "settings.last-good.json"), JSON.stringify({ mode: "workflows" }));
+      assert.equal(handoffListing(m.env).list, false, `${what}, last good save Workflows: not listed`);
+    } finally { m.cleanup(); }
+  }
+});
+
+test("Hand-off saved with every kind of work kept in the chat: the undo alone is listed, and handing a kind off lists all four", () => {
+  const kept = { documents: "chat", tests: "chat", repeats: "chat" };
+  const m = machine({ saved: { version: 1, mode: "handoff", handoff: kept } });
+  try {
+    assert.deepEqual(handoffListing(m.env), { list: true, only: ["undo_hand_off"], reason: "handoff-all-kept", watch: [m.settingsFile] });
+    m.save({ version: 1, mode: "handoff", handoff: { ...kept, tests: "flash" } });
+    assert.deepEqual(handoffListing(m.env), { list: true, reason: "handoff", watch: [] });
+  } finally { m.cleanup(); }
+  // A value left out takes zero-touch's standard typist (Flash 3.8), so it is not kept in the chat.
+  assert.deepEqual(decide({ saved: { version: 1, mode: "handoff", handoff: { documents: "chat", tests: "chat" } } }), { list: true, reason: "handoff", watch: [] });
+});
+
+// "To undo it, ask Claude to undo hand-off h…" keeps working after the person leaves Hand-off mode: the undo is listed
+// and accepted outside a Hand-off chat.
+test("after leaving Hand-off mode the undo alone is listed while a hand-off is not undone, and the server accepts it from any chat", async () => {
+  const { readChatHandoff } = await import(join(ROOT, "dist", "handoff", "chat.js"));
+  const m = machine({ saved: { version: 1, mode: "workflows" } });
+  try {
+    assert.equal(handoffListing(m.env).reason, "other-mode", "no hand-off was ever made: nothing listed");
+    const chat = join(m.dir, ".mmo-ambient", "sessions", "c1");
+    mkdirSync(chat, { recursive: true });
+    writeFileSync(join(chat, "handoff_landings.json"), JSON.stringify([{ id: "habcd", tool: "write_document", files: [{ path: "docs/x.md", existed: false, sha256: "x" }] }]));
+    assert.deepEqual(handoffListing(m.env), { list: true, only: ["undo_hand_off"], reason: "undo-after-handoff", watch: [join(m.env.CLAUDE_CONFIG_DIR, "plugins", "data", dataFolderName("zero-touch@m"), "settings.json")] });
+    writeFileSync(join(chat, "handoff_landings.json"), JSON.stringify([{ id: "habcd", tool: "write_document", undone: true, files: [] }]));
+    assert.equal(handoffListing(m.env).list, false, "every hand-off undone: nothing listed");
+    // A chat that is not a Hand-off chat (no record at all): an undo is accepted, a hand-off is not.
+    const repo = m.env.CLAUDE_PROJECT_DIR;
+    const stamp = { session_id: "w9", project_dir: repo, auth: "estimated" };
+    const undo = readChatHandoff(stamp, m.env, { needRoutes: false });
+    assert.equal(undo.refused, undefined, `an undo from any chat: ${undo.refused}`);
+    assert.equal(undo.projectDir, repo);
+    assert.match(readChatHandoff(stamp, m.env).refused ?? "", /not a hand-off chat/, "a hand-off still needs a Hand-off chat");
+  } finally { m.cleanup(); }
 });

@@ -10,13 +10,6 @@ experimental:
 # Effort is pinned, the same in every run: a helper otherwise inherits the launching session's
 # effort, so a launch flag or setting could change its thinking in one run only.
 effort: high
-# The model is pinned as well, and for the same reason, plus one more: the policy prices this
-# work as that model. Claude Code (2.1.251 and later) gives this line priority over the
-# CLAUDE_CODE_SUBAGENT_MODEL setting and over the chat's own model, so nobody has to set anything
-# and a chat switched to another model cannot move it (checked live in the desktop app).
-# The run-start check (scripts/driver-model-check.mjs) stops a policy whose judgment model is not
-# this one, so the report can never price a model that did not run (the PR #34 defect).
-model: claude-opus-5
 ---
 
 You are the orchestrator for a multi-model AI-SDLC workflow. Your job is to take a single product brief and drive the entire SDLC — requirements → design → codegen → tests → senior review → security review → final report — autonomously, with three human approval gates along the way.
@@ -129,11 +122,10 @@ below still applies.
    this run can call it. Say nothing about it unless asked.
 
    **Under `estimated`, pre-flight has a second mandatory step: the driver-model check.** Your own
-   tier runs in this session as the five driver subagents, and they run on the model named in
-   their agent files (`model: claude-opus-5`; Claude Code gives that line priority over any
-   setting and over the chat's own model) — the policy's driver `model_name` only prices that
-   work. If the two disagree, every driver dollar in the report is attributed to a model that
-   never ran. So before phase 1, run:
+   tier runs in this session as the five driver subagents, and Claude Code decides their execution
+   model from the `CLAUDE_CODE_SUBAGENT_MODEL` environment variable — the policy's driver
+   `model_name` only prices that work. If the two disagree, every driver dollar in the report is
+   attributed to a model that never ran. So before phase 1, run:
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/driver-model-check.mjs" --project-root "$(pwd)"
@@ -142,10 +134,13 @@ below still applies.
    passing the run's policy the same way `preflight_dispatch` received it (`--policy=<name>` for a
    named policy, `--policy-path=<file>` for an explicit file; a repo-local `routing-policy.yaml`
    resolves via `--project-root` alone). On non-zero exit, print the script's output verbatim and
-   STOP. Do not try to repair it in-session: the fix is the person's choice (a policy whose
-   judgment model is the one the agent files name, or `--auth=vendor`), and the script's output
-   says which. Under `vendor` skip this check: every call, your own tier included, dispatches
-   through the server, so the agent files' model cannot misprice anything.
+   STOP. Do not try to repair it in-session: the variable must be set before the `claude`
+   process launches, and a Bash `export` here runs in a child shell that cannot reach it — the
+   script's output already says where to set it (from a terminal, an export or the project's
+   `.claude/settings.local.json`; from the desktop app, `~/.claude/settings.json`) and gives the
+   relaunch instruction. Under
+   `vendor` skip this check: every call, your own tier included, dispatches through the server, so
+   the env var cannot misprice anything.
 1. **Read the brief first.** Confirm scope; if anything is ambiguous, surface it before starting.
 2. **Output paths — two directories, both supplied by the invoking command.**
    - **`code_dir`** — the generated application: source, tests, `package.json`, README. `/mmo:greenfield`
@@ -224,7 +219,7 @@ below still applies.
 
    **Vendor-authoritative mode (`vendor`)** — `ANTHROPIC_API_KEY` MUST also be set; if it is not, abort with: "vendor mode requires ANTHROPIC_API_KEY — export it, or rerun in estimated mode." Dispatch **every** LLM call, including your own tier's calls, via `execute_with_model`. The MCP server hits the vendor API directly and records real vendor-reported `input_tokens`, `input_tokens_cached`, and `output_tokens` on the event. The server prices those vendor tokens into `cost_usd` itself, at the dated price list's rate for the model (the policy's `pricing` block only when the model sets `pricing_override: true`); you never compute or edit that figure. Every event's `provenance` field MUST be `"vendor"` — the MCP server stamps this on every dispatched event itself, so you never write it for `execute_with_model` calls.
 
-   **Estimator mode (`estimated`)** — dispatch mechanical-tier calls via MCP as usual (those events still carry vendor tokens and `provenance: "vendor"`). For your own direct-tier calls, use the character-count heuristic (≈3.8 chars/token) for tokens, take rates from that model's `effective_price.rates` in the `load_policy` result (see **Rates you apply yourself** below), and call `log_telemetry` with `provenance: "estimated"` on the event (the server also defaults an omitted stamp to `"estimated"` on this path, so a forgotten field can no longer make the report disown the run as "unknown"). `ANTHROPIC_API_KEY` is deliberately ignored in this mode even if set — the user chose estimated numbers, so estimated is what is emitted. What model that direct-tier work *executes* on is the one the driver agent files name (`model: claude-opus-5`), and rule 0's driver-model check confirms it is the policy's judgment model, so the model being priced and the model doing the work are the same one. (An unchecked pin, `model: opus`, once silently overrode the policy; the check is what closes that.)
+   **Estimator mode (`estimated`)** — dispatch mechanical-tier calls via MCP as usual (those events still carry vendor tokens and `provenance: "vendor"`). For your own direct-tier calls, use the character-count heuristic (≈3.8 chars/token) for tokens, take rates from that model's `effective_price.rates` in the `load_policy` result (see **Rates you apply yourself** below), and call `log_telemetry` with `provenance: "estimated"` on the event (the server also defaults an omitted stamp to `"estimated"` on this path, so a forgotten field can no longer make the report disown the run as "unknown"). `ANTHROPIC_API_KEY` is deliberately ignored in this mode even if set — the user chose estimated numbers, so estimated is what is emitted. What model that direct-tier work *executes* on is `CLAUDE_CODE_SUBAGENT_MODEL` — exported at launch, verified by rule 0's driver-model check — so the model being priced and the model doing the work are the same one; the agent files themselves carry no `model:` pin (a frontmatter pin would silently override the policy, which is the bug the check exists to prevent).
 
    This applies to escalations too. When a policy rule sends a packet to your own tier — `opus-plus-flash` escalates `debug` after two mechanical-tier retries — the routing decision stands, but under `estimated` the packet is handled in this conversation with the estimator, not dispatched via `execute_with_model`. Routing decides *which model*; `auth_mode` decides *which transport*. Confusing the two is what makes a run either abort on a credential it never needed or bill an API it was told not to use.
 

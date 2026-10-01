@@ -1,8 +1,8 @@
 /**
  * A real chat always begins with Claude Code's start moment (SessionStart, source "startup"), and zero-touch acts
- * only in a chat whose start the zero-touch plugin marked (29 Sep 2026; zero-touch/scripts/start-chat.mjs writes the
- * chat's record, plugin/scripts/ambient/lib/chat-mode.mjs reads it). So a test chat starts the way a real chat with
- * the zero-touch plugin enabled does: the zero-touch plugin's start hook, then mmo's, once per chat and with the same
+ * only in a chat whose start the zero-touch plugin marked (zero-touch/scripts/start-chat.mjs writes the chat's record,
+ * plugin/scripts/ambient/lib/chat-mode.mjs reads it). So a test chat starts the way a real chat with the zero-touch
+ * plugin enabled does: the zero-touch plugin's start hook, then mmo's, once per chat and with the same
  * settings. A test that sends a chat's later moments straight to the hook gets that start first; a test that sends
  * the start moment itself (any source) gets the zero-touch hook run beside it, as Claude Code runs both plugins' start
  * hooks at the same moment. A test about a chat WITHOUT the plugin passes `zeroTouch: false`, or runs its own start.
@@ -11,7 +11,7 @@
  * so two tests that reuse a chat id in different homes are two chats; envOf(...rest) gives that call's extra
  * environment, so a test's MMO_AMBIENT reaches the zero-touch hook too.
  *
- * Settings (1 Oct 2026): a person sets zero-touch up in the settings box, and the plugin keeps the choices in its own
+ * Settings: a person sets zero-touch up in the settings box, and the plugin keeps the choices in its own
  * data folder (zero-touch/scripts/settings.mjs). A test person is one who has already chosen: each test home gets
  * `<home>/zt-data/settings.json`, Workflows on the standard models, unless the test wrote its own settings first
  * (writeZtSettings) or asks for the first chat after install (`firstRun: true`, no settings at all). A person who has
@@ -19,7 +19,8 @@
  * (the file `gcloud auth application-default login` writes; nothing is ever sent anywhere); `google: false` leaves it out.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -45,7 +46,8 @@ export function writeGoogleLogin(home) {
   const dir = join(home, ".config", "gcloud");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, "application_default_credentials.json");
-  if (!existsSync(file)) writeFileSync(file, JSON.stringify({ type: "authorized_user", client_id: "test", client_secret: "test", refresh_token: "test" }));
+  // With its project: a sign-in with no Google Cloud project is not connected for zero-touch.
+  if (!existsSync(file)) writeFileSync(file, JSON.stringify({ type: "authorized_user", client_id: "test", client_secret: "test", refresh_token: "test", quota_project_id: "test-project" }));
 }
 
 /**
@@ -78,4 +80,29 @@ export function startingChats(runOnce, keyOf, { envOf = () => ({}), zeroTouch = 
     }
     return runOnce(event, payload, ...rest);
   };
+}
+
+/**
+ * Makes a test project a git project, as a real project being changed is: a change workflow zero-touch starts needs
+ * git to undo what it changes, so a project folder without git gets "isn't saved with git yet" instead of a start. A
+ * real `git init`; where git cannot run, a bare `.git` folder, which is all the start check looks for.
+ */
+export function gitProject(dir) {
+  const r = spawnSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore" });
+  if (r.status !== 0) mkdirSync(join(dir, ".git"), { recursive: true });
+  return dir;
+}
+
+let claudeBin = null;
+/**
+ * A folder holding a stand-in `claude` command, for a test PATH: zero-touch's setup check says when
+ * Claude Code's command-line program is missing, as it is on a test PATH of node and the system folders only. A real
+ * install has it; tests about something else put this folder first.
+ */
+export function fakeClaudeBin() {
+  if (claudeBin) return claudeBin;
+  claudeBin = mkdtempSync(join(tmpdir(), "zt-claude-bin-"));
+  writeFileSync(join(claudeBin, "claude"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(claudeBin, "claude"), 0o755);
+  return claudeBin;
 }

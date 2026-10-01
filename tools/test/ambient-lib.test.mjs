@@ -1,8 +1,7 @@
 /**
  * Unit tests for zero-touch's libraries under plugin/scripts/ambient/lib: settings layering, the typed-command
  * reader, the folder's kind, the event log, the transcript reader and the workflow-log reader. Pure functions, no
- * network. (0.8.4: the generic orchestrator's libraries and their tests were removed; they are kept on the branch
- * archive/generic-orchestrator.)
+ * network.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -31,8 +30,8 @@ test("the shipped default: routing on, cost recording estimated; no file sets th
     const { config, sources } = loadConfig({ projectDir: t.dir, env: { MMO_HOME: t.dir } });
     assert.equal(config.mode, "off", "only the chat's own record (the zero-touch plugin) or MMO_AMBIENT switches zero-touch");
     assert.equal(config.routing, "on");
-    // 1 Oct 2026: the models are the person's choice in the settings box (zero-touch/scripts/settings.mjs), stamped on
-    // each chat; nothing here names a policy any more, and hand-off's settings moved there too.
+    // The models are the person's choice in the settings box (zero-touch/scripts/settings.mjs), stamped on each chat;
+    // nothing here names a policy, and hand-off's settings are there too.
     assert.deepEqual(config.routing_defaults, { auth: "estimated" });
     assert.equal(config.handoff, undefined);
     assert.equal(config.retention_days, 30);
@@ -170,7 +169,7 @@ test("workflowState: ended on the last gate answered, an abort, or a failed end;
       log2("f1", ["run.start", {}], ["gate.open", { gate: "gate-2" }], ["run.end", { outcome: "failed" }]);
       assert.equal(workflowState(d2, since).state, "ended", "a failed end is an end, even with a gate open");
       // f2 starts after f1, as two real runs always do: without this wait both run.start lines could carry the same
-      // millisecond, and "the latest run" would be a tie (the test then failed on a fast or a busy machine alike).
+      // millisecond, and "the latest run" would be a tie.
       await new Promise((r) => setTimeout(r, 5));
       log2("f2", ["run.start", {}], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "abort" }]);
       assert.deepEqual(workflowState(d2, since), { state: "ended", runId: "f2", outcome: "aborted" }, "the latest run is the chat's");

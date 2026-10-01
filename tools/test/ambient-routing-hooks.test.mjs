@@ -1,10 +1,9 @@
 /**
- * Zero-touch routing, hand-off half (ask 2, step 4), end to end through the real shell shim: a chat message the
- * rules recognise starts that job's /mmo: workflow; everything else, an unclear request included, stays an ordinary
- * chat with nothing added (26 Sep: no offers; 0.8.4: no generic orchestrator). Every case pipes the hook input Claude Code sends and reads
- * the decision back. Facts the design rests on were probed live on Claude Code 2.1.282: a command start, typed or
- * model-started, is a PreToolUse on the Skill tool ({skill, args}); only a typed one fires UserPromptExpansion; a
- * PreToolUse deny stops it and the model reads the reason.
+ * Zero-touch routing, hand-off half, end to end through the real shell shim: a chat message the rules recognise
+ * starts that job's /mmo: workflow; everything else, an unclear request included, stays an ordinary chat with nothing
+ * added. Every case pipes the hook input Claude Code sends and reads the decision back. Facts the design rests on: a
+ * command start, typed or model-started, is a PreToolUse on the Skill tool ({skill, args}); only a typed one fires
+ * UserPromptExpansion; a PreToolUse deny stops it and the model reads the reason.
  *
  * Each test has its own MMO_HOME and project folder. No network, no model call.
  */
@@ -17,7 +16,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
-const { startingChats } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
+const { startingChats, gitProject } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
 const { serverBuilt } = await import(join(ROOT, "tools", "test", "lib", "server-built.mjs"));
 // The workflows' model check needs the built server; see tools/test/lib/server-built.mjs.
 const SKIP = serverBuilt();
@@ -30,7 +29,7 @@ function sandbox(kind = "existing", settings = {}) {
   const repo = join(dir, "repo");
   mkdirSync(home);
   mkdirSync(repo);
-  if (kind === "existing") writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
+  if (kind === "existing") gitProject(repo), writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
   writeFileSync(join(home, "ambient.json"), JSON.stringify({ mode: "on", ...settings }));
   return { dir, home, repo, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -38,8 +37,9 @@ function sandbox(kind = "existing", settings = {}) {
 function runOnce(event, payload, { home, repo }, env = {}) {
   return new Promise((done) => {
     const childEnv = {
-      // No CLAUDE_CODE_SUBAGENT_MODEL (v0.8.3, 25 Sep): the workflows' helpers name their model in the plugin's
-      // agent files, so every scenario here runs as a person with nothing set would.
+      // No CLAUDE_CODE_SUBAGENT_MODEL: every scenario here runs as a person with nothing set would. The workflows'
+      // helpers then follow the chat's model, as mmo's do without zero-touch, and a chat whose model Claude Code has
+      // not named yet is checked again later (the chat-model test below).
       PATH: process.env.PATH, HOME: home, MMO_HOME: home, CLAUDE_PROJECT_DIR: repo,
       ...env,
     };
@@ -57,18 +57,25 @@ function runOnce(event, payload, { home, repo }, env = {}) {
   });
 }
 
-// Every chat these tests drive starts the way a real one does (tools/test/lib/chat-start.mjs, 29 Sep 2026).
+// Every chat these tests drive starts the way a real one does (tools/test/lib/chat-start.mjs).
 const run = startingChats(runOnce, (s) => s.home, { envOf: (s, env) => env ?? {} });
 
 const prompt = (s, sid, text, env) => run("prompt", { session_id: sid, cwd: s.repo, prompt: text, prompt_id: `p-${Math.random()}` }, s, env);
-const skill = (s, sid, name, args, env) => run("pre-skill", { session_id: sid, cwd: s.repo, tool_name: "Skill", tool_input: { skill: name, ...(args ? { args } : {}) } }, s, env);
+/** A Skill call as Claude Code makes it: PreToolUse, then, when the call was not refused, PostToolUse (the moment a
+ * routed workflow's start is recorded). Returns the PreToolUse answer. */
+const skill = async (s, sid, name, args, ...rest) => {
+  const input = { session_id: sid, cwd: s.repo, tool_name: "Skill", tool_input: { skill: name, ...(args ? { args } : {}) } };
+  const pre = await run("pre-skill", input, s, ...rest);
+  if (pre.json?.hookSpecificOutput?.permissionDecision !== "deny") await run("post-skill", { ...input, tool_use_id: `tu-${sid}-${name}` }, s, ...rest);
+  return pre;
+};
 const context = (r) => r.json?.hookSpecificOutput?.additionalContext ?? "";
 const denied = (r) => r.json?.hookSpecificOutput?.permissionDecision === "deny";
 const reason = (r) => r.json?.hookSpecificOutput?.permissionDecisionReason ?? "";
 const pipeline = (s, sid) => existsSync(join(s.home, "sessions", sid, "pipeline"));
 const projectPolicy = (s) => { try { return JSON.parse(readFileSync(join(s.repo, ".sdlc", "project.json"), "utf8")).default_policy; } catch { return null; } };
 
-// Routing works like the person typing the command, whenever the chat is idle (29 Sep 2026). Two facts the hook
+// Routing works like the person typing the command, whenever the chat is idle. Two facts the hook
 // reads, both written before the prompt hook runs: Claude Code's transcript records a message typed while Claude is
 // still working as a "queued_command" attachment (a normal message is an ordinary user entry), and a workflow's own
 // log (plugin/scripts/lib/log.mjs lines in <project>/.sdlc/runs/<run-id>/orchestrator.log) records its gates and end.
@@ -106,7 +113,10 @@ test("a clear job starts its workflow: Opus is told which one, in plain words fo
     assert.doesNotMatch(c, /ToolSearch/, "the instruction alone: nothing else is added to the message");
     // Guard A (the catch-all pre-any hook): until the workflow starts, nothing that changes files or starts a helper may run.
     const write = await run("pre-any", { session_id: "c1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "a.js"), content: "x" } }, s);
-    assert.ok(denied(write) && /Start the workflow first/.test(reason(write)), write.stdout);
+    // The person reads one plain sentence (Claude Code shows a refusal's reason to them); the model's instruction
+    // travels as the refusal's additionalContext.
+    assert.ok(denied(write) && /Start the workflow first/.test(context(write)), write.stdout);
+    assert.equal(reason(write), "Zero-touch: Claude starts the bug-fix workflow first.");
     const bash = await run("pre-any", { session_id: "c1", cwd: s.repo, tool_name: "Bash", tool_input: { command: "npm test" } }, s);
     assert.ok(denied(bash), bash.stdout);
     const agent = await run("pre-any", { session_id: "c1", cwd: s.repo, tool_name: "Agent", tool_input: { subagent_type: "general-purpose", prompt: "x" } }, s);
@@ -116,7 +126,7 @@ test("a clear job starts its workflow: Opus is told which one, in plain words fo
     const start = await skill(s, "c1", "mmo:bugfix", "fix the /login endpoint returning 500 on missing password");
     assert.equal(start.stdout, "", "the routed workflow starts");
     assert.ok(pipeline(s, "c1"), "from here the chat is a workflow run: zero-touch stands down");
-    assert.equal(projectPolicy(s), null, "nothing is written into the project (1 Oct 2026): the run's models travel in its start arguments");
+    assert.equal(projectPolicy(s), null, "nothing is written into the project: the run's models travel in its start arguments");
     assert.equal((await run("pre-any", { session_id: "c1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "b.js"), content: "x" } }, s)).stdout, "", "Guard A ends when the workflow starts");
   } finally { s.cleanup(); }
 });
@@ -135,51 +145,93 @@ test("a new app in an empty folder starts the new-app workflow with only the zer
   } finally { s.cleanup(); }
 });
 
-test("a typed command is never touched: it starts as on 0.7.7, and nothing is routed around it", { skip: SKIP ?? false }, async () => {
+test("a typed command is never touched: it starts as mmo does without zero-touch, and nothing is routed around it", { skip: SKIP ?? false }, async () => {
   const s = sandbox("existing");
   try {
     assert.equal((await run("prompt-expansion", { session_id: "t1", cwd: s.repo, command_name: "mmo:refactor", expansion_type: "slash_command" }, s)).stdout, "");
     assert.equal(context(await prompt(s, "t1", "/mmo:refactor extract the date helpers")), "", "no route, no note");
-    assert.equal((await skill(s, "t1", "mmo:refactor", "extract the date helpers")).stdout, "", "a typed command runs as a Skill call on 2.1.282, and it is allowed");
+    assert.equal((await skill(s, "t1", "mmo:refactor", "extract the date helpers")).stdout, "", "a typed command runs as a Skill call, and it is allowed");
     assert.equal((await run("pre-any", { session_id: "t1", cwd: s.repo, tool_name: "Write", tool_input: { file_path: join(s.repo, "a.js"), content: "x" } }, s)).stdout, "");
   } finally { s.cleanup(); }
 });
 
-// ─── Rules only (26 Sep 2026) ───
-// Until 26 Sep an unclear request the chat's own model recognised was offered ("Shall I run the full bug-fix
-// workflow?") or, with routing_unsure: auto, started at once. Both rested on the chat model's guess, so the result
-// changed with the model the person picked. Now a workflow starts only when the rules recognise the request or the
-// person types the command; anything else is an ordinary chat with the generic orchestrator.
+// ─── Requests the rules cannot place ───
 
-test("an unclear request is never started or offered: no question, no workflow, the chat carries on", { skip: SKIP ?? false }, async () => {
+test("a request the rules cannot place is Claude's to judge; its start is checked, and the run's tag is zero-touch's", { skip: SKIP ?? false }, async () => {
+  // Model-judged recognition (lib/route-flow.mjs judgeable).
   const s = sandbox("existing");
   try {
-    assert.doesNotMatch(context(await prompt(s, "a1", "teh logn page 500s sort it out")), /"mmo:bugfix"/, "the rules are not sure, so nothing is routed");
+    const judged = await prompt(s, "a1", "teh logn page 500s sort it out");
+    assert.doesNotMatch(context(judged), /"mmo:bugfix", args/, "the rules did not place it");
+    assert.match(context(judged), /you judge whether it asks for one of the jobs/);
+    assert.match(context(judged), /"mmo:bugfix": fix something broken/);
+    assert.doesNotMatch(context(judged), /"mmo:greenfield"/, "a new app is not a job in a project");
+    assert.equal(judged.json?.systemMessage, undefined, "the person is told nothing: Claude answers or starts");
     const tried = await skill(s, "a1", "mmo:bugfix", "the login page returns 500");
-    assert.ok(denied(tried), "the chat may not start a workflow on its own guess");
-    assert.doesNotMatch(reason(tried), /agree|Shall I|ask them/i, "and is not told to ask the person");
-    assert.match(reason(tried), /Carry on/);
-    assert.doesNotMatch(context(await prompt(s, "a1", "yes")), /"mmo:bugfix"/, "a later yes starts nothing: there was no offer");
-    assert.ok(!pipeline(s, "a1"));
-    assert.ok(!existsSync(join(s.home, "sessions", "a1", "route-offer.json")), "no offer is ever kept");
+    assert.ok(!denied(tried), "Claude's start passes zero-touch's checks");
+    assert.equal(tried.json?.hookSpecificOutput?.updatedInput?.args, "[zero-touch policy=opus-plus-flash-v38 auth=estimated] the login page returns 500", "the tag is zero-touch's, never Claude's copy");
+    // The command ran (the helper sends PostToolUse too): the workflow is recorded as started, as a recognised one is.
+    assert.ok(pipeline(s, "a1"), "the judged workflow is running");
+    assert.match(readFileSync(join(s.home, "sessions", "a1", "events.jsonl"), "utf8"), /"type":"route.decided","job":"bugfix","via":"judge"/);
   } finally { s.cleanup(); }
 });
 
-test("an old routing_unsure setting is ignored: auto no longer starts anything", { skip: SKIP ?? false }, async () => {
+test("Claude's judgement is checked: a job the folder does not allow, no judgement at all, a question, a reply, or a later turn start nothing", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing");
+  try {
+    await prompt(s, "b1", "teh logn page 500s sort it out");
+    const wrongFolder = await skill(s, "b1", "mmo:greenfield", "");
+    assert.ok(denied(wrongFolder), "a new app in a project folder is refused");
+    assert.equal(reason(wrongFolder), "Zero-touch: a full workflow starts only for a request zero-touch recognises, so Claude carries on in the chat.");
+    assert.ok(!existsSync(join(s.home, "sessions", "b1", "route.json")), "and the judgement is used up");
+    for (const text of ["how do I fix the login bug?", "yes", "ok go ahead", "fix it"]) {
+      const r = await prompt(s, "b2", text);
+      assert.doesNotMatch(context(r), /you judge whether/, `${text}: never Claude's to judge`);
+      assert.ok(denied(await skill(s, "b2", "mmo:bugfix", "x")), `${text}: Claude may not start one on its own`);
+    }
+    await prompt(s, "b3", "teh logn page 500s sort it out");
+    await run("turn-end", { session_id: "b3", cwd: s.repo }, s);
+    assert.ok(!existsSync(join(s.home, "sessions", "b3", "route.json")), "answered without a start: the judgement ends with the turn");
+    assert.ok(denied(await skill(s, "b3", "mmo:bugfix", "x")), "a later start is refused");
+    assert.ok(!pipeline(s, "b1") && !pipeline(s, "b2") && !pipeline(s, "b3"));
+  } finally { s.cleanup(); }
+});
+
+test("in an empty folder only a new app can be judged, and it takes no words but the tag", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("new");
+  try {
+    const judged = await prompt(s, "c1", "my bakery needs something online where people can order cakes");
+    assert.match(context(judged), /"mmo:greenfield": build a whole new app/);
+    assert.doesNotMatch(context(judged), /"mmo:bugfix"/);
+    const tried = await skill(s, "c1", "mmo:greenfield", "[zero-touch policy=opus-plus-flash-v38 auth=estimated]");
+    assert.ok(!denied(tried));
+    assert.equal(tried.stdout, "", "Claude's args were already zero-touch's tag: nothing to change");
+  } finally { s.cleanup(); }
+});
+
+test("a routing_unsure setting is ignored: auto starts nothing", { skip: SKIP ?? false }, async () => {
   const s = sandbox("existing", { routing_unsure: "auto" });
   try {
-    await prompt(s, "u1", "teh logn page 500s sort it out");
-    assert.ok(denied(await skill(s, "u1", "mmo:bugfix", "the login page returns 500")));
+    // The setting changes nothing (such a message is Claude's to judge, with or without it): no start is made for
+    // Claude, and nothing is written to the project.
+    const r = await prompt(s, "u1", "teh logn page 500s sort it out");
+    assert.doesNotMatch(context(r), /Start it now with the Skill tool/);
+    assert.match(context(r), /you judge whether it asks/);
+    assert.equal(JSON.parse(readFileSync(join(s.home, "sessions", "u1", "route.json"), "utf8")).status, "judge");
     assert.ok(!pipeline(s, "u1"));
     assert.equal(projectPolicy(s), null, "nothing was written");
   } finally { s.cleanup(); }
 });
 
-test("workflows off: nothing is routed and Opus may not start one; the chat is left as it is", { skip: SKIP ?? false }, async () => {
+test("workflows off: nothing is routed and Opus may not start one; the person is told why once", { skip: SKIP ?? false }, async () => {
   const s = sandbox("existing", { routing: "off" });
   try {
     const r = await prompt(s, "o1", "fix the /login endpoint returning 500 on missing password");
-    assert.equal(r.stdout, "", "nothing is added: no instruction, no note");
+    assert.doesNotMatch(context(r), /"mmo:bugfix"/, "no start instruction");
+    // Not silent: a person who asked for a job learns why no workflow started.
+    assert.equal(r.json?.systemMessage, "Zero-touch: the bug-fix workflow didn't start, because workflows from plain words are switched off by a zero-touch setting file on this computer, so Claude answers it normally.");
+    assert.equal((await prompt(s, "o1", "fix the /login endpoint returning 500 on missing password")).stdout, "", "said once per chat");
+    assert.equal((await prompt(s, "o1", "thanks")).stdout, "", "ordinary chat: nothing");
     assert.ok(denied(await skill(s, "o1", "mmo:bugfix", "x")));
   } finally { s.cleanup(); }
 });
@@ -189,7 +241,9 @@ test("a project folder can switch workflows off, never on", { skip: SKIP ?? fals
   try {
     mkdirSync(join(s.repo, ".sdlc"));
     writeFileSync(join(s.repo, ".sdlc", "ambient.json"), JSON.stringify({ routing: "off" }));
-    assert.doesNotMatch(context(await prompt(s, "p2", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/);
+    const r = await prompt(s, "p2", "fix the /login endpoint returning 500 on missing password");
+    assert.doesNotMatch(context(r), /"mmo:bugfix"/);
+    assert.match(r.json?.systemMessage ?? "", /switched off for this project by a setting file in it/);
   } finally { s.cleanup(); }
   const t = sandbox("existing", { routing: "off" });
   try {
@@ -199,7 +253,7 @@ test("a project folder can switch workflows off, never on", { skip: SKIP ?? fals
   } finally { t.cleanup(); }
 });
 
-test("work done earlier in the chat no longer holds a job back: once Claude is idle, a clear job starts its workflow, as typing the command would", { skip: SKIP ?? false }, async () => {
+test("work done earlier in the chat does not hold a job back: once Claude is idle, a clear job starts its workflow, as typing the command would", { skip: SKIP ?? false }, async () => {
   const s = sandbox("existing");
   try {
     await prompt(s, "w1", "hi");
@@ -260,7 +314,7 @@ test("while a workflow runs zero-touch is quiet; once its own log shows the last
       workflowLog(t, "bf-2", ["run.start", {}], ["gate.open", { gate: "gate-1" }], ["gate.resolved", { gate: "gate-1", response: "approved" }], ["run.end", { outcome: "completed" }]);
       const r = await prompt(t, "g2", "what does the pricing module do?");
       assert.equal(context(r), "", "an ordinary message after the workflow gets nothing added for the model");
-      assert.equal(r.json?.systemMessage, "Zero-touch: this isn't one of the jobs that get a full workflow, so Claude answers it normally.", "and the person sees it is an ordinary chat again");
+      assert.equal(r.stdout, "", "and nothing is shown: a question is ordinary chat (quiet by default)");
       assert.ok(!pipeline(t, "g2"), "the chat is back to ordinary");
     } finally { t.cleanup(); }
   } finally { s.cleanup(); }
@@ -273,7 +327,7 @@ test("an abort at any gate ends the workflow; a typed command's run ends the sam
     await skill(s, "a1", "mmo:bugfix", JOB);
     workflowLog(s, "bf-a", ["run.start", {}], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "abort" }]);
     assert.match(context(await prompt(s, "a1", "write unit tests for the pricing functions in src/cart.js")), /"mmo:test"/);
-    // The typed line itself (0.8.4: the prompt hook alone decides a typed command; the expansion hook is not zero-touch's).
+    // The typed line itself (the prompt hook alone decides a typed command; the expansion hook is not zero-touch's).
     await prompt(s, "a2", "/mmo:refactor extract the date helpers");
     assert.ok(pipeline(s, "a2"));
     workflowLog(s, "rf-1", ["run.start", {}], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "approved" }], ["run.end", { outcome: "completed" }]);
@@ -303,15 +357,84 @@ test("a route not taken ends with its prompt: the next message is judged afresh 
   } finally { s.cleanup(); }
 });
 
-test("with no helper setting at all, a clear job starts: the workflows' helpers name their model in the plugin's agent files", { skip: SKIP ?? false }, async () => {
-  // Until v0.8.3's pin (25 Sep) this was "cannot start: it needs a one-time setting, then a new chat". The live
-  // desktop test hit exactly that on the first try; the pin removes the step for everyone.
+test("with no helper setting at all, a clear job starts: nothing needs setting up first", { skip: SKIP ?? false }, async () => {
+  // The workflows' helpers follow the chat's model, so a person with nothing set starts at once: no one-time setting
+  // and no new chat are asked for.
   const s = sandbox("existing");
   try {
     const c = context(await prompt(s, "m1", "fix the /login endpoint returning 500 on missing password"));
-    assert.match(c, /"mmo:bugfix"/, "the workflow's own check passes with nothing set, so it starts");
+    assert.match(c, /"mmo:bugfix"/, "nothing set, the chat's model not named yet: it starts, and is checked again later");
     assert.doesNotMatch(c, /one-time setting|--apply=routing|new chat/);
   } finally { s.cleanup(); }
+});
+
+test("the workflows' helpers follow the chat's model: a chat on another model than the person's models plan with does not start one, and is told how to switch", { skip: SKIP ?? false }, async () => {
+  // mmo's helper agents name no model, so with no helper setting Claude Code runs them on the chat's model, and the
+  // workflow's own check needs the policy's planning model.
+  const start = (s, sid, model, env) => run("session-start", { session_id: sid, cwd: s.repo, source: "startup", ...(model ? { model } : {}) }, s, env);
+  const wrong = sandbox("existing");
+  try {
+    await start(wrong, "w1", "claude-opus-5-5[1m]");
+    const r = await prompt(wrong, "w1", JOB);
+    assert.doesNotMatch(context(r), /"mmo:bugfix"/);
+    // Says why, naming the models chosen.
+    assert.equal(r.json?.systemMessage, "Zero-touch: the bug-fix workflow didn't start, because this chat is on Opus 5.5, but you chose Opus 5 + Flash 3.8, where Opus 5 plans and reviews, and that part runs on this chat's own model. Switch this chat to Opus 5 with the model menu next to the message box (in the terminal, type /model claude-opus-5), then ask again.");
+    assert.match(context(r), /helpers run on the chat's own model, claude-opus-5-5/);
+    assert.match(context(r), /Do not do the job yourself now and do not start the workflow yourself/);
+    // The person switches: Claude Code reports it (PostModelSwitch), and the next ask starts.
+    await run("post-model-switch", { session_id: "w1", cwd: wrong.repo, from_model: "claude-opus-5-5", to_model: "claude-opus-5" }, wrong);
+    assert.match(context(await prompt(wrong, "w1", JOB)), /"mmo:bugfix"/);
+  } finally { wrong.cleanup(); }
+  const right = sandbox("existing");
+  try {
+    await start(right, "w2", "claude-opus-5");
+    assert.match(context(await prompt(right, "w2", JOB)), /"mmo:bugfix"/, "on the planning model: it starts");
+  } finally { right.cleanup(); }
+  // The person's own helper setting decides the helpers' model instead of the chat: then it is the setting that must
+  // match, and the chat may be on any model.
+  const setting = sandbox("existing");
+  try {
+    await start(setting, "w3", "claude-opus-5-5", { CLAUDE_CODE_SUBAGENT_MODEL: "claude-opus-5" });
+    assert.match(context(await prompt(setting, "w3", JOB, { CLAUDE_CODE_SUBAGENT_MODEL: "claude-opus-5" })), /"mmo:bugfix"/, "the setting matches: the chat's own model does not matter");
+    const r = await prompt(setting, "w3", JOB, { CLAUDE_CODE_SUBAGENT_MODEL: "claude-opus-4-8" });
+    assert.doesNotMatch(context(r), /"mmo:bugfix"/);
+    assert.equal(r.json?.systemMessage, `Zero-touch: the bug-fix workflow didn't start, because a setting on this computer makes workflow helpers run on Opus 4.8, but you chose Opus 5 + Flash 3.8, where Opus 5 plans and reviews. Ask Claude to help you change that setting.`);
+    assert.match(context(r), /CLAUDE_CODE_SUBAGENT_MODEL setting/, "Claude is told which setting");
+    assert.doesNotMatch(r.json?.systemMessage ?? "", /CLAUDE_CODE|settings\.json/, "the person never reads a variable name or a file path");
+  } finally { setting.cleanup(); }
+  // A new chat's first message can come before Claude Code names the chat's model: the start goes ahead, and the chat's
+  // model is checked again at the workflow's own command, by when the chat has answered (its transcript says).
+  const late = sandbox("existing");
+  try {
+    const path = transcript(late, "w4", [said(JOB)]);
+    const r = await promptIn(late, "w4", JOB, path);
+    assert.match(context(r), /"mmo:bugfix"/);
+    appendFileSync(path, JSON.stringify({ type: "assistant", timestamp: new Date(Date.now() + 1000).toISOString(), message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: "Running this as a full bug-fix workflow." }] } }) + "\n");
+    const call = await run("pre-skill", { session_id: "w4", cwd: late.repo, tool_name: "Skill", transcript_path: path, tool_input: { skill: "mmo:bugfix", args: "x" } }, late);
+    assert.ok(denied(call), "refused before anything runs");
+    assert.match(reason(call), /^Zero-touch: the bug-fix workflow didn't start, because this chat is on Opus 5\.5, but you chose Opus 5 \+ Flash 3\.8, where Opus 5 plans and reviews/);
+    assert.ok(!pipeline(late, "w4"), "no workflow is marked as running");
+    assert.equal((await run("pre-any", { session_id: "w4", cwd: late.repo, tool_name: "Write", tool_input: { file_path: join(late.repo, "a.js"), content: "x" } }, late)).stdout, "", "the start it was waiting for is dropped: nothing stays blocked");
+  } finally { late.cleanup(); }
+});
+
+test("while a workflow zero-touch started runs, the chat stays on the model its helpers follow; a typed run and other chats are left alone", { skip: SKIP ?? false }, async () => {
+  const s = sandbox("existing");
+  try {
+    await run("session-start", { session_id: "l1", cwd: s.repo, source: "startup", model: "claude-opus-5" }, s);
+    await prompt(s, "l1", JOB);
+    assert.equal((await skill(s, "l1", "mmo:bugfix", "x")).stdout, "");
+    const away = await run("pre-model-switch", { session_id: "l1", cwd: s.repo, from_model: "claude-opus-5", to_model: "claude-opus-5-5" }, s);
+    assert.equal(away.json?.hookSpecificOutput?.permissionDecision, "deny");
+    assert.equal(away.json.hookSpecificOutput.permissionDecisionReason, "Zero-touch: this chat stays on Opus 5 until the bug-fix workflow ends, because the workflow's helpers use this chat's model. You can switch once it has finished.");
+    assert.equal((await run("pre-model-switch", { session_id: "l1", cwd: s.repo, from_model: "claude-opus-5", to_model: "claude-opus-5" }, s)).stdout, "", "to the same model: allowed");
+    assert.equal((await run("pre-model-switch", { session_id: "l1", cwd: s.repo, from_model: "claude-opus-5", to_model: "claude-opus-5-5" }, s, { CLAUDE_CODE_SUBAGENT_MODEL: "claude-opus-5" })).stdout, "", "the person's own helper setting decides the helpers: no lock");
+  } finally { s.cleanup(); }
+  const idle = sandbox("existing");
+  try {
+    await prompt(idle, "l2", "hello");
+    assert.equal((await run("pre-model-switch", { session_id: "l2", cwd: idle.repo, from_model: "claude-opus-5", to_model: "claude-opus-5-5" }, idle)).stdout, "", "no workflow running: the chat switches freely");
+  } finally { idle.cleanup(); }
 });
 
 test("setup, policy, revert, pass and the generic brownfield command are never started by the model", { skip: SKIP ?? false }, async () => {
@@ -325,9 +448,9 @@ test("setup, policy, revert, pass and the generic brownfield command are never s
   } finally { s.cleanup(); }
 });
 
-test("a workflow that cannot start says the real cause and the fix that works for it; a project's saved choice no longer decides", { skip: SKIP ?? false }, async () => {
-  // Until 1 Oct 2026 a project's saved choice (here an Opus 4.7 policy) decided, and blocked the start; a saved file
-  // that could not be read blocked it too. Zero-touch now runs the person's own pick and reads neither.
+test("a workflow that cannot start says the real cause and the fix that works for it; a project's saved choice does not decide", { skip: SKIP ?? false }, async () => {
+  // Zero-touch runs the person's own pick: a project's saved choice (here an Opus 4.7 policy) and a saved file that
+  // cannot be read are not read at all.
   const other = sandbox("existing");
   try {
     mkdirSync(join(other.repo, ".sdlc"));
@@ -341,16 +464,6 @@ test("a workflow that cannot start says the real cause and the fix that works fo
     writeFileSync(join(broken.repo, ".sdlc", "project.json"), "{not json");
     assert.match(context(await prompt(broken, "k3", "fix the /login endpoint returning 500 on missing password")), /"mmo:bugfix"/, "a saved file that cannot be read is not read at all");
   } finally { broken.cleanup(); }
-  // CLAUDE_CODE_SUBAGENT_MODEL_FORCE on makes Claude Code ignore the agent files' model; with nothing set the helpers
-  // would follow the chat, so the workflow's own check refuses, and zero-touch passes on the check's own reason.
-  const forced = sandbox("existing");
-  try {
-    const r = await prompt(forced, "k5", "fix the /login endpoint returning 500 on missing password", { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1" });
-    assert.doesNotMatch(context(r), /"mmo:bugfix"/);
-    assert.match(context(r), /CLAUDE_CODE_SUBAGENT_MODEL_FORCE/);
-    assert.match(r.json?.systemMessage ?? "", /^Zero-touch: the bug-fix workflow didn't start, because its start-up check failed: /);
-    assert.doesNotMatch(r.json?.systemMessage ?? "", /isn't set up on this computer/, "a failed check is never called a missing install (the mislabel found on 1 Oct 2026)");
-  } finally { forced.cleanup(); }
   // No Google login, and the person's models use Flash: the workflow does not start, and both are told why.
   const google = sandbox("existing");
   try {
@@ -359,7 +472,7 @@ test("a workflow that cannot start says the real cause and the fix that works fo
     const g = await prompt(google, "k6", "fix the /login endpoint returning 500 on missing password");
     assert.match(context(r), /"mmo:bugfix"/, "with a login it starts");
     assert.doesNotMatch(context(g), /"mmo:bugfix"/);
-    assert.match(context(g), /no Google login/);
+    assert.match(context(g), /not connected to Google/);
     assert.match(g.json?.systemMessage ?? "", /because your models include Google's Flash 3\.8 and this computer isn't connected to Google/);
   } finally { google.cleanup(); }
   const vendor = sandbox("existing", { routing_defaults: { auth: "vendor" } });
@@ -392,7 +505,9 @@ test("a start is confirmed after the command ran even if the start hook never fi
     // pre-skill timed out (Claude Code lets the call run); only the after-hook sees the command start.
     await run("post-skill", { session_id: "q1", cwd: s.repo, tool_name: "Skill", tool_input: { skill: "mmo:bugfix", args: "x" }, tool_response: { success: true } }, s);
     assert.ok(pipeline(s, "q1"));
-    assert.equal((await run("pre-agent", { session_id: "q1", cwd: s.repo, tool_name: "Agent", tool_input: { subagent_type: "mmo:orchestrator", prompt: "x" } }, s)).stdout, "", "the workflow's own agent runs");
+    // The workflow's own agent runs, exactly as launched: mmo's own helper, as mmo runs it without zero-touch.
+    const launched = await run("pre-agent", { session_id: "q1", cwd: s.repo, tool_name: "Agent", tool_input: { subagent_type: "mmo:orchestrator", prompt: "x" } }, s);
+    assert.equal(launched.stdout, "", "the workflow's own agent runs, unchanged");
     assert.equal((await run("pre-any", { session_id: "q1", cwd: s.repo, tool_name: "Bash", tool_input: { command: "npm test" } }, s)).stdout, "");
   } finally { s.cleanup(); }
 });
@@ -434,7 +549,7 @@ test("the chat's own starts are refused in any folder, even where the job would 
   } finally { n.cleanup(); }
 });
 
-test("the offer machinery is gone: nothing asks, keeps or accepts an offer", async () => {
+test("there is no offer machinery: nothing asks, keeps or accepts an offer", async () => {
   const flow = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "route-flow.mjs"));
   for (const name of ["isPlainYes", "askReason", "declinedInstruction", "readOffer", "writeOffer", "dropOffer"]) {
     assert.equal(flow[name], undefined, name);
@@ -448,7 +563,7 @@ test("a typed command without the plugin's prefix is still a typed run: zero-tou
   try {
     assert.equal(context(await prompt(s, "sf1", "/bugfix the login page returns 500")), "");
     assert.ok(pipeline(s, "sf1"));
-    // Its own project: one workflow at a time in one project (0.8.4, lib/project-lock.mjs).
+    // Its own project: one workflow at a time in one project (lib/project-lock.mjs).
     const t = sandbox("existing");
     try {
       assert.equal(context(await prompt(t, "sf2", "/refactor extract the date helpers")), "", "the typed line alone is enough");
@@ -480,4 +595,22 @@ test("what the person can see never names the plugin, a command, a settings path
     assert.doesNotMatch(line, /mmo|ambient|\.json|claude-|\/[a-z]/i, "the line the person hears names no plugin, command, file or model");
     assert.match(c, /Keep the plugin, command names and model names out of what you say to the person/);
   } finally { s.cleanup(); }
+});
+
+test("every start Claude is told to make says the person chose a full workflow, small jobs included", async () => {
+  // Told to start a workflow for a small job, Claude must not question its size or offer to do the job in the chat.
+  const F = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "route-flow.mjs"));
+  const Q = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "queue.mjs"));
+  const texts = [
+    F.startInstruction({ job: "greenfield", args: "", auth: "estimated", policy: "opus-plus-flash-v38" }),
+    F.startInstruction({ job: "bugfix", args: "fix x", auth: "estimated", policy: "opus-plus-flash-v38" }),
+    F.judgeInstruction({ folder: "existing", auth: "estimated", policy: "opus-plus-flash-v38" }),
+    Q.queuedStartInstruction({ job: "docs", args: "write a README" }, { auth: "estimated", policy: "opus-plus-flash-v38" }),
+  ];
+  for (const t of texts) {
+    assert.ok(t.includes(F.CHOSEN_FULL), t.slice(0, 80));
+    assert.match(t, /do not question its size, cost or need, and do not offer to do the job in the chat instead/);
+  }
+  // A command the person typed and queued keeps its own questions: nothing is said for them.
+  assert.ok(!Q.queuedStartInstruction({ job: "docs", args: "" }, {}).includes(F.CHOSEN_FULL));
 });

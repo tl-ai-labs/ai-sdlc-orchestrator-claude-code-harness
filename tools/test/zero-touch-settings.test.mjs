@@ -1,17 +1,17 @@
 /**
  * Zero-touch's settings and its settings box (zero-touch/scripts/settings.mjs, boxes.mjs).
  *
- * Why this test exists: from 1 Oct 2026 a person sets zero-touch up only by clicking in Claude's question box in the
- * chat, never by editing a file or typing a command. So the box must always be the same words, in the same order,
- * within the limits of Claude Code's question tool; only the fixed choices may ever be saved; one bad value must never
- * lose the others; and a box that is not about zero-touch (Claude's own questions, a workflow's approval step) must
- * never be taken for one. A probe run on 1 Oct caught exactly that last mistake in the first design.
+ * Why this test exists: a person sets zero-touch up only by clicking in Claude's question box in the chat, never by
+ * editing a file or typing a command. So the box must always be the same words, in the same order, within the limits
+ * of Claude Code's question tool; only the fixed choices may ever be saved; a file that cannot be used must never
+ * switch anything on (fail safe: the last good save, else Off); and a box that is not about zero-touch (Claude's own
+ * questions, a workflow's approval step) must never be taken for one.
  *
  * All offline: temporary folders only, no model, no network.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,43 +36,61 @@ test("nothing saved yet reads as 'none' with the standard settings; the standard
   } finally { h.cleanup(); }
 });
 
-test("a file that cannot be read gives the standard settings and says so; one bad value never loses the others", () => {
+test("a file that cannot be used switches nothing on: any value that is not a choice makes it unusable; the last good save is used, else nothing", () => {
+  // A damaged file, or one edited by hand to "OFF", must not give the standard settings (paid Workflows) to a person
+  // who had chosen Off, and an odd value is never quietly replaced and described as their choice.
   const h = home();
   try {
     mkdirSync(h.data, { recursive: true });
     const file = join(h.data, "settings.json");
-    for (const text of ["{ not json", "[1,2]", "null", "x".repeat(20000)]) {
+    const bad = ["{ not json", "[1,2]", "null", "x".repeat(20000), JSON.stringify({ mode: "OFF" }), JSON.stringify({ workflows: { models: "opus-only-v5" } }),
+      JSON.stringify({ mode: "handoff", handoff: { tests: "Sonnet 5" } }), JSON.stringify({ mode: "workflows", workflows: { models: "gpt-9" } }), JSON.stringify({ mode: "handoff", handoff: "flash" })];
+    for (const text of bad) {
       writeFileSync(file, text);
       const r = S.readSettings(h.env);
-      assert.equal(r.state, "unreadable", `unreadable for ${text.slice(0, 12)}`);
-      assert.equal(r.settings.mode, "workflows");
+      assert.equal(r.state, "unreadable", `unusable: ${text.slice(0, 40)}`);
+      assert.equal(S.settingsInForce(r), null, "nothing to act on");
+      assert.equal(S.boxCurrent(h.env), null, "and the box marks nothing");
     }
-    writeFileSync(file, JSON.stringify({ mode: "handoff", workflows: { models: "gpt-9" }, handoff: { chat_model: "claude-haiku-4-5", documents: "sonnet", tests: "../../x", repeats: "chat" } }));
+    // Left-out values take the standard ones (an older file, or one from before a new choice existed).
+    writeFileSync(file, JSON.stringify({ mode: "handoff", handoff: { documents: "sonnet" } }));
+    const partial = S.readSettings(h.env);
+    assert.equal(partial.state, "ok");
+    assert.deepEqual(partial.settings.handoff, { chat_model: "claude-opus-5", documents: "sonnet", tests: "flash", repeats: "flash" });
+    // Every save leaves a last good copy, used when the file itself cannot be.
+    S.writeSettings({ mode: "off" }, h.env);
+    writeFileSync(file, JSON.stringify({ mode: "OFF" }));
     const r = S.readSettings(h.env);
-    assert.equal(r.state, "ok");
-    assert.equal(r.settings.mode, "handoff", "a good value is kept");
-    assert.equal(r.settings.workflows.models, "opus-plus-flash-v38", "a policy that is not one of the three is not used");
-    assert.equal(r.settings.handoff.chat_model, "claude-opus-5", "a chat model that is not offered is not used");
-    assert.equal(r.settings.handoff.documents, "sonnet");
-    assert.equal(r.settings.handoff.tests, "flash", "an odd value takes the standard one");
-    assert.equal(r.settings.handoff.repeats, "chat");
+    assert.equal(r.state, "restored");
+    assert.equal(r.settings.mode, "off", "the person's last real choice, not the standard one");
+    assert.deepEqual(S.boxCurrent(h.env), r.settings, "the box marks the settings in force");
+    S.writeSettings({ mode: "workflows", workflows: { models: "opus-plus-sonnet" } }, h.env);
+    assert.equal(S.readSettings(h.env).state, "ok", "saving again mends it");
   } finally { h.cleanup(); }
 });
 
-test("saving writes the whole file at once, in the plugin's own data folder, and leaves no temporary file behind", () => {
+test("saving writes the whole file at once, in the plugin's own data folder, with a last good copy, and leaves no temporary file behind", () => {
   const h = home();
   try {
     const saved = S.writeSettings({ mode: "off", extra: "dropped" }, h.env);
     assert.equal(saved.mode, "off");
     assert.equal(saved.version, 1);
     assert.ok(!("extra" in saved), "only the fixed settings are stored");
-    assert.deepEqual(readdirSync(h.data), ["settings.json"]);
+    assert.deepEqual(readdirSync(h.data).sort(), ["settings.json", "settings.last-good.json"]);
+    assert.equal(readFileSync(join(h.data, "settings.json"), "utf8"), readFileSync(join(h.data, "settings.last-good.json"), "utf8"));
     assert.equal(S.readSettings(h.env).state, "ok");
     assert.equal(S.readSettings(h.env).settings.mode, "off");
     // Without the plugin's data folder (a developer running the script by hand): <MMO_HOME>/zero-touch.
     const env = { HOME: h.dir, MMO_HOME: join(h.dir, "mmo") };
     S.writeSettings({ mode: "workflows" }, env);
     assert.ok(existsSync(join(h.dir, "mmo", "zero-touch", "settings.json")));
+    // A folder that cannot be written: the save throws, nothing changes, and no temporary file is left.
+    chmodSync(h.data, 0o500);
+    try {
+      assert.throws(() => S.writeSettings({ mode: "handoff" }, h.env), (err) => ["EACCES", "EPERM"].includes(err.code));
+    } finally { chmodSync(h.data, 0o700); }
+    assert.equal(S.readSettings(h.env).settings.mode, "off", "nothing changed");
+    assert.deepEqual(readdirSync(h.data).sort(), ["settings.json", "settings.last-good.json"], "no temporary file left");
   } finally { h.cleanup(); }
 });
 
@@ -124,16 +142,12 @@ test("only a box about zero-touch is ours: Claude's own questions and a workflow
   assert.equal(B.isZeroTouchBox([{ question: "Mode?", header: "Zero-touch", options: [{ label: "On" }, { label: "Off" }] }]), true);
   assert.equal(B.isZeroTouchBox([{ question: "Pick the models", header: "Setup", options: [{ label: "Opus and Flash" }, { label: "Sonnet" }] }, { question: "Anything for zero-touch?", header: "More", options: [{ label: "No" }, { label: "Yes" }] }]), true, "the name in one question, a model in another");
   assert.equal(B.isZeroTouchBox("nonsense"), false);
-  // 1 Oct 2026, found in review: a question that only mentions zero-touch is Claude's own (likely while working on
-  // this very plugin), never taken for the settings.
+  // A question that only mentions zero-touch is Claude's own (likely while working on this very plugin), never taken
+  // for the settings.
   assert.equal(B.isZeroTouchBox([{ question: "Should the README section on zero-touch go before or after Setup?", header: "README", options: [{ label: "Before Setup" }, { label: "After Setup" }] }]), false);
   assert.equal(B.isZeroTouchBox([{ question: "Which zero-touch test file should I fix first?", header: "Tests", options: [{ label: "settings.test.mjs" }, { label: "docs.test.mjs" }] }]), false);
   // A settings word without zero-touch named is not ours either: a model question in someone's own project.
   assert.equal(B.isZeroTouchBox([{ question: "Which model should the benchmark use?", header: "Model", options: [{ label: "Opus 5" }, { label: "Sonnet 5" }] }]), false);
-});
-
-test("a box caught by mistake is told how to ask again, so nothing is stuck", () => {
-  assert.match(M.wrongBoxReason(B.modeBox(null)), /If your question is about something else, ask it again without the word "zero-touch" in it\./);
 });
 
 test("a box is the expected one only word for word; which box it is follows its question text", () => {

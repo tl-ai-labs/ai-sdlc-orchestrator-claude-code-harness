@@ -1,5 +1,5 @@
 /**
- * Each chat is decided once, when it starts (29 Sep 2026). Read at different moments, an on/off setting changed
+ * Each chat is decided once, when it starts. Read at different moments, an on/off setting changed
  * mid-chat would leave a chat half on and half off. So the decision is the chat's record, written once at its start by
  * the zero-touch plugin (enabled in Claude Code's plugin list: every new chat gets it; disabled: none does), and it
  * holds for the whole chat; a change reaches new chats only. A chat with no record is off. No settings file takes
@@ -22,7 +22,7 @@ const { serverBuilt } = await import(join(ROOT, "tools", "test", "lib", "server-
 const SKIP = serverBuilt();
 const SHIM = join(ROOT, "plugin", "hooks", "ambient.sh");
 const { chatMode } = await import(join(A, "lib", "chat-mode.mjs"));
-const { zeroTouchStart } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
+const { zeroTouchStart, gitProject } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
 
 /** A project folder with no git: "existing" has a manifest, "new" is empty. `plugin` says whether zero-touch is enabled. */
 function sandbox(kind) {
@@ -31,8 +31,8 @@ function sandbox(kind) {
   const repo = join(dir, "repo");
   mkdirSync(home);
   mkdirSync(repo);
-  if (kind === "existing") writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
-  // The old switch, now ignored: a file saying "on" must not turn a chat on, nor "off" turn one off.
+  if (kind === "existing") gitProject(repo), writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
+  // A mode in ambient.json is ignored: a file saying "on" must not turn a chat on, nor "off" turn one off.
   const setFile = (m) => writeFileSync(join(home, "ambient.json"), JSON.stringify({ mode: m }));
   return { dir, home, repo, setFile, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -81,7 +81,7 @@ test("a chat that started with zero-touch on keeps it until it ends, even after 
   try {
     await start(s, "c1");
     assert.equal(chatMode("c1", { MMO_HOME: s.home }), "on");
-    s.setFile("off"); // the old switch: ignored
+    s.setFile("off"); // the file's mode: ignored
     assert.match(context(await prompt(s, "c1", JOB)), ROUTED, "the chat was decided at its start");
     await start(s, "c2", "startup", { plugin: false }); // the plugin is disabled now
     assert.equal(context(await prompt(s, "c2", JOB)), "", "the next chat is off");

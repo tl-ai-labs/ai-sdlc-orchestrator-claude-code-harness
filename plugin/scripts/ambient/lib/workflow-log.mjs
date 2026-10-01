@@ -1,5 +1,5 @@
 /**
- * Has the workflow this chat started ended? Read from the workflow's own log (29 Sep 2026).
+ * Has the workflow this chat started ended? Read from the workflow's own log.
  *
  * Every /mmo: workflow logs its life through plugin/scripts/mmo-log.mjs into <project>/.sdlc/runs/<run-id>/
  * orchestrator.log, one line per event as plugin/scripts/lib/log.mjs renders it: `run.start`, each `gate.open`
@@ -11,8 +11,8 @@
  * workflow (the chat's `pipeline` record holds that moment). No such run means the workflow never reached its run
  * (it was stopped at its first questions, or is still asking them): the chat stays the workflow's, so an answer to
  * one of its questions is never taken for a new job. Two chats running workflows in one project at once could see
- * each other's run by time alone; so (1 Oct 2026) a chat claims its run by the run id its own orchestrator logs with
- * (hook.mjs claimRun), and once claimed only that run is read.
+ * each other's run by time alone; so a chat claims its run by the run id its own orchestrator logs with (hook.mjs
+ * claimRun), and once claimed only that run is read.
  */
 import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -53,7 +53,7 @@ export function readWorkflowLog(file) {
 /**
  * "ended", "running" (a run of this workflow is logged and not over), or "not-started" (none logged yet). A running
  * run also says `waiting: true` while one of its gates is open: the workflow has asked the person something, so the
- * person's next message is its answer (0.8.4, the replace-or-queue question). `runId`, when the chat has claimed its
+ * person's next message is its answer. `runId`, when the chat has claimed its
  * run, limits the reading to that run's own log; without it the latest run since the chat's start is taken.
  */
 export function workflowState(projectDir, sinceMs, runId = null) {
@@ -82,8 +82,11 @@ export function workflowState(projectDir, sinceMs, runId = null) {
     const gate = e.fields.gate;
     if (e.event === "gate.open" && gate) open.add(gate);
     if (e.event === "gate.resolved" && gate) {
-      open.delete(gate);
-      if (String(e.fields.response ?? "").startsWith("abort")) { ended = true; outcome = "aborted"; }
+      const response = String(e.fields.response ?? "");
+      if (response.startsWith("abort")) { ended = true; outcome = "aborted"; }
+      // A gate answered "revise" (Gate 4's "reject: …" is logged as revise) stays open until the revision is
+      // approved: the run is not over, even when a turn ends between a Gate 4 reject and the gate opening again.
+      if (!response.startsWith("revise") && !response.startsWith("reject")) open.delete(gate);
     }
     if (e.event === "run.end") {
       outcome = e.fields.outcome ?? "completed";
@@ -95,14 +98,15 @@ export function workflowState(projectDir, sinceMs, runId = null) {
 }
 
 /**
- * Stops a run the way the workflow's own abort does (0.8.4, "Replace it" in a zero-touch chat): the run's log
+ * Stops a run the way the workflow's own abort does ("Replace it" in a zero-touch chat): the run's log
  * records `run.end outcome=aborted`, in the format mmo-log.mjs writes, so workflowState and the collector read it as
  * ended; and a brownfield write lock (`.sdlc/local/write-contract.json`) that belongs to this run is switched off,
  * as the brownfield manual's abort step does (active: false, the file and the run folder kept). A lock of another
- * run is left alone. Returns what was done.
+ * run is left alone. The run's resume record (`.sdlc/local/state.json`) is marked aborted when it is this run's, so
+ * the next brownfield run does not offer to resume a run stopped by "Replace it" or /clear. Returns what was done.
  */
 export function abortRun(projectDir, runId, why) {
-  const done = { logged: false, unlocked: false };
+  const done = { logged: false, unlocked: false, resumable: false };
   if (!runId) return done;
   const log = join(projectDir, ".sdlc", "runs", runId, "orchestrator.log");
   if (existsSync(log)) {
@@ -117,5 +121,13 @@ export function abortRun(projectDir, runId, why) {
       done.unlocked = true;
     }
   } catch { /* no lock, or not this run's */ }
+  const stateFile = join(projectDir, ".sdlc", "local", "state.json");
+  try {
+    const state = JSON.parse(readFileSync(stateFile, "utf8"));
+    if (state && typeof state === "object" && state.run_id === runId && state.status !== "complete" && state.status !== "aborted") {
+      writeFileSync(stateFile, JSON.stringify({ ...state, status: "aborted" }, null, 2) + "\n");
+      done.resumable = true;
+    }
+  } catch { /* no resume record, or not this run's */ }
   return done;
 }

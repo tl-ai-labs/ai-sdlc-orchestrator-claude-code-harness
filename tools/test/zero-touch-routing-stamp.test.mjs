@@ -1,15 +1,14 @@
 /**
- * What mmo does with the person's zero-touch choices once a workflow runs, and when a conversation is cleared
- * (1 Oct 2026).
+ * What mmo does with the person's zero-touch choices once a workflow runs, and when a conversation is cleared.
  *
  *   - A run zero-touch started has the person's policy stamped on every model-server call that takes one (load_policy,
  *     preflight_dispatch, execute_with_model, simulate_policy), as an explicit file, which the server and the
  *     workflow's run-start check put ahead of everything, a project's routing-policy.yaml included. Helpers make most
  *     of these calls, so theirs are stamped too. A run the person typed keeps its own rules: nothing is stamped.
  *   - /clear gives the conversation a new chat id, and Claude Code sends SessionEnd (reason "clear") for the old one
- *     first (read in Claude Code's own code). A workflow abandoned that way is recorded as stopped and its project is
- *     freed; before this, it held the project forever. Other endings keep it: that chat can be reopened. Only the run
- *     the chat claimed (the run id in its orchestrator's logging calls) is stopped, never another chat's.
+ *     first. A workflow abandoned that way is recorded as stopped and its project is freed. Other endings keep it:
+ *     that chat can be reopened. Only the run the chat claimed (the run id in its orchestrator's logging calls) is
+ *     stopped, never another chat's.
  *   - A command the person typed never carries zero-touch's models: not when it was queued, not when it follows a
  *     start zero-touch had pending. The run-start check of a run zero-touch started gets the person's policy file.
  *   - The line at a workflow's end fits the chat's mode.
@@ -32,7 +31,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const SHIM = join(ROOT, "plugin", "hooks", "ambient.sh");
 const POLICIES = join(ROOT, "plugin", "config", "policies");
-const { startingChats, writeGoogleLogin, writeZtSettings } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
+const { startingChats, writeGoogleLogin, writeZtSettings, gitProject } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
 const { serverBuilt } = await import(join(ROOT, "tools", "test", "lib", "server-built.mjs"));
 const { formatLine } = await import(join(ROOT, "plugin", "scripts", "lib", "log.mjs"));
 const SKIP = serverBuilt();
@@ -44,6 +43,7 @@ function sandbox(settings = { mode: "workflows" }, { google = true } = {}) {
   mkdirSync(home);
   mkdirSync(repo);
   writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
+  gitProject(repo); // a project being changed is a git project (a change workflow needs git)
   writeZtSettings(home, settings, { google });
   return { dir, home, repo, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -65,8 +65,17 @@ function runOnce(event, payload, { home, repo }, env = {}) {
 const run = startingChats(runOnce, (s) => s.home, { envOf: (s, env) => env ?? {} });
 let seq = 0;
 const say = (s, sid, text) => run("prompt", { session_id: sid, cwd: s.repo, prompt: text, prompt_id: `p-${++seq}` }, s);
-const skill = (s, sid, name, args) => run("pre-skill", { session_id: sid, cwd: s.repo, tool_name: "Skill", tool_input: { skill: name, ...(args ? { args } : {}) } }, s);
+/** A Skill call as Claude Code makes it: PreToolUse, then, when the call was not refused, PostToolUse (the moment a
+ * routed workflow's start is recorded). Returns the PreToolUse answer. */
+const skill = async (s, sid, name, args, ...rest) => {
+  const input = { session_id: sid, cwd: s.repo, tool_name: "Skill", tool_input: { skill: name, ...(args ? { args } : {}) } };
+  const pre = await run("pre-skill", input, s, ...rest);
+  if (pre.json?.hookSpecificOutput?.permissionDecision !== "deny") await run("post-skill", { ...input, tool_use_id: `tu-${sid}-${name}` }, s, ...rest);
+  return pre;
+};
 const context = (r) => r.json?.hookSpecificOutput?.additionalContext ?? "";
+/** The queued start a turn's end hands the model: the Stop hook's context, never a "block" reason the person reads. */
+const queuedStart = (r) => (r.json?.hookSpecificOutput?.hookEventName === "Stop" ? r.json.hookSpecificOutput.additionalContext ?? "" : "");
 const updated = (r) => r.json?.hookSpecificOutput?.updatedInput ?? null;
 const dispatch = (s, sid, toolName, input, extra = {}) => run("pre-dispatch", { session_id: sid, cwd: s.repo, tool_name: `mcp__plugin_mmo_model-dispatch__${toolName}`, tool_input: input, ...extra }, s);
 function workflowLog(s, runId, ...lines) {
@@ -88,6 +97,8 @@ async function startedBugfix(s, sid) {
   return args;
 }
 
+const r0 = (r) => r.json?.hookSpecificOutput?.permissionDecision ?? null;
+
 test("every model-server call of a run zero-touch started carries the person's policy as an explicit file, helpers' calls included", { skip: SKIP ?? false }, async () => {
   const s = sandbox({ mode: "workflows", workflows: { models: "opus-plus-sonnet" } });
   try {
@@ -102,7 +113,12 @@ test("every model-server call of a run zero-touch started carries the person's p
       const helper = await dispatch(s, "d1", toolName, input, { agent_id: "orchestrator-1" });
       assert.deepEqual(updated(helper), { ...input, policy_path: path }, `${toolName}: a helper's call too`);
     }
-    assert.equal((await dispatch(s, "d1", "load_policy", { policy_path: path })).stdout, "", "a call that already names it is left alone");
+    // A call that already names it is left as it is; as a step of the person's own workflow it is allowed without a
+    // permission prompt, like every stamped call (lib/own-steps.mjs).
+    const named = await dispatch(s, "d1", "load_policy", { policy_path: path });
+    assert.equal(named.json?.hookSpecificOutput?.updatedInput, undefined, "a call that already names it is left alone");
+    assert.equal(named.json?.hookSpecificOutput?.permissionDecision, "allow");
+    assert.equal(r0(await dispatch(s, "d1", "preflight_dispatch", { policy_name: "x" })), "allow", "a stamped call is allowed too");
     assert.ok(!existsSync(join(s.repo, ".sdlc", "project.json")), "nothing is written into the project");
   } finally { s.cleanup(); }
 });
@@ -137,8 +153,8 @@ test("/clear ends the old chat id: a workflow it abandons is recorded as stopped
 });
 
 test("/clear stops only the run this chat claimed: a run another chat started later in the folder is left alone", { skip: SKIP ?? false }, async () => {
-  // 1 Oct 2026, found in review: the run was picked by time, so /clear in one chat stopped a newer run of a chat
-  // without zero-touch in the same folder (and switched off its write lock), leaving its own run open.
+  // Picking the run by time would make /clear in one chat stop a newer run of a chat without zero-touch in the same
+  // folder (and switch off its write lock), leaving its own run open.
   const s = sandbox();
   try {
     await startedBugfix(s, "mine");
@@ -154,21 +170,16 @@ test("/clear stops only the run this chat claimed: a run another chat started la
   } finally { s.cleanup(); }
 });
 
-test("the answer to Queue it / Replace it is shown to the person in zero-touch's own line", { skip: SKIP ?? false }, async () => {
+test("a job asked for while a workflow runs is said at once, and starts with the person's pick when that one ends", { skip: SKIP ?? false }, async () => {
   const s = sandbox();
   try {
     await startedBugfix(s, "q1");
     const asked = await say(s, "q1", TESTS);
-    assert.equal(asked.json?.systemMessage, "Zero-touch: a bug-fix workflow is still running in this chat. In the box, choose whether the test-writing workflow you asked for should wait its turn or replace the running one.");
-    const question = /question "([^"]+)"/.exec(context(asked))?.[1];
-    assert.ok(question, "the model is given the question to ask");
-    const queued = await run("post-question", { session_id: "q1", cwd: s.repo, tool_name: "AskUserQuestion", tool_input: {}, tool_response: { answers: { [question]: "Queue it" } } }, s);
-    assert.equal(queued.json?.systemMessage, "Zero-touch: queued. The test-writing workflow will start by itself when the bug-fix workflow finishes.");
-    const again = await say(s, "q1", TESTS);
-    const q2 = /question "([^"]+)"/.exec(context(again))?.[1];
-    const replaced = await run("post-question", { session_id: "q1", cwd: s.repo, tool_name: "AskUserQuestion", tool_input: {}, tool_response: { answers: { [q2]: "Replace it" } } }, s);
-    assert.equal(replaced.json?.systemMessage, "Zero-touch: the bug-fix workflow was stopped, and the test-writing workflow is starting now.");
-    assert.match(context(replaced), /"mmo:test", args "\[zero-touch policy=opus-plus-flash-v38 auth=estimated\]/, "the replacing workflow carries the pick too");
+    assert.equal(asked.json?.systemMessage, "Zero-touch: noted. The test-writing workflow will start by itself when the bug-fix workflow finishes, and it will wait for your approval at its first main step.");
+    workflowLog(s, "bf-q1", ["run.end", { outcome: "completed" }]);
+    const end = await run("turn-end", { session_id: "q1", cwd: s.repo, stop_hook_active: false }, s);
+    assert.match(end.json?.systemMessage ?? "", /the bug-fix workflow has finished, so the test-writing workflow you queued is starting now/);
+    assert.match(end.json?.hookSpecificOutput?.additionalContext ?? "", /"mmo:test", args "\[zero-touch policy=opus-plus-flash-v38 auth=estimated\]/, "the queued workflow carries the person's pick");
   } finally { s.cleanup(); }
 });
 
@@ -178,7 +189,8 @@ test("a hand-off tool called for work the person keeps in the chat is refused, a
     await run("session-start", { session_id: "k1", cwd: s.repo, source: "startup", model: "claude-opus-5" }, s);
     const r = await run("pre-handoff", { session_id: "k1", cwd: s.repo, tool_name: "mcp__plugin_mmo_model-dispatch__write_tests_from_cases", tool_input: { file: "tests/a.test.js" } }, s);
     assert.equal(r.json?.hookSpecificOutput?.permissionDecision, "deny");
-    assert.match(r.json.hookSpecificOutput.permissionDecisionReason, /keeps this kind of work in the chat/);
+    assert.match(context(r), /keeps this kind of work in the chat/, "the model is told to do it itself");
+    assert.equal(r.json.hookSpecificOutput.permissionDecisionReason, "Zero-touch: you keep this kind of work in the chat, so Claude does it itself.", "the person reads one plain sentence");
     const doc = await run("pre-handoff", { session_id: "k1", cwd: s.repo, tool_name: "mcp__plugin_mmo_model-dispatch__write_document", tool_input: { file: "docs/a.md" } }, s);
     assert.ok(doc.json?.hookSpecificOutput?.updatedInput?._mmo, "documents are handed off: the call is stamped");
   } finally { s.cleanup(); }
@@ -199,7 +211,8 @@ test("without a Google login, hand-off work set to Flash 3.8 is done by the chat
     // The tools: the Google kind is refused before the server; the Sonnet kind is stamped.
     const doc = await tool("write_document", { file: "README.md" });
     assert.equal(doc.json?.hookSpecificOutput?.permissionDecision, "deny");
-    assert.match(doc.json.hookSpecificOutput.permissionDecisionReason, /not connected to Google/);
+    assert.match(doc.json.hookSpecificOutput.permissionDecisionReason, /^Zero-touch: this can't be handed off, because this computer isn't connected to Google/);
+    assert.match(context(doc), /not connected to Google/);
     assert.ok((await tool("write_tests_from_cases", { file: "tests/cart.test.js" })).json?.hookSpecificOutput?.updatedInput?._mmo, "tests are handed off");
     assert.equal((await tool("repeat_edit_across_files", {})).json?.hookSpecificOutput?.permissionDecision, "deny", "repeats are set to Flash too");
     // Typing by hand: the Google kind must pass (its tool is refused); the handed-off kind is still pointed at its tool.
@@ -231,9 +244,9 @@ const pipeline = (s, sid) => { try { return JSON.parse(readFileSync(join(s.home,
 const endRun = (s, runId) => workflowLog(s, runId, ["run.end", { outcome: "completed" }], ["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]);
 
 test("a command the person typed and queued starts exactly as typed: no zero-touch models, no zero-touch checks, nothing stamped", { skip: SKIP ?? false }, async () => {
-  // 1 Oct 2026, found in review: the queue forgot that a command was typed, so it started with zero-touch's tag and
-  // its policy was stamped on every call; in a Hand-off chat it was even checked against a Flash policy the person
-  // never chose, and refused without a Google login.
+  // The queue remembers that a command was typed: otherwise it would start with zero-touch's tag and its policy
+  // stamped on every call, and in a Hand-off chat be checked against a Flash policy the person never chose, and
+  // refused without a Google login.
   for (const settings of [
     { mode: "workflows", workflows: { models: "opus-plus-sonnet" } },
     { mode: "handoff", handoff: { chat_model: "claude-opus-5", documents: "sonnet", tests: "sonnet", repeats: "chat" } },
@@ -247,9 +260,9 @@ test("a command the person typed and queued starts exactly as typed: no zero-tou
       await run("turn-end", { session_id: "tq", cwd: s.repo, stop_hook_active: false }, s);
       endRun(s, "docs-run");
       const next = await run("turn-end", { session_id: "tq", cwd: s.repo, stop_hook_active: false }, s);
-      assert.equal(next.json?.decision, "block", `${settings.mode}: the queued command starts`);
-      assert.match(next.json.reason, /skill "mmo:test", args "cover src\/auth\.js"/, `${settings.mode}: exactly as typed`);
-      assert.doesNotMatch(next.json.reason, /\[zero-touch|chosen by zero-touch/, `${settings.mode}: no zero-touch tag`);
+      assert.match(queuedStart(next), /skill "mmo:test"/, `${settings.mode}: the queued command starts`);
+      assert.match(queuedStart(next), /skill "mmo:test", args "cover src\/auth\.js"/, `${settings.mode}: exactly as typed`);
+      assert.doesNotMatch(queuedStart(next), /\[zero-touch|chosen by zero-touch/, `${settings.mode}: no zero-touch tag`);
       assert.doesNotMatch(next.json.systemMessage ?? "", /Google/, `${settings.mode}: no zero-touch Google check`);
       assert.equal((await skill(s, "tq", "mmo:test", "cover src/auth.js")).stdout, "");
       assert.equal(pipeline(s, "tq")?.job, "test");
@@ -260,8 +273,8 @@ test("a command the person typed and queued starts exactly as typed: no zero-tou
 });
 
 test("a typed command after a plain-words start that never happened runs as typed: the stale start ends, nothing is stamped", { skip: SKIP ?? false }, async () => {
-  // 1 Oct 2026, found in review: the person's words were routed, they stopped Claude before it started the workflow,
-  // then typed the command themselves; the typed run took the stale start over, with zero-touch's policy stamped.
+  // The person's words are routed, they stop Claude before it starts the workflow, then type the command themselves:
+  // the typed run must not take the stale start over, with zero-touch's policy stamped.
   const s = sandbox({ mode: "workflows", workflows: { models: "opus-plus-sonnet" } });
   try {
     assert.match(context(await say(s, "st", BUGFIX)), /"mmo:bugfix"/, "routed, never started");
@@ -280,10 +293,10 @@ test("a typed command after a plain-words start that never happened runs as type
 });
 
 test("the line at a workflow's end says what happens next in this chat's mode", { skip: SKIP ?? false }, async () => {
-  // 1 Oct 2026, found in review: a Hand-off chat was told "asking for a job in your own words starts a new
-  // workflow", which Hand-off mode never does.
+  // A Hand-off chat is never told "asking for a job in your own words starts a new workflow", which Hand-off mode
+  // never does.
   for (const [settings, line] of [
-    [{ mode: "workflows" }, "Zero-touch: the documentation workflow has finished. From here, asking for a job in your own words starts a new workflow; anything else gets a normal answer."],
+    [{ mode: "workflows" }, "Zero-touch: the documentation workflow has finished. From here, asking for another job starts a new workflow; anything else gets a normal answer."],
     [{ mode: "handoff", handoff: { chat_model: "claude-opus-5", documents: "flash", tests: "flash", repeats: "flash" } }, "Zero-touch: the documentation workflow has finished. From here, Claude works in this chat in Hand-off mode again."],
   ]) {
     const s = sandbox(settings);
@@ -296,28 +309,39 @@ test("the line at a workflow's end says what happens next in this chat's mode", 
 });
 
 test("the run-start check of a run zero-touch started reads the person's policy file too; a typed run's check is left alone", { skip: SKIP ?? false }, async () => {
-  // 1 Oct 2026, found in review: the orchestrator runs the check as a shell command, which the model-server stamp does
-  // not reach; if the model did not pass the file on, a project's routing-policy.yaml decided the check.
+  // The orchestrator runs the check as a shell command, which the model-server stamp does not reach; if the model did
+  // not pass the file on, a project's routing-policy.yaml would decide the check.
   const s = sandbox({ mode: "workflows", workflows: { models: "opus-plus-sonnet" } });
   try {
     await startedBugfix(s, "rc");
     const path = join(POLICIES, "opus-plus-sonnet.yaml");
     const check = (command) => run("pre-any", { session_id: "rc", cwd: s.repo, tool_name: "Bash", agent_id: "orchestrator-1", tool_input: { command, description: "run-start check" } }, s);
     const plain = await check('node "/p/scripts/driver-model-check.mjs" --project-root "$(pwd)"');
+    // Claude Code has not said which model the chat is on: the file only, and the check judges the person's setting.
     assert.deepEqual(updated(plain), { command: `node "/p/scripts/driver-model-check.mjs" --policy-path "${path}" --project-root "$(pwd)"`, description: "run-start check" });
     // Anything but one plain call that names no file is left exactly as written (lib/run-check.mjs; its own test has
     // every case).
-    assert.equal((await check('node /p/scripts/driver-model-check.mjs --project-root . --policy-path /tmp/theirs.yaml')).stdout, "", "a file the model named: untouched");
+    assert.equal((await check('node /p/scripts/driver-model-check.mjs --project-root . --policy-path /tmp/theirs.yaml')).stdout, "", "a file the model named is kept, and nothing else to add");
     assert.equal((await check('sed -n 1,80p "/p/scripts/driver-model-check.mjs"')).stdout, "", "a command that only names the script: untouched");
-    assert.equal((await check(`node /p/scripts/driver-model-check.mjs --policy-path "${path}" --project-root .`)).stdout, "", "already the file: untouched");
     assert.equal((await check("npm test")).stdout, "", "any other command: untouched");
-    // End to end, with the real check script: the folder's own file names a judgment model the helpers do not run on
-    // (the shipped Opus 4.7 policy), so on its own it stops the run; with the stamp, the person's policy decides.
+    // The chat's model known (zero-touch as a strict add-on): the helpers follow it, as mmo does without zero-touch,
+    // so the check is told it, and allowed without a prompt as one of the workflow's own steps.
+    writeFileSync(join(s.home, "sessions", "rc", "model_now"), "claude-opus-5");
+    const told = await check('node "/p/scripts/driver-model-check.mjs" --project-root "$(pwd)"');
+    assert.equal(updated(told).command, `CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-5 node "/p/scripts/driver-model-check.mjs" --policy-path "${path}" --project-root "$(pwd)"`);
+    // The person's own helper setting decides the helpers' model instead: the check reads that, and is told nothing.
+    const own = await run("pre-any", { session_id: "rc", cwd: s.repo, tool_name: "Bash", agent_id: "orchestrator-1", tool_input: { command: 'node "/p/scripts/driver-model-check.mjs" --project-root "$(pwd)"' } }, s, { CLAUDE_CODE_SUBAGENT_MODEL: "claude-opus-5" });
+    assert.equal(updated(own).command, `node "/p/scripts/driver-model-check.mjs" --policy-path "${path}" --project-root "$(pwd)"`);
+    // End to end, with mmo's own real check script: the folder's own file names a judgment model the
+    // helpers do not run on (the shipped Opus 4.7 policy), so on its own it stops the run; with the stamp, the
+    // person's policy decides, and the chat's model must be the one it plans with.
     writeFileSync(join(s.repo, "routing-policy.yaml"), readFileSync(join(POLICIES, "opus-plus-flash.yaml"), "utf8"));
     const script = join(ROOT, "plugin", "scripts", "driver-model-check.mjs");
-    const real = (extra) => spawnSync(process.execPath, [script, "--project-root", s.repo, ...extra], { encoding: "utf8" }).status;
-    assert.notEqual(real([]), 0, "unstamped, the folder's file decides and the check stops the run");
-    assert.equal(real(["--policy-path", path]), 0, "stamped, the person's policy decides and the check passes");
+    const real = (extra, model) => spawnSync(process.execPath, [script, "--project-root", s.repo, ...extra], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: s.home, ...(model ? { CLAUDE_CODE_SUBAGENT_MODEL: model } : {}) } }).status;
+    assert.notEqual(real([], "claude-opus-5"), 0, "unstamped, the folder's file decides and the check stops the run");
+    assert.equal(real(["--policy-path", path], "claude-opus-5"), 0, "stamped, on the model the person's policy plans with: the check passes");
+    assert.notEqual(real(["--policy-path", path], "claude-opus-5-5"), 0, "a chat on another model: the run's own check stops it");
+    assert.notEqual(real(["--policy-path", path]), 0, "no model at all: stopped, as a typed run is");
   } finally { s.cleanup(); }
   const t = sandbox();
   try {
@@ -328,20 +352,18 @@ test("the run-start check of a run zero-touch started reads the person's policy 
 });
 
 test("the same job queued from words, then typed by the person: it starts as typed", { skip: SKIP ?? false }, async () => {
-  // 1 Oct 2026, found in the review's second pass: the typed command was taken as a duplicate of the queued one and
-  // then started with zero-touch's models.
+  // The typed command is not a duplicate of the queued one, and never starts with zero-touch's models.
   const s = sandbox({ mode: "workflows", workflows: { models: "opus-plus-sonnet" } });
   try {
     await typedRun(s, "dq", "docs", "document the cart module", "docs-dq");
-    const words = await say(s, "dq", TESTS);
-    await answerQuestion(s, "dq", words, "Queue it");
+    await say(s, "dq", TESTS); // queued at once from words (no box for plain words)
     await run("turn-end", { session_id: "dq", cwd: s.repo, stop_hook_active: false }, s);
     const typed = await run("prompt", { session_id: "dq", cwd: s.repo, prompt: `/mmo:test ${TESTS}`, prompt_id: `t-${++seq}` }, s);
     await answerQuestion(s, "dq", typed, "Queue it");
     await run("turn-end", { session_id: "dq", cwd: s.repo, stop_hook_active: false }, s);
     endRun(s, "docs-dq");
     const next = await run("turn-end", { session_id: "dq", cwd: s.repo, stop_hook_active: false }, s);
-    assert.match(next.json?.reason ?? "", /skill "mmo:test", args "write unit tests for the pricing functions in src\/cart\.js"/, "exactly as typed");
-    assert.doesNotMatch(next.json?.reason ?? "", /\[zero-touch/);
+    assert.match(queuedStart(next), /skill "mmo:test", args "write unit tests for the pricing functions in src\/cart\.js"/, "exactly as typed");
+    assert.doesNotMatch(queuedStart(next), /\[zero-touch/);
   } finally { s.cleanup(); }
 });

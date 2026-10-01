@@ -5,9 +5,9 @@
  *     copy because Claude Code gives each plugin its own files, so zero-touch carries no mmo code;
  *   - mmo's hook before it starts a workflow (plugin/scripts/ambient/lib/route-flow.mjs googleLoggedIn), which uses the
  *     original's functions.
- * Decided 1 Oct 2026 ("blend it; if the current code is robust, use it"): a value that is only a placeholder does not
- * count; a credential file must be readable and complete; a project name alone is not a login; a configured file that
- * cannot be used is "broken". This test runs all three on the same cases.
+ * The rule: a value that is only a placeholder does not count; a credential file must be readable and complete; a
+ * project name alone is not a login; a configured file that cannot be used is "broken". This test runs all three on
+ * the same cases.
  *
  * Offline: files in a temporary home only.
  */
@@ -53,10 +53,11 @@ test("the three answers agree on every case: nothing, a key, a placeholder, a pr
       ["a key that is only a placeholder", { GEMINI_API_KEY: "${GEMINI_API_KEY}" }, null, null, false],
       ["a project name alone", { GOOGLE_CLOUD_PROJECT: "p1" }, null, null, false],
       ["the backend switch alone", { GEMINI_BACKEND: "vertex" }, null, null, false],
-      ["a complete gcloud login", {}, { type: "authorized_user", client_id: "a", client_secret: "b", refresh_token: "c" }, null, true],
+      ["a complete gcloud login, with a project", { GOOGLE_CLOUD_PROJECT: "p1" }, { type: "authorized_user", client_id: "a", client_secret: "b", refresh_token: "c" }, null, true],
+      ["a complete gcloud login whose file names its project", {}, { type: "authorized_user", client_id: "a", client_secret: "b", refresh_token: "c", quota_project_id: "p2" }, null, true],
       ["a gcloud login missing its refresh token", {}, { type: "authorized_user", client_id: "a", client_secret: "b" }, null, false],
       ["a gcloud login file that is not JSON", {}, "{ half", null, false],
-      ["a complete service account", { GOOGLE_APPLICATION_CREDENTIALS: sa }, null, { type: "service_account", client_email: "x@y", private_key: "k" }, true],
+      ["a complete service account", { GOOGLE_APPLICATION_CREDENTIALS: sa }, null, { type: "service_account", client_email: "x@y", private_key: "k", project_id: "p3" }, true],
       ["a broken service account, even beside a good gcloud login", { GOOGLE_APPLICATION_CREDENTIALS: sa }, { type: "authorized_user", client_id: "a", client_secret: "b", refresh_token: "c" }, { type: "service_account" }, false],
       ["a service account path that does not exist", { GOOGLE_APPLICATION_CREDENTIALS: join(dir, "gone.json") }, null, null, false],
     ];
@@ -81,7 +82,7 @@ test("the one real check runs only for a gcloud login, and never throws", () => 
   try {
     const home = join(dir, "home");
     mkdirSync(join(home, ".config", "gcloud"), { recursive: true });
-    writeFileSync(join(home, ".config", "gcloud", "application_default_credentials.json"), JSON.stringify({ type: "authorized_user", client_id: "a", client_secret: "b", refresh_token: "c" }));
+    writeFileSync(join(home, ".config", "gcloud", "application_default_credentials.json"), JSON.stringify({ type: "authorized_user", client_id: "a", client_secret: "b", refresh_token: "c", quota_project_id: "p1" }));
     const calls = [];
     const run = (answer) => (cmd, args) => { calls.push([cmd, ...args].join(" ")); return answer; };
     assert.deepEqual(G.onlineCheck({ HOME: home }, { run: run({ status: 0, stdout: "ya29.x\n" }) }), { result: "works", detail: null });
@@ -92,5 +93,29 @@ test("the one real check runs only for a gcloud login, and never throws", () => 
     calls.length = 0;
     assert.equal(G.onlineCheck({ HOME: home, GEMINI_API_KEY: "k" }, { run: run({ status: 0, stdout: "x" }) }).result, "unknown", "a key is not tested online");
     assert.deepEqual(calls, []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a Google Cloud sign-in with no project is not connected for zero-touch; mmo's own setup check keeps its own rule", () => {
+  // A login file alone is not connected: a workflow would start and stop at its first Flash step.
+  const dir = mkdtempSync(join(tmpdir(), "zt-google-project-"));
+  try {
+    const home = join(dir, "home");
+    const gcloud = join(home, ".config", "gcloud");
+    mkdirSync(join(gcloud, "configurations"), { recursive: true });
+    writeFileSync(join(gcloud, "application_default_credentials.json"), JSON.stringify({ type: "authorized_user", client_id: "a", client_secret: "b", refresh_token: "c" }));
+    const env = { HOME: home };
+    assert.equal(original(env).connected, true, "mmo's setup check: unchanged");
+    assert.deepEqual([G.googleState(env).connected, G.googleState(env).state], [false, "no-project"]);
+    assert.equal(R.googleLoggedIn(env), false, "mmo's start check, zero-touch's rule");
+    // gcloud's own configuration names the project: connected, by both copies of the rule.
+    writeFileSync(join(gcloud, "active_config"), "work\n");
+    writeFileSync(join(gcloud, "configurations", "config_work"), "[core]\naccount = a@b\nproject = my-proj\n");
+    assert.equal(G.googleProject(env), "my-proj");
+    assert.equal(R.googleProject(env), "my-proj");
+    assert.equal(G.googleState(env).connected, true);
+    assert.equal(R.googleLoggedIn(env), true);
+    // An AI Studio key needs no project.
+    assert.equal(G.googleState({ HOME: join(dir, "empty"), GEMINI_API_KEY: "k" }).connected, true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

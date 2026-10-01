@@ -1,27 +1,29 @@
 /**
  * Zero-touch hand-off mode, the chat's start.
  *
- * Since 1 Oct 2026 a person chooses hand-off mode, and its settings, in the zero-touch settings box in the chat: the
- * model the chat is kept on (Opus 5, recommended, or Sonnet 5), and who types each kind of hand-off work (new
- * documents, specs and plans; new tests; the same change repeated in many files): Flash 3.8, Sonnet 5, or kept in the
- * chat. The zero-touch plugin keeps the choices (zero-touch/scripts/settings.mjs). The old mode file and the hand-off
- * settings in ambient.json are not read any more, and a project's routing-policy.yaml is not used by zero-touch.
+ * A person chooses hand-off mode, and its settings, in the zero-touch settings box in the chat: the model the chat is
+ * kept on (Opus 5, recommended, or Sonnet 5), and who types each kind of hand-off work (new documents, specs and
+ * plans; new tests; the same change repeated in many files): Flash 3.8, Sonnet 5, or kept in the chat. The zero-touch
+ * plugin keeps the choices (zero-touch/scripts/settings.mjs); a project's routing-policy.yaml is not used by
+ * zero-touch.
  *
  * Everything is read ONCE, when the chat starts, and stamped on the chat (`sessions/<chat id>/chat_mode` and
  * `handoff.json`): a setting changed in the middle of a chat would leave the chat's start message, its no-switching
  * guard and its hand-offs disagreeing with each other, and would split one chat's costs across two sets of models.
  * A change reaches the next new chat (/clear is one: Claude Code gives it a new chat id).
  *
- * At the start the person sees a message (the hook's `systemMessage`) and the chat's model gets the hand-off rules and
- * the settings note (the hook's `additionalContext`). A compaction drops those from what the model reads, so both are
- * given again after a compaction and when a chat is reopened, from the stamp, never from the settings.
+ * At the start the person sees a message (the hook's `systemMessage`): the summary of the saved settings once per save,
+ * then only lines that need their action (quiet by default). The chat's model gets the hand-off rules (the
+ * hook's `additionalContext`) at every start; a compaction drops them from what the model reads, so they are given
+ * again after a compaction and when a chat is reopened, from the stamp, never from the settings. Nothing is shown to the
+ * person again then. The settings box is given to Claude when the person names zero-touch (settings-hook.mjs).
  *
  * Every case runs the real start hook through its shell script with its own home, plugin data folder and project
  * folder. No network, no model.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -30,7 +32,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const START = join(ROOT, "zero-touch", "hooks", "start-chat.sh");
 const { chatMode } = await import(join(ROOT, "plugin", "scripts", "ambient", "lib", "chat-mode.mjs"));
-const { writeZtSettings, ztData } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
+const { writeZtSettings, ztData, gitProject } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
 const M = await import(join(ROOT, "zero-touch", "scripts", "messages.mjs"));
 const { DEFAULTS } = await import(join(ROOT, "zero-touch", "scripts", "settings.mjs"));
 const readJson = (p) => JSON.parse(readFileSync(p, "utf8"));
@@ -42,6 +44,7 @@ function sandbox({ handoff = {}, mode = "handoff" } = {}) {
   const repo = join(dir, "repo");
   mkdirSync(home);
   mkdirSync(repo);
+  gitProject(repo); // a Hand-off project is a git project (tests and repeats are checked in a git test copy)
   writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
   writeZtSettings(home, { mode, handoff: { ...DEFAULTS.handoff, ...handoff } });
   // No organisation settings file unless a test writes one.
@@ -72,15 +75,22 @@ test("Hand-off: the chat is marked, its settings are stamped on it, the person s
     for (const source of ["startup", "clear"]) {
       const sid = `b-${source}`;
       const r = await start(s, sid, { source, model: "claude-opus-5" });
+      const st = stamp(s, sid);
+      if (source === "clear") {
+        // The summary showed in the first chat after the save: this one says nothing, and the rules still come.
+        assert.equal(r.message, "", "clear: quiet, the summary was shown already");
+        assert.match(r.note, /write_document/, "clear: the rules all the same");
+        assert.equal(st.chat_model, "claude-opus-5");
+        continue;
+      }
       assert.equal(r.code, 0);
       assert.equal(chatMode(sid, { MMO_HOME: s.home }), "b", source);
-      const st = stamp(s, sid);
       assert.equal(st.chat_model, "claude-opus-5", "the standard chat model");
       assert.equal(st.pin, "setting");
       assert.deepEqual(st.typists, { documents: { typist: "flash", policy: "opus-plus-flash-v38" }, tests: { typist: "flash", policy: "opus-plus-flash-v38" }, repeats: { typist: "flash", policy: "opus-plus-flash-v38" } });
       assert.equal(r.message, M.handoffMessage(st, "claude-opus-5"), "the approved words, exactly");
       assert.match(r.message, /^Zero-touch is on in this chat: Hand-off mode\./);
-      assert.match(r.message, /Opus 5, this chat's model, does the real development work itself/);
+      assert.match(r.message, /Opus 5, the model you chose for this chat, does the real development work itself/);
       assert.match(r.message, /new documents, specs and plans: Google's Flash 3\.8/);
       assert.match(r.message, /This chat stays on Opus 5, because good development and good hand-off decisions need its judgment/);
       assert.match(r.message, /type "change zero-touch settings"/);
@@ -88,7 +98,7 @@ test("Hand-off: the chat is marked, its settings are stamped on it, the person s
       assert.equal(r.json.hookSpecificOutput.hookEventName, "SessionStart");
       for (const tool of ["write_document", "write_tests_from_cases", "repeat_edit_across_files"]) assert.match(r.note, new RegExp(tool), `the rules name ${tool}`);
       assert.match(r.note, /No full workflow starts from the person's plain words in this chat/);
-      assert.match(r.note, /Zero-touch settings: if the person asks to change how zero-touch works/, "and the settings note");
+      assert.doesNotMatch(r.note, /Zero-touch settings:/, "the settings box comes when the person names zero-touch, not at every start");
     }
   } finally { s.cleanup(); }
 });
@@ -107,24 +117,23 @@ test("work kept in the chat is not handed off: the message says who does it, and
   } finally { s.cleanup(); }
 });
 
-test("the start message says only what is true of the chosen models: 'cheaper' only when it is, nothing about hand-offs when all is kept", async () => {
-  // 1 Oct 2026: the message once said "handed off to a cheaper AI model" for every setup; with a Sonnet 5 chat and a
-  // Sonnet 5 typist that is false, and with all three kinds kept in the chat nothing is handed off at all.
+test("the start message says only what is true of the chosen models: no price claim, nothing about hand-offs when all is kept", async () => {
+  // No price claim, in any setup: on a Claude plan (most people) Opus 5 and Sonnet 5 use the plan's limits and
+  // Flash 3.8 adds a Google bill, so "costs less than Opus 5" and "the savings" are not prices the person pays. With
+  // all three kinds kept in the chat, nothing is handed off at all.
   const cases = [
-    { name: "standard", handoff: {}, model: "claude-opus-5", cheaper: /which costs less than Opus 5/, savings: true, handed: true },
-    { name: "Sonnet chat, Sonnet typists", handoff: { chat_model: "claude-sonnet-5", documents: "sonnet", tests: "sonnet", repeats: "sonnet" }, model: "claude-sonnet-5", cheaper: null, savings: false, handed: true },
-    { name: "Sonnet chat, Flash typists", handoff: { chat_model: "claude-sonnet-5" }, model: "claude-sonnet-5", cheaper: /which costs less than Sonnet 5/, savings: false, handed: true },
-    { name: "Sonnet chat, one Sonnet typist", handoff: { chat_model: "claude-sonnet-5", documents: "flash", tests: "sonnet", repeats: "chat" }, model: "claude-sonnet-5", cheaper: null, savings: false, handed: true },
-    { name: "all kept, Opus", handoff: { documents: "chat", tests: "chat", repeats: "chat" }, model: "claude-opus-5", cheaper: null, savings: false, handed: false },
-    { name: "all kept, Sonnet", handoff: { chat_model: "claude-sonnet-5", documents: "chat", tests: "chat", repeats: "chat" }, model: "claude-sonnet-5", cheaper: null, savings: false, handed: false },
+    { name: "standard", handoff: {}, model: "claude-opus-5", handed: true },
+    { name: "Sonnet chat, Sonnet typists", handoff: { chat_model: "claude-sonnet-5", documents: "sonnet", tests: "sonnet", repeats: "sonnet" }, model: "claude-sonnet-5", handed: true },
+    { name: "Sonnet chat, Flash typists", handoff: { chat_model: "claude-sonnet-5" }, model: "claude-sonnet-5", handed: true },
+    { name: "Sonnet chat, one Sonnet typist", handoff: { chat_model: "claude-sonnet-5", documents: "flash", tests: "sonnet", repeats: "chat" }, model: "claude-sonnet-5", handed: true },
+    { name: "all kept, Opus", handoff: { documents: "chat", tests: "chat", repeats: "chat" }, model: "claude-opus-5", handed: false },
+    { name: "all kept, Sonnet", handoff: { chat_model: "claude-sonnet-5", documents: "chat", tests: "chat", repeats: "chat" }, model: "claude-sonnet-5", handed: false },
   ];
   for (const c of cases) {
     const s = sandbox({ handoff: c.handoff });
     try {
       const r = await start(s, "t1", { model: c.model });
-      if (c.cheaper) assert.match(r.message, c.cheaper, c.name);
-      else assert.doesNotMatch(r.message, /costs less|cheaper/, `${c.name}: no cheaper claim`);
-      assert.equal(/savings/.test(r.message), c.savings, `${c.name}: savings named only for an Opus chat that hands off`);
+      assert.doesNotMatch(r.message, /costs? less|cheaper|cheapest|expensive|savings/, `${c.name}: no price claim`);
       if (c.handed) {
         assert.match(r.message, /If a hand-off fails twice, (Opus|Sonnet) 5 tries once more itself/, c.name);
       } else {
@@ -146,8 +155,9 @@ test("the settings are read once: a change reaches the next new chat (or /clear,
     for (const source of ["compact", "resume"]) {
       const again = await start(s, "c1", { source, model: "claude-sonnet-5" });
       assert.equal(chatMode("c1", { MMO_HOME: s.home }), "b", `${source}: the mode the chat started with`);
-      assert.equal(again.message, first.message, `${source}: the stamped settings, not the new ones`);
+      assert.equal(again.message, "", `${source}: nothing is shown again`);
       assert.match(again.note, /hand-off mode/, `${source}: the rules are given again, since a compaction drops them`);
+      assert.match(again.note, /write_document/, `${source}: the stamped typists (Sonnet), not the new settings (Workflows)`);
     }
     await start(s, "c2");
     assert.equal(chatMode("c2", { MMO_HOME: s.home }), "on", "a new chat takes the new mode");
@@ -159,9 +169,9 @@ test("a Workflows chat gets no hand-off rules, at its start or after a compactio
   try {
     for (const source of ["startup", "compact", "resume"]) {
       const r = await start(s, "a1", { source });
-      assert.match(r.message, /^Zero-touch is on in this chat: Workflows mode\./, source);
-      assert.doesNotMatch(r.note, /hand-off mode|write_document/, `${source}: no hand-off rules`);
-      assert.match(r.note, /Zero-touch settings:/, `${source}: only the settings note`);
+      if (source === "startup") assert.match(r.message, /^Zero-touch is on in this chat: Workflows mode\./, source);
+      else assert.equal(r.stdout, "", `${source}: nothing again`);
+      assert.equal(r.note, "", `${source}: no hand-off rules, and no note at all`);
     }
     assert.throws(() => stamp(s, "a1"), "no hand-off stamp in a Workflows chat");
   } finally { s.cleanup(); }
@@ -173,13 +183,22 @@ test("the start message says whether the chat is on its chosen model, as far as 
     const on = await start(s, "m1", { model: "claude-opus-5[1m]" });
     assert.match(on.message, /This chat stays on Opus 5, because/, "the 1M-context tag is the same model");
     const other = await start(s, "m2", { model: "claude-sonnet-5" });
-    assert.match(other.message, /Hand-off mode needs this chat on Opus 5, but it's on Sonnet 5 right now\. Switch it using the model menu next to the message box \(in the terminal, type \/model claude-opus-5\)\. After that, switching away is blocked\./);
+    // Says why, naming the person's choice.
+    assert.match(other.message, /This chat is on Sonnet 5, but you chose Opus 5 to do the development in Hand-off mode\. Switch it to Opus 5 using the model menu next to the message box \(in the terminal, type \/model claude-opus-5\)\. After that, zero-touch refuses a switch away\./);
+    // After the summary (m1), the model line is said only as a warning: a chat known to be on another model (m2).
+    assert.equal(other.message, M.warningsMessage({ mode: "b" }, [M.chatModelLine(stamp(s, "m2"), "claude-sonnet-5")]));
     const unknown = await start(s, "m3");
-    assert.match(unknown.message, /Hand-off mode needs this chat on Opus 5\. If it's on a different model, switch it using the model menu next to the message box/, "Claude Code does not always say which model a chat starts on");
+    assert.equal(unknown.message, "", "Claude Code does not always say which model a chat starts on: no warning without one");
+    const fresh = sandbox();
+    try {
+      const first = await start(fresh, "m4");
+      assert.match(first.message, /Hand-off mode needs this chat on Opus 5, because you chose Opus 5 to do the development\. If it's on a different model, switch it using the model menu next to the message box/, "the summary, with no model known, says what is needed and why");
+    } finally { fresh.cleanup(); }
     assert.equal(readFileSync(join(s.home, "sessions", "m2", "model_now"), "utf8"), "claude-sonnet-5", "the chat's model is kept for the lines that follow");
-    // After a compaction the chat's current model is what counts, not the one it started on.
+    // After a compaction the chat's current model is kept; nothing is shown again.
     const later = await start(s, "m2", { source: "compact", model: "claude-opus-5" });
-    assert.match(later.message, /This chat stays on Opus 5, because/);
+    assert.equal(later.message, "");
+    assert.equal(readFileSync(join(s.home, "sessions", "m2", "model_now"), "utf8"), "claude-opus-5", "the model the chat is on now");
   } finally { s.cleanup(); }
 });
 
@@ -202,12 +221,16 @@ test("an organisation's pinned model wins over the person's chat model, and the 
     assert.deepEqual([stamp(s, "o1").chat_model, stamp(s, "o1").pin], ["claude-opus-5", "admin"]);
     assert.match(exact.message, /This chat stays on Opus 5, the model your organisation set\./);
     assert.doesNotMatch(exact.message, /\/model/, "the organisation's setting decides; nothing to type");
+    assert.equal((await start(s, "o1b", { model: "claude-sonnet-5" })).message, "", "a later chat: no warning, the organisation's model is not the person's to switch");
     // An alias cannot be compared with a model id, so nothing is pinned by this plugin: the organisation's own
     // setting is what holds the chat.
-    writeFileSync(s.managed, JSON.stringify({ model: "opus" }));
-    const alias = await start(s, "o2");
-    assert.deepEqual([stamp(s, "o2").chat_model, stamp(s, "o2").pin], [null, "admin"]);
-    assert.match(alias.message, /This chat stays on opus, the model your organisation set\./);
+    const a = sandbox({ handoff: { chat_model: "claude-sonnet-5" } });
+    try {
+      writeFileSync(a.managed, JSON.stringify({ model: "opus" }));
+      const alias = await start(a, "o2");
+      assert.deepEqual([stamp(a, "o2").chat_model, stamp(a, "o2").pin], [null, "admin"]);
+      assert.match(alias.message, /This chat stays on opus, the model your organisation set\./);
+    } finally { a.cleanup(); }
   } finally { s.cleanup(); }
 });
 
@@ -224,7 +247,7 @@ test("a one-run override still wins over the settings, for a developer or a meas
   } finally { s.cleanup(); }
 });
 
-test("a Hand-off chat marked before 1 Oct 2026 (one policy for every kind) still reads: its message and rules are shown again after a compaction", async () => {
+test("a Hand-off chat stamped with one policy for every kind still reads: its rules are given again after a compaction, and its facts when zero-touch is named", async () => {
   const s = sandbox();
   try {
     const dir = join(s.home, "sessions", "old1");
@@ -232,8 +255,9 @@ test("a Hand-off chat marked before 1 Oct 2026 (one policy for every kind) still
     writeFileSync(join(dir, "chat_mode"), "b");
     writeFileSync(join(dir, "handoff.json"), JSON.stringify({ chat_model: "claude-opus-5", pin: "default", policy: "opus-plus-sonnet", policy_file: null }));
     const r = await start(s, "old1", { source: "compact", model: "claude-opus-5" });
-    assert.match(r.message, /^Zero-touch is on in this chat: Hand-off mode\./);
-    assert.match(r.message, /new tests: Sonnet 5/, "the old single policy, read as the typist for every kind");
+    assert.equal(r.message, "");
     assert.match(r.note, /write_tests_from_cases/);
+    const asked = spawnSync("sh", [join(ROOT, "zero-touch", "hooks", "settings.sh"), "prompt"], { input: JSON.stringify({ session_id: "old1", prompt: "is zero-touch on here?" }), env: { PATH: process.env.PATH, HOME: s.home, MMO_HOME: s.home, CLAUDE_PLUGIN_DATA: ztData(s.home) }, encoding: "utf8" });
+    assert.match(JSON.parse(asked.stdout).hookSpecificOutput.additionalContext, /In this chat zero-touch is on, set when the chat started: Hand-off mode on Opus 5; documents go to Sonnet 5, tests to Sonnet 5, repeated changes to Sonnet 5\./, "the old single policy, read as the typist for every kind");
   } finally { s.cleanup(); }
 });

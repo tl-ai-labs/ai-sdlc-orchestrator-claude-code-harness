@@ -21,8 +21,6 @@ setup is one-time per machine and happens separately.
   remaining ones.
 - Neither present (the plain `/mmo:brownfield` case) — step 4 runs exactly as written below: ask
   which job type, then run the full interview.
-- `policy: <name>` and `auth_mode: <vendor|estimated>` present — a run zero-touch started; they
-  are this run's policy and cost recording. Gate 0's Policy and Auth mode items use them (see there).
 
 ---
 
@@ -172,17 +170,15 @@ template from `${CLAUDE_PLUGIN_ROOT}/skills/pipeline/SKILL.md` (search for
 
 - **Stack** — top-detected from `baseline.stacks`. Ask if it's right; accept overrides.
 - **Test command** — `baseline.test_command_proposed`. Accept an override.
-- **Auth mode** — when the handover carries `auth_mode`, show it and do not ask. Otherwise ask
-  `vendor` (billed via API keys) or `estimated` (Claude Code subscription
-  auth, cost is an estimate). Required — the orchestrator aborts without it. Under `estimated`
-  the driver subagents run on the model their agent files name (`claude-opus-5`); nothing has
-  to be set before launch. The orchestrator's run-start driver-model check stops the run when
-  the policy's driver model is a different one, and says which policies fit.
-- **Policy** — when the handover carries `policy: <name>` (a run zero-touch started), that is this
-  run's policy: show `<name> (chosen for this run)`, skip the saved-choice check below, and use the
-  explicit file `${CLAUDE_PLUGIN_ROOT}/config/policies/<name>.yaml` as `policy_path` everywhere, which
-  wins over the project default and over a repo-local `routing-policy.yaml`, as `/mmo:pass --policy`
-  does. Otherwise, read `payload.project.default_policy` from the session-hydrate output already
+- **Auth mode** — ask `vendor` (billed via API keys) or `estimated` (Claude Code subscription
+  auth, cost is an estimate). Required — the orchestrator aborts without it. `estimated` also
+  requires `CLAUDE_CODE_SUBAGENT_MODEL` to have been set before `claude` launched (it is what
+  the driver subagents execute on): from a terminal, exported or in the `env` block of the
+  project's `.claude/settings.local.json`; from the desktop app, in the `env` block of
+  `~/.claude/settings.json`, since the app ignores project settings files. The orchestrator's
+  run-start driver-model check stops the run, printing where to set it, when it is unset or
+  disagrees with the policy's driver model.
+- **Policy** — read `payload.project.default_policy` from the session-hydrate output already
   captured in step 1 of this command. This is what setup wrote to `.sdlc/project.json`. If
   it is null, setup was not completed for this project — abort Gate 0 and tell the user to
   pick a policy first with `/mmo:setup` (its policy step) or `/mmo:policy`. Do not silently
@@ -231,8 +227,6 @@ Pass:
 - `intent_brief_path: .sdlc/runs/<run-id>/intent_brief.md`
 - `baseline_path: .sdlc/baseline/current.json`
 - `policy: <as configured by setup — see the Policy bullet of Gate 0>`
-- `policy_path: ${CLAUDE_PLUGIN_ROOT}/config/policies/<name>.yaml` — only when the handover carried
-  `policy: <name>`; the orchestrator passes it on every policy call and to its run-start check
 - `auth_mode: <from the Auth mode bullet of Gate 0>` — required; see
   `${CLAUDE_PLUGIN_ROOT}/agents/orchestrator.md` rule 6. Without it the
   orchestrator aborts rather than guessing which transport bills the run.

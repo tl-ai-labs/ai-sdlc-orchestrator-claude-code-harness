@@ -62,6 +62,11 @@ export interface HandoffDeps {
   emit(ev: TelemetryEvent): void;
   sleep?(ms: number): Promise<void>;
   random?(): number;
+  /**
+   * The person stopped the hand-off (the request's own cancel signal): no further attempt or wait starts,
+   * a running typist's program is ended, and the outcome says `stopped`.
+   */
+  signal?: AbortSignal;
 }
 
 export interface HandoffOutcome {
@@ -81,6 +86,8 @@ export interface HandoffOutcome {
   note?: string;
   /** Why the last attempt failed, when none passed. */
   reason?: string;
+  /** The person stopped it before it finished (HandoffDeps.signal). */
+  stopped?: boolean;
 }
 
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
@@ -140,7 +147,7 @@ export async function runHandoff(job: HandoffJob, deps: HandoffDeps): Promise<Ha
       const t0 = Date.now();
       let r: TypistResult;
       try {
-        r = await typist.type({ unit: { id: job.id, path: job.path }, packet, framed: framedPacket(packet), shared: job.shared, sharedFile, contract: job.contract, passId: "handoff" });
+        r = await typist.type({ unit: { id: job.id, path: job.path }, packet, framed: framedPacket(packet), shared: job.shared, sharedFile, contract: job.contract, passId: "handoff", ...(deps.signal ? { signal: deps.signal } : {}) });
       } catch (e: any) {
         // A typist that throws (it cannot be built on this machine, a spawn failure) fails this attempt.
         r = { answer: null, error: `the ${typist.door} typist failed: ${e?.message ?? String(e)}`.slice(0, 300), transport: false, tokens: { input: 0, input_cached: 0, output: 0 }, cost_usd: 0, latency_ms: Date.now() - t0 };
@@ -150,9 +157,10 @@ export async function runHandoff(job: HandoffJob, deps: HandoffDeps): Promise<Ha
       }
       outcome.calls++;
       outcome.cost_usd += r.cost_usd;
-      if (r.transport && k < deps.transport.maxWaits) {
+      if (r.transport && k < deps.transport.maxWaits && !deps.signal?.aborted) {
         deps.emit(event(typist, r, attempt, false, r.error, "transport"));
-        await sleep(r.retry_after_ms ?? backoffMs(k, deps.transport.baseMs, deps.transport.capMs, random));
+        await stoppable(sleep(r.retry_after_ms ?? backoffMs(k, deps.transport.baseMs, deps.transport.capMs, random)), deps.signal);
+        if (deps.signal?.aborted) return r;
         continue;
       }
       return r;
@@ -165,9 +173,17 @@ export async function runHandoff(job: HandoffJob, deps: HandoffDeps): Promise<Ha
   let routedWhy = "";
   try {
     for (let i = 0; i < plan.length; i++) {
+      // Stopped by the person: no further attempt starts (what was spent so far is on the bill).
+      if (deps.signal?.aborted) { outcome.stopped = true; outcome.reason = "stopped before it finished"; break; }
       const typist = plan[i];
       const attempt = ++outcome.attempts;
       const r = await call(typist, refusal, attempt);
+      if (deps.signal?.aborted) {
+        deps.emit(event(typist, r, attempt, false, "stopped before it finished"));
+        outcome.stopped = true;
+        outcome.reason = "stopped before it finished";
+        break;
+      }
       let why = r.error;
       let landed: { content: string; checked: string[] } | null = null;
       if (r.answer) {
@@ -206,3 +222,14 @@ export async function runHandoff(job: HandoffJob, deps: HandoffDeps): Promise<Ha
 }
 
 const LOGIN_WORDS = "its login or permission was refused";
+
+/** A wait that ends early when the hand-off is stopped. */
+function stoppable(wait: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return wait;
+  if (signal.aborted) return Promise.resolve();
+  return new Promise<void>((done) => {
+    const stop = () => done();
+    signal.addEventListener("abort", stop, { once: true });
+    wait.then(() => { signal.removeEventListener("abort", stop); done(); });
+  });
+}

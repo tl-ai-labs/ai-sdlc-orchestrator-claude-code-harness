@@ -23,10 +23,10 @@ import type { ModelPricing } from "./types.js";
 
 export const PRICE_LIST_VERIFIED = "2026-09-14";
 /**
- * Claude Opus 5.5 (the desktop app's default model) was added on 26 Sep 2026
+ * When the Claude Opus 5.5 row (the desktop app's default model) was verified
  * from the same Anthropic page, so an mmo run whose chat is on it can be
- * priced. Its row carries this date; the rest of the list was not re-checked
- * for the addition and keeps PRICE_LIST_VERIFIED.
+ * priced. Only that row carries this date; the rest of the list keeps
+ * PRICE_LIST_VERIFIED.
  */
 export const OPUS_5_5_VERIFIED = "2026-09-26";
 export const ANTHROPIC_PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing";

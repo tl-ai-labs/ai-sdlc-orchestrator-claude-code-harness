@@ -2,23 +2,12 @@
   "hooks": {
     "PreToolUse": [
       {
-        "_comment": "Zero-touch (1 Oct 2026): inside a workflow zero-touch started, every model-server call that takes a policy is stamped with the policy the person chose, as an explicit file, which wins over a project's routing-policy.yaml; helpers' calls included. A workflow the person typed keeps its own rules.",
-        "matcher": "mcp__(plugin_mmo_)?model-dispatch__(load_policy|preflight_dispatch|execute_with_model|simulate_policy)",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" pre-dispatch",
-            "timeout": 5
-          }
-        ]
-      },
-      {
         "_comment": "Brownfield write contract: refuses Write/Edit outside the confirmed allowlist when brownfield mode is active. Silent no-op (allow) when .sdlc/local/write-contract.json is absent or its active flag is false, so greenfield /mmo:greenfield behavior is unchanged.",
         "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/write-contract-check.mjs\""
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/node.sh\" write-contract-check.mjs"
           }
         ]
       },
@@ -28,51 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/foreground-helpers.mjs\""
-          }
-        ]
-      },
-      {
-        "_comment": "Zero-touch workflow routing (docs/ambient-mode.md). Acts only in a chat the zero-touch plugin marked at its start (or for one run under MMO_AMBIENT); otherwise the shim exits before node starts. Always exits 0; decisions are JSON on stdout. The five mmo agents run only inside a workflow, and not while the Queue-or-Replace question waits; in an ordinary chat the model hiring one is refused.",
-        "matcher": "Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" pre-agent",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "_comment": "Zero-touch hand-off mode (docs/ambient-mode.md, Hand-off mode). Before a hand-off tool runs: in a hand-off chat the call gets the hook's stamp (the chat, the project folder, who pays), which the server needs to find the chat's policy and models; in a chat in workflow mode, and inside a workflow run, the call is refused with the reason. A chat without zero-touch ends in the shim before node starts, and the server refuses the unstamped call itself. Always exits 0; decisions are JSON on stdout.",
-        "matcher": "mcp__(plugin_mmo_)?model-dispatch__(write_document|write_tests_from_cases|repeat_edit_across_files|undo_hand_off)",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" pre-handoff",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "_comment": "Zero-touch workflow routing (docs/ambient-mode.md). Acts only in a chat the zero-touch plugin marked at its start (or for one run under MMO_AMBIENT); otherwise the shim exits before node starts. Always exits 0; decisions are JSON on stdout. Guard B: a /mmo: workflow starts only when routing recognised the message, the person typed it, or the queue or a replace starts it; the chat starting a second one mid-run is held for the Queue-or-Replace question.",
-        "matcher": "Skill",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" pre-skill",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "_comment": "Zero-touch workflow routing (docs/ambient-mode.md). Acts only in a chat the zero-touch plugin marked at its start (or for one run under MMO_AMBIENT); otherwise the shim exits before node starts. Always exits 0; decisions are JSON on stdout. Guard A: while a recognised job waits for its workflow to start, while the Queue-or-Replace question waits for its answer, and while a queued typed command is held, tools that change something wait.",
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" pre-any",
-            "timeout": 5
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/node.sh\" foreground-helpers.mjs"
           }
         ]
       },
@@ -82,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/executor-guard.mjs\" pre"
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/node.sh\" executor-guard.mjs pre"
           }
         ]
       }
@@ -99,118 +44,12 @@
         ]
       },
       {
-        "_comment": "Zero-touch hand-off mode (docs/ambient-mode.md, Hand-off mode). After a hand-off tool answered: the person sees one line written from the tool's receipt (what was written, by which model, what it cost; or that the hand-off failed). Decides nothing and adds nothing for the model. Always exits 0.",
-        "matcher": "mcp__(plugin_mmo_)?model-dispatch__(write_document|write_tests_from_cases|repeat_edit_across_files|undo_hand_off)",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" post-handoff",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "_comment": "Zero-touch workflow routing (docs/ambient-mode.md). Acts only in a chat the zero-touch plugin marked at its start (or for one run under MMO_AMBIENT); otherwise the shim exits before node starts. Always exits 0; decisions are JSON on stdout. Confirms a routed workflow's start once its command ran, so Guard A never leaves it blocked.",
-        "matcher": "Skill",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" post-skill",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "_comment": "Zero-touch workflow routing (docs/ambient-mode.md). Acts only in a chat the zero-touch plugin marked at its start (or for one run under MMO_AMBIENT); otherwise the shim exits before node starts. Always exits 0; decisions are JSON on stdout. Reads the person's answer to the replace-or-queue question (a multiple-choice result): Queue it or Replace it.",
-        "matcher": "AskUserQuestion",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" post-question",
-            "timeout": 5
-          }
-        ]
-      },
-      {
         "_comment": "Executor guard: records which orchestrator called execute_stage (its agent_id), so the pre hook above applies to that orchestrator only. Regex for both tool namespaces, as for execute_with_model.",
         "matcher": "mcp__(plugin_mmo_)?model-dispatch__execute_stage",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/executor-guard.mjs\" post"
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "_comment": "Zero-touch workflow routing (docs/ambient-mode.md). Acts only in a chat the zero-touch plugin marked at its start (or for one run under MMO_AMBIENT); otherwise the shim exits before node starts. Always exits 0; decisions are JSON on stdout. The chat's start work: its log line, the old-records sweep, and after /clear the earlier route and run forgotten.",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" session-start",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "_comment": "Zero-touch workflow routing (docs/ambient-mode.md). Acts only in a chat the zero-touch plugin marked at its start (or for one run under MMO_AMBIENT); otherwise the shim exits before node starts. Always exits 0; decisions are JSON on stdout. Reads the message with fixed rules ($0, no model): a recognised job gets the instruction to start its workflow; a typed /mmo: workflow command makes the chat its run; a new job while a workflow runs gets the Queue-or-Replace question; any other message gets nothing.",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" prompt",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "_comment": "Zero-touch workflow routing (docs/ambient-mode.md). Acts only in a chat the zero-touch plugin marked at its start (or for one run under MMO_AMBIENT); otherwise the shim exits before node starts. Always exits 0; decisions are JSON on stdout. At the end of a turn: ends the hold of a queued typed command, and starts the first queued job once the chat's workflow has ended.",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" turn-end",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PreModelSwitch": [
-      {
-        "_comment": "Zero-touch hand-off mode (docs/ambient-mode.md, Hand-off mode). Acts only in a chat the zero-touch plugin marked for hand-off at its start; in every other chat the shim exits or the hook answers nothing. Always exits 0; decisions are JSON on stdout. Keeps a hand-off chat on its pinned model: a switch to another model is refused, a switch to the pinned one passes, and a switch whose target cannot be read is never refused.",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" pre-model-switch",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PostModelSwitch": [
-      {
-        "_comment": "Zero-touch hand-off mode (docs/ambient-mode.md, Hand-off mode). Acts only in a hand-off chat. Always exits 0 and decides nothing: it keeps the model the chat is on now, so the line the person sees after each message names the model really in use.",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" post-model-switch",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "_comment": "Zero-touch (1 Oct 2026): /clear ends the old chat id; a workflow it abandons is recorded as stopped and the project is freed for the next one.",
-        "matcher": "clear",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/ambient.sh\" session-end",
-            "timeout": 5
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/node.sh\" executor-guard.mjs post"
           }
         ]
       }

@@ -1,13 +1,9 @@
 /**
- * Zero-touch (ambient mode) is added on top of 0.7.7 without changing anything
- * 0.7.7 does (25 Sep 2026: "none of 0.7.6 or 0.7.7 behaviour of plugins
- * should change after zero-touch additions"). The zero-touch branch (ed8e701)
- * had made every command and skill typed-only (`disable-model-invocation`) and
- * added "Runs only inside a typed /mmo: command" to every agent's description.
- * That static text changed 0.7.7 for everyone, zero-touch on or off, and the
- * router this branch builds starts a recognised task's /mmo: command through
- * the model. So the commands, skills and agents read as 0.7.7 has them; with
- * zero-touch on, its hooks decide which /mmo: command the model may start.
+ * Zero-touch (ambient mode) changes nothing mmo does without it. Its router
+ * starts a recognised task's /mmo: command through the model, so no command or
+ * skill is typed-only (`disable-model-invocation`) and no agent's description
+ * says it runs only inside a typed /mmo: command; with zero-touch on, its hooks
+ * decide which /mmo: command the model may start.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -23,7 +19,7 @@ function frontmatter(file) {
   return m[1];
 }
 
-test("commands and skills carry no zero-touch switch: the model can start them exactly as on 0.7.7", () => {
+test("commands and skills carry no zero-touch switch: the model can start them exactly as mmo does without zero-touch", () => {
   const dir = join(ROOT, "plugin", "commands");
   const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
   assert.equal(files.length, 13, "a new command must be added to this count on purpose");
@@ -31,7 +27,7 @@ test("commands and skills carry no zero-touch switch: the model can start them e
   const skills = join(ROOT, "plugin", "skills");
   for (const name of readdirSync(skills)) assert.doesNotMatch(frontmatter(join(skills, name, "SKILL.md")), /disable-model-invocation/, `skill ${name}`);
   const refactor = readFileSync(join(dir, "refactor.md"), "utf8");
-  // By the installed plugin's own path since 0.8.4 (tools/test/plugin-paths.test.mjs): a repository path exists only in a clone.
+  // By the installed plugin's own path (tools/test/plugin-paths.test.mjs): a repository path exists only in a clone.
   assert.match(refactor, /\$\{CLAUDE_PLUGIN_ROOT\}\/skills\/brownfield-guide\/SKILL\.md/, "commands keep reaching the guide by file path");
 });
 

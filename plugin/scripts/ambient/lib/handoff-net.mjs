@@ -37,6 +37,11 @@ const TEST_NAME = [
 ];
 /** A code file under a folder named __tests__ is a test, whatever its name. */
 const IN_TESTS_FOLDER = /(?:^|\/)__tests__\/[^/]+\.[cm]?[jt]sx?$/i;
+/**
+ * Folders of test data, not tests or documents: a Markdown fixture for a Markdown parser, a mock,
+ * a stored snapshot. The hand-off tools cannot write such a file exactly, so the net leaves it to the chat.
+ */
+const DATA_FOLDERS = new Set(["fixtures", "__fixtures__", "testdata", "test-data", "test_data", "__mocks__", "__snapshots__"]);
 
 /** "document", "tests" or null for a path written from the project folder. */
 export function fileKind(path) {
@@ -45,6 +50,7 @@ export function fileKind(path) {
   const name = parts[parts.length - 1] ?? "";
   if (!name || parts.some((part) => part.startsWith(".") && part !== "." && part !== "..")) return null;
   if (AGENT_FILES.has(name)) return null;
+  if (parts.slice(0, -1).some((part) => DATA_FOLDERS.has(part))) return null;
   if (DOCUMENT.test(name)) return "document";
   if (TEST_NAME.some((re) => re.test(name)) || IN_TESTS_FOLDER.test(p)) return "tests";
   return null;
@@ -172,7 +178,10 @@ export function createdByHand(toolName, toolInput, { cwd, projectDir }) {
     const rel = relative(resolve(projectDir), abs);
     return !rel || rel.startsWith("..") || isAbsolute(rel) ? null : rel.split(sep).join("/");
   };
-  if (toolName === "Write") return [inProject(cwd, toolInput?.file_path)].filter(Boolean);
+  // Write, an edit or a notebook edit: an edit of a file that does not exist yet creates it
+  // (the hook checks whether it exists).
+  if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit") return [inProject(cwd, toolInput?.file_path)].filter(Boolean);
+  if (toolName === "NotebookEdit") return [inProject(cwd, toolInput?.notebook_path)].filter(Boolean);
   if (toolName === "Bash") return [...new Set(shellTargets(toolInput?.command).map((t) => inProject(cwd, t)).filter(Boolean))];
   return [];
 }

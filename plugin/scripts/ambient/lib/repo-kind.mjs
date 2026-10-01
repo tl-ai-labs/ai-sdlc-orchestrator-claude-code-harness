@@ -9,10 +9,7 @@ import { readdirSync } from "node:fs";
 import { extname, join } from "node:path";
 
 /**
- * The extensions that count as a project's own source. Until 0.8.4 this list lived in lib/outline.mjs (the generic
- * orchestrator's Read outlines, removed), with the same extensions. Markdown is not source here; the one change is
- * that an upper-case .MD file no longer counts as source (the old check lower-cased the extension but compared the
- * name's own case).
+ * The extensions that count as a project's own source. Markdown is not source here.
  */
 const SOURCE_EXTENSIONS = new Set([
   ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts",

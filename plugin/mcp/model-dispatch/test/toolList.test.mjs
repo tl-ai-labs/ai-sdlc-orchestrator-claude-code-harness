@@ -2,14 +2,10 @@
  * The tools this server lists, read the way Claude Code reads them: the built server started over stdio, an MCP
  * `initialize`, then `tools/list`.
  *
- * Why (0.8.4): the generic orchestrator that made other chats cheaper is removed, and with it the ten worker tools
- * this server used to list in every chat, workflow runs included (fix_from_analysis, write_files_from_specs, lookup,
- * ...). The list is the pipeline's own tools, the executor's, and the tools of zero-touch's hand-off mode.
+ * The list is the pipeline's own tools, the executor's, and the tools of zero-touch's hand-off mode, and nothing else.
  *
- * The hand-off tools are listed in every chat, because the server cannot know a chat's mode when its tools are
- * listed (a chat can change mode at /clear while the server keeps running, and a hand-off chat whose tools were
- * missing could neither hand a document off nor type it). A call is refused unless the plugin's hook stamped it in a
- * hand-off chat, which the second test proves through the real server.
+ * The hand-off tools are listed only where a Hand-off chat can use them (handoffListing.test.mjs). A call is refused
+ * unless the plugin's hook stamped it in a hand-off chat, which the second test proves through the real server.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -63,9 +59,11 @@ function ask(method, params, env = {}) {
   });
 }
 
-const listTools = async () => (await ask("tools/list", {})).tools ?? [];
+// A machine where zero-touch may use the hand-off tools (a setup with no record of installed plugins and no
+// zero-touch data folder, as this bare test home is, lists none; handoffListing.test.mjs).
+const listTools = async (env = { MMO_HANDOFF_TOOLS: "on" }) => (await ask("tools/list", {}, env)).tools ?? [];
 
-test("the server lists the pipeline's tools, the executor's and hand-off mode's, and none of the removed chat-worker tools", async () => {
+test("the server lists the pipeline's tools, the executor's and hand-off mode's, and nothing else", async () => {
   const names = (await listTools()).map((t) => t.name).sort();
   assert.deepEqual(names, [
     "execute_stage",

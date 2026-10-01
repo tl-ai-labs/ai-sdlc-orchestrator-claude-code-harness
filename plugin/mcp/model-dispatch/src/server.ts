@@ -18,7 +18,6 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 import { existsSync, readFileSync, unwatchFile, watchFile } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { loadPolicy, loadPolicyFromPath, getModel } from "./policy.js";
 import {
@@ -47,6 +46,7 @@ import { HANDOFF_TOOLS, HANDOFF_TOOL_NAMES, handleHandoffTool } from "./handoff/
 import { handoffListing } from "./handoff/listing.js";
 import { leanOpusCliProblem } from "./executor/typists.js";
 import { runCard } from "./runCard.js";
+import { PLUGIN_ROOT } from "./paths.js";
 
 /**
  * Cheap up-front schema validation for TaskPacket inputs to execute_with_model.
@@ -167,8 +167,8 @@ function adapterFor(policy: Policy, modelId: string) {
   return adapter;
 }
 
-/** The plugin's directory (dist/ → model-dispatch/ → mcp/ → plugin/) and its version, for the run card. */
-const PLUGIN_DIR = fileURLToPath(new URL("../../../", import.meta.url));
+/** The plugin's directory and its version, for the run card (from paths.ts, so the bundle finds it too). */
+const PLUGIN_DIR = PLUGIN_ROOT;
 function pluginVersion(): string {
   try { return JSON.parse(readFileSync(join(PLUGIN_DIR, ".claude-plugin", "plugin.json"), "utf8")).version ?? "unknown"; } catch { return "unknown"; }
 }
@@ -319,20 +319,24 @@ const server = new Server(
 );
 
 // Zero-touch's four hand-off tools are listed only where a Hand-off chat can use them (handoff/listing.ts says
-// exactly when; when in doubt they are listed). When they are not listed only because zero-touch's saved mode is not
-// Hand-off, that settings file is watched: once it says Hand-off the tools are added and Claude Code is told, so a
-// first chat or a cleared one that becomes a Hand-off chat has them. They are never taken away while the server runs.
+// exactly when; when in doubt they are listed). When they are left out only because of zero-touch's saved settings
+// (not Hand-off, or Hand-off with every kind of work kept in the chat, which lists the undo alone), that settings file
+// is watched: once it hands work off the tools are added and Claude Code is told, so a first chat or a cleared one
+// that becomes a Hand-off chat has them. They are never taken away while the server runs.
 let handoffListed = handoffListing(process.env);
-log("info", "handoff.listing", { listed: handoffListed.list, reason: handoffListed.reason });
-if (!handoffListed.list && handoffListed.watch.length) {
+log("info", "handoff.listing", { listed: handoffListed.list, only: handoffListed.only, reason: handoffListed.reason });
+/** The hand-off tools listed now: all four, only the undo (every kind kept in the chat), or none. */
+const handoffToolsNow = () => (!handoffListed.list ? [] : handoffListed.only ? HANDOFF_TOOLS.filter((t) => handoffListed.only!.includes(t.name)) : HANDOFF_TOOLS);
+if ((!handoffListed.list || handoffListed.only) && handoffListed.watch.length) {
   const watched = handoffListed.watch;
+  // Tools are only ever added: none → the undo alone → all four (every kind kept, then one handed off).
   const recheck = () => {
-    if (handoffListed.list) return;
+    if (handoffListed.list && !handoffListed.only) return;
     const now = handoffListing(process.env);
-    if (!now.list) return;
+    if (!now.list || (handoffListed.list && now.only)) return;
     handoffListed = now;
-    for (const file of watched) unwatchFile(file);
-    log("info", "handoff.listing", { listed: true, reason: now.reason, changed: true });
+    if (!now.only) for (const file of watched) unwatchFile(file);
+    log("info", "handoff.listing", { listed: true, only: now.only, reason: now.reason, changed: true });
     server.sendToolListChanged().catch(() => { /* the client is gone */ });
   };
   // Polled, not event-based: the file is replaced by a rename when saved, which some watchers miss. Never keeps the
@@ -481,7 +485,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     // Zero-touch's four hand-off tools (handoff/tools.ts), the only tools zero-touch adds: its workflow routing
     // needs none. Listed only where a Hand-off chat can use them (above); a call is refused unless the plugin's hook
     // stamped it in a hand-off chat (test/toolList.test.mjs).
-    ...(handoffListed.list ? HANDOFF_TOOLS : []),
+    ...handoffToolsNow(),
   ],
 }));
 
@@ -523,6 +527,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
       return await handleHandoffTool(name, a0, {
         overrides: selectOverrides(),
         progress: { token, send: (params) => extra.sendNotification({ method: "notifications/progress", params } as any) },
+        // The request's own cancel signal: Claude Code cancels the call when the person presses
+        // Stop, and a hand-off then ends without writing anything into the project.
+        signal: extra.signal,
       });
     }
     switch (name) {

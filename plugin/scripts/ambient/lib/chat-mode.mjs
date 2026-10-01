@@ -1,11 +1,11 @@
 /**
- * The chat's own on/off decision, taken once at its start (29 Sep 2026).
+ * The chat's own on/off decision, taken once at its start.
  *
  * Whether a chat has zero-touch is decided once, at the chat's start moment (SessionStart with source "startup", or
  * "clear", which begins a fresh conversation), and that answer is kept here for the whole chat; every hook moment
  * acts on it, and a change reaches new chats only. Read at different times, a setting changed in the middle of a
- * chat would leave it half on and half off (seen 29 Sep with 0.8.3, when a running chat's worker tools and its
- * start-of-chat note disagreed). A chat with no record (it started while zero-touch was off, or before the plugin
+ * chat would leave it half on and half off (a running chat's worker tools and its start-of-chat note would
+ * disagree). A chat with no record (it started while zero-touch was off, or before the plugin
  * was installed) is off. The record is written by the zero-touch plugin itself, so that plugin is the switch
  * (below). A reopened chat ("resume") and a compaction keep the record they already have.
  *
@@ -50,7 +50,7 @@ export function dropChatMode(sessionId, env = process.env) {
  *
  * The record is written at the chat's fresh start (a new chat, or /clear) by the zero-touch plugin's start hook
  * (zero-touch/scripts/start-chat.mjs), which is how people switch zero-touch: enabled in Claude Code's plugin list,
- * every new chat gets the record; disabled, none does (29 Sep 2026). `override` is MMO_AMBIENT, a one-run override
+ * every new chat gets the record; disabled, none does. `override` is MMO_AMBIENT, a one-run override
  * for a developer or a measuring setup: at a fresh start "on" or "observe" writes the record without the plugin, and
  * "off" removes it; "off" also wins at every other moment. No settings file takes part.
  */

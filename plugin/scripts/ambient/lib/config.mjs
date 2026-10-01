@@ -13,22 +13,18 @@
  *   routing_defaults   the cost-recording mode a routed workflow starts with (auth)
  *   retention_days     how long a chat's records under MMO_HOME are kept
  *
- * The person's zero-touch choices (the mode, the workflow models, hand-off's chat model and typists) are not here
- * (1 Oct 2026): they are chosen in the settings box in the chat and kept by the zero-touch plugin
+ * The person's zero-touch choices (the mode, the workflow models, hand-off's chat model and typists) are not here:
+ * they are chosen in the settings box in the chat and kept by the zero-touch plugin
  * (zero-touch/scripts/settings.mjs), which stamps them on each chat at its start. A `handoff` block or a
  * `routing_defaults.policy` in a file is ignored.
  *
- * None of the files switches zero-touch on or off (29 Sep 2026). Whether a chat has zero-touch is the chat's own
+ * None of the files switches zero-touch on or off. Whether a chat has zero-touch is the chat's own
  * record, written when the chat starts by the zero-touch plugin, the switch people use in Claude Code's plugin list
  * (lib/chat-mode.mjs; zero-touch/scripts/start-chat.mjs). A `mode` key in a file is ignored; `config.mode` here is
  * only MMO_AMBIENT's one-run override for a developer or a measuring setup, "off" without it.
  *
  * A project file is anyone's input: anyone who can land a commit can edit it. So it can only make the plugin do
  * less (switch routing off), never start a paid workflow on someone's machine by itself.
- *
- * 0.8.4: the generic orchestrator's settings (valves, cost, prices, workers, jobs, offers, delegation, the control
- * arm, thinker and model lock, closed cells, never-delegate paths) were removed with it, and so was the receipt that
- * let a trusted project file set them. A file that still holds them is read as before; those keys are ignored.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -78,12 +74,14 @@ export function loadConfig({ projectDir, env = process.env, defaultFile = DEFAUL
 
   const user = readJsonSafe(join(mmoHome(env), "ambient.json"));
   if (user) { config = mergeUser(config, user); sources.push("user"); }
+  // Which file switched routing off, so the person can be told.
+  let routingOffBy = config.routing === "off" ? (user && user.routing === "off" ? "user" : "defaults") : null;
 
   if (projectDir) {
     const project = readJsonSafe(join(projectDir, ".sdlc", "ambient.json"));
     if (project) {
       // Routing can only be switched off: a repository never starts a paid workflow on someone's machine by itself.
-      if (project.routing === "off") config.routing = "off";
+      if (project.routing === "off") { config.routing = "off"; routingOffBy = "project"; }
       sources.push("project");
     }
   }
@@ -95,7 +93,8 @@ export function loadConfig({ projectDir, env = process.env, defaultFile = DEFAUL
     sources.push("env");
   }
   // A value the plugin does not know means the safe default, never a guess.
-  if (!ROUTING.includes(config.routing)) config.routing = "off";
+  if (!ROUTING.includes(config.routing)) { config.routing = "off"; routingOffBy ??= "defaults"; }
+  config.routing_off_by = config.routing === "off" ? routingOffBy ?? "defaults" : null;
   if (!isPlain(config.routing_defaults)) config.routing_defaults = {};
   // Only the cost-recording mode is read here; the models are the person's zero-touch choice (see the header).
   config.routing_defaults = { auth: ["estimated", "vendor"].includes(config.routing_defaults.auth) ? config.routing_defaults.auth : "estimated" };

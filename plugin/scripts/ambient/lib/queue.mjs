@@ -1,13 +1,12 @@
 /**
- * A second job while a workflow runs (0.8.4, zero-touch chats only): the one question the model asks, the
+ * A second job while a workflow runs (zero-touch chats only): the one question the model asks, the
  * person's answer, and the chat's queue.
  *
- * Why: on 29 Sep a chat typed /mmo:bugfix, then /mmo:docs while the bug fix ran; docs started and the bug fix was
- * dropped without a word. In a zero-touch chat such a job is held and the person chooses "Queue it" or
+ * Why: a workflow typed while another runs in the same chat (/mmo:docs while a /mmo:bugfix runs) starts, and the
+ * running one is dropped without a word. In a zero-touch chat such a job is held and the person chooses "Queue it" or
  * "Replace it". The question is asked with Claude Code's multiple-choice tool, whose answer reaches the hook as
- * `tool_response.answers[<question text>] = <label>` (read from real transcripts, 29 Sep), so the hook reads the
- * exact label, never a guess at free text. A person who types the answer instead is understood only when the
- * message is one of the two labels, written out.
+ * `tool_response.answers[<question text>] = <label>`, so the hook reads the exact label, never a guess at free text. A
+ * person who types the answer instead is understood only when the message is one of the two labels, written out.
  *
  * Records, each a small file in the chat's folder (`sessions/<chat id>/`), all ending with the chat or /clear:
  *   choice.json  the question waiting for its answer: { job, args, via, question, running }; via is "words" (plain
@@ -22,7 +21,7 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureSessionDir, sessionDir } from "./paths.mjs";
-import { KEEP_OUT, plainName, startArgs } from "./route-flow.mjs";
+import { CHOSEN_FULL, KEEP_OUT, plainName, startArgs } from "./route-flow.mjs";
 
 export const QUEUE_LABEL = "Queue it";
 export const REPLACE_LABEL = "Replace it";
@@ -90,8 +89,8 @@ export function enqueue(sid, item) {
   const q = readQueue(sid);
   const same = q.find((x) => sameJob(x, item));
   if (same) {
-    // The same job typed by the person after it was queued from their words (1 Oct 2026, found in review): their own
-    // typing wins, so it starts as typed, with its own questions and rules, not with zero-touch's models.
+    // The same job typed by the person after it was queued from their words: their own typing wins, so it starts as
+    // typed, with its own questions and rules, not with zero-touch's models.
     if (item.via === "typed" && same.via !== "typed") { same.via = "typed"; writeJson(sid, "queue.json", q); }
     return "duplicate";
   }
@@ -119,7 +118,7 @@ export const dropTyped = (sid) => drop(sid, "typed.json");
  * The line the model is given when a queued job is next (the Stop hook's reason: the turn continues with it). A job
  * zero-touch recognised carries this run's models and cost recording, chosen by zero-touch, exactly as a routed start
  * does (route-flow.mjs startArgs). A command the person typed (no `policy` given) starts exactly as they typed it,
- * with its own questions, as the queue always started one before 1 Oct 2026.
+ * with its own questions.
  */
 export function queuedStartInstruction({ job, args }, { auth, policy } = {}) {
   const chosen = Boolean(policy);
@@ -130,6 +129,6 @@ export function queuedStartInstruction({ job, args }, { auth, policy } = {}) {
     `The ${plainName(job)} the person queued is next: the running workflow has ended. Start it now with the Skill tool: ${call}. ` +
     `Before the call, tell the person this one plain line: "Starting the queued ${plainName(job)}." ` +
     (chosen ? `The arguments carry this run's models and cost recording, chosen by zero-touch: do not ask about either. ` : "") +
-    `Do nothing else before the workflow starts: other tools are blocked until it does. ${KEEP_OUT}`
+    `${chosen ? `${CHOSEN_FULL} ` : ""}Do nothing else before the workflow starts: other tools are blocked until it does. ${KEEP_OUT}`
   );
 }

@@ -46,7 +46,9 @@ const CREATE = "(?:write up|write|create|draft|generate|prepare|produce|compose|
  * that parses the readme" names a function); and never a negation ("write no docs for now").
  */
 const NOT_A_MODIFIER = "for|about|on|of|to|in|with|from|by|at|into|like|as|that|which|who|where|when|and|or|plus|but|if|so|then|is|are|was|were|be|no|not|never|without";
-const MODS = `(?:(?!(?:${NOT_A_MODIFIER})\\b)[\\w.+#/'-]+\\s+){0,5}?`;
+// Such a word counts only on its own: "on-call", "in-depth" and "no-code" are modifiers (as "to-do" is in the workflow
+// recogniser's "a small to-do app").
+const MODS = `(?:(?!(?:${NOT_A_MODIFIER})\\s)[\\w.+#/'-]+\\s+){0,5}?`;
 
 /**
  * The document word closes its noun phrase: the clause ends there, or a comma, or a word that starts what the
@@ -124,6 +126,15 @@ const KINDS = [
 
 /** Put INTO something: "add documentation to the parseCart function", "add the README to the files list". */
 const INTO = /^\s+(?:to|into|inside|onto)\b/;
+/**
+ * Put into a document that exists: "add installation instructions to the README", "add a FAQ to the README", "add a
+ * troubleshooting section to docs/setup.md" are edits of that document, never a new one (write_document only creates
+ * files, and the line would say a new document is written). The project's
+ * standing documents by name (after to, into, inside, onto or in), a document file by its path (after to, into,
+ * inside or onto: "write a guide in docs/guide.md" names a new file), or a part of a document, wherever the destination
+ * stands ("add an overview of the API to the README").
+ */
+const INTO_DOCUMENT = /(?:^|\s)(?:(?:to|into|inside|onto|in)\s+(?:the |this |our |my |your )?(?:readme|changelog|contributing|license|code[_ ]of[_ ]conduct|security)(?:\.(?:md|mdx|rst|txt|adoc))?\b|(?:to|into|inside|onto)\s+(?:the |this |our |my |your )?(?:[\w.-]+\/)*[\w.-]+\.(?:md|mdx|rst|adoc|txt)\b|(?:to|into|inside|onto|in)\s+(?:the |this |our |my |your )(?:docs? page|guide|section|wiki|description)\b)/i;
 /** A determiner that says the thing exists already ("the README", "our changelog"). */
 const DEFINITE = /^(?:the|this|that|our|its|their|your|my)\b/;
 
@@ -135,6 +146,7 @@ function match(text) {
       if (!m) continue;
       const rest = m.groups?.rest ?? "";
       const verb = m.groups?.verb ?? null;
+      if (kind !== "tests" && INTO_DOCUMENT.test(rest)) return null;
       if (INTO.test(rest)) {
         // General documentation put into something is an edit to code, and nobody can tell from the words whether
         // "add docs to the repo" means a document or comments: unsure is none.

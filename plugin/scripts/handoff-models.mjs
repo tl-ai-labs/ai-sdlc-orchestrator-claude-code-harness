@@ -7,8 +7,8 @@
  * repeated across files (its `codegen` stage). The zero-touch hook asks this script once per chat, so the line the
  * person sees names the model that will really do the work, and the hand-off tools use that same answer.
  *
- * The models are derived by the SAME routing code the dispatch server uses (pickModel / loadPolicy from
- * ../mcp/model-dispatch/dist/, built before any run by verify-setup.mjs --fix or /mmo:setup), for the same reason
+ * The models are derived by the SAME routing code the dispatch server uses (pickModel / loadPolicy, from the
+ * pre-built bundle the plugin ships: lib/server-lib.mjs), for the same reason
  * driver-model-check.mjs does: rule matching written a second time here could disagree with the real router. The
  * policy is read the way the executor reads it for a whole stage (executorView: a stage's files are routed by the
  * stage alone), which is how the hand-off tools read it too. MMO_SELECT slot choices are honoured the way the server
@@ -22,16 +22,17 @@
  * Exit codes: 0 = printed. 2 = the server is not built. 1 = the policy cannot be read or routed; the first line of
  * stderr says why.
  */
+import { realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { loadServerLib } from "./lib/server-lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DIST = join(HERE, "..", "mcp", "model-dispatch", "dist");
 
 /** The policy stage each kind of hand-off work is routed as. */
 export const HANDOFF_STAGES = { docs: "docs", tests: "tests", repeat: "codegen" };
 
-/** The model a policy gives each hand-off stage. `routing` is the dist routing module (passed in so tests can call this directly). */
+/** The model a policy gives each hand-off stage. `routing` is the server's routing module (passed in so tests can call this directly). */
 export function handoffRoutes(policy, routing, overrides = {}) {
   const routes = {};
   for (const [work, phase] of Object.entries(HANDOFF_STAGES)) {
@@ -61,11 +62,11 @@ export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   let policyMod, routingMod, executorMod;
   try {
-    policyMod = await import(pathToFileURL(join(DIST, "policy.js")).href);
-    routingMod = await import(pathToFileURL(join(DIST, "routing.js")).href);
-    executorMod = await import(pathToFileURL(join(DIST, "executor", "run.js")).href);
+    // The server's own code, from the bundle the plugin ships (lib/server-lib.mjs: dist/ is not in a GitHub install).
+    // Exit 2 means "this copy of the plugin can't load it".
+    ({ policy: policyMod, routing: routingMod, executorRun: executorMod } = await loadServerLib());
   } catch (err) {
-    console.error(`could not load the dispatch server's compiled routing from ${DIST}: the server is not built (${err.message})`);
+    console.error(`could not load the dispatch server's code: ${err.message}`);
     return 2;
   }
   const asWritten = args.policyPath
@@ -77,7 +78,9 @@ export async function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-const isDirectRun = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// Both sides with links followed: for a plugin folder reached through a link (e.g. /var → /private/var) the plain
+// comparison is false, and the script would print nothing at all.
+const isDirectRun = (() => { try { return realpathSync(resolve(process.argv[1] ?? "")) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 if (isDirectRun) {
   main().then((code) => process.exit(code)).catch((err) => {
     console.error(String(err?.message ?? err).split("\n")[0]);

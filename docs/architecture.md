@@ -12,7 +12,7 @@ Claude Code loads the plugin from `plugin/.claude-plugin/plugin.json`. The manif
 |---|---|---|
 | `commands` | `./commands` | Slash commands the plugin registers when a session starts. |
 | `skills` | `./skills` | Skill files invocable via the `Skill` tool. |
-| `mcpServers.model-dispatch` | stdio server at `${CLAUDE_PLUGIN_ROOT}/mcp/model-dispatch/dist/server.js` | Owns every dispatch, credential probe, and telemetry write. |
+| `mcpServers.model-dispatch` | stdio server at `${CLAUDE_PLUGIN_ROOT}/mcp/model-dispatch/bundle/server.mjs` (pre-built and committed, so an install from GitHub needs no build) | Owns every dispatch, credential probe, and telemetry write. |
 | `mcpServers.model-dispatch.env` | 9 pass-through vars, incl. the deprecated `SDLC_SELECT` (MMO-D8 compat shim) | Values arrive as `${NAME}` placeholders when the host never set them. See §2. |
 
 Additional plugin content:
@@ -30,7 +30,7 @@ Additional plugin content:
 | [plugin/config/intents.json](../plugin/config/intents.json) | The seven-intent registry — id, title, example, argument hint, summary, interview questions. Single source for the job commands, the interview, and this table's own accuracy. |
 | [plugin/skills/pipeline/](../plugin/skills/pipeline/) | Skill body loaded by the orchestrator. |
 | [plugin/skills/brownfield-guide/](../plugin/skills/brownfield-guide/) | The shared seven-step brownfield manual. Every brownfield entry point (`brownfield.md` and the seven job commands) points here; step 4 branches on the `intent` / `seed_description` handover. |
-| [plugin/hooks/hooks.json](../plugin/hooks/hooks.json) | `PreToolUse`: the write-contract check, the foreground rule for the pipeline's own helpers, and the executor guard. `PostToolUse`: the telemetry heartbeat on `execute_with_model` and the executor guard's record of `execute_stage` callers, each matching the MCP tool name under both install routes. Beside them, zero-touch's fourteen hooks, which act only in a chat the `zero-touch` plugin marked. |
+| [plugin/hooks/hooks.json](../plugin/hooks/hooks.json) | `PreToolUse`: the write-contract check, the foreground rule for the pipeline's own helpers, and the executor guard. `PostToolUse`: the telemetry heartbeat on `execute_with_model` and the executor guard's record of `execute_stage` callers, each matching the MCP tool name under both install routes. The three that run a script with node go through [`plugin/hooks/node.sh`](../plugin/hooks/node.sh), which exits 0 quietly on a computer without Node.js and otherwise passes the script's output and exit code through. Nothing else: zero-touch's sixteen hooks are registered by the `zero-touch` plugin (`zero-touch/hooks/hooks.json`), which runs them in this folder through `plugin/hooks/ambient.sh`; they act only in a chat it marked. |
 | [plugin/scripts/ambient/](../plugin/scripts/ambient/) · [zero-touch/](../zero-touch/) | Zero-touch ([ambient-mode.md](ambient-mode.md)). `zero-touch/` is the switch plugin: the settings box (the person chooses the mode and the models in Claude's question box, in the chat) and the start hook that marks each new chat with them. `plugin/scripts/ambient/hook.mjs` handles every other moment. Workflow mode starts a `/mmo:` workflow from a plain-words request, on the person's chosen policy, stamped as an explicit `policy_path` on every model-server call of that run (a project's `routing-policy.yaml` is not used for it); hand-off mode leaves development to the chat's own model and hands docs, tests and repeated edits to the server's hand-off tools (§2b). |
 | [plugin/config/policies/](../plugin/config/policies/) | Shipped policy YAMLs. The directory listing is the authoritative preset set (`opus-plus-flash` is the default; the loader's not-found error prints the live list). |
 | [plugin/policy-console/](../plugin/policy-console/) | Single-page HTML console + tiny http server, used at setup to pick or author the per-project policy. |
@@ -243,7 +243,7 @@ Two ways in. Both end up running the same MCP server.
 
 | Route | Entry | What arrives |
 |---|---|---|
-| Plugin (default) | Two-prompt flow → [SETUP.md](../SETUP.md) → `/plugin install` → `verify-setup.mjs --fix` | `plugin/` under `~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/`. The MCP server's `dist/` and `node_modules/` are not tracked in git; `--fix` builds them. |
+| Plugin (default) | Two-prompt flow → [SETUP.md](../SETUP.md) → `/plugin install` → `verify-setup.mjs` | `plugin/` under `~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/`. The MCP server ships pre-built (`mcp/model-dispatch/bundle/server.mjs` and `bundle/lib.mjs`, tracked in git); its `dist/` and `node_modules/` are only for developing it, and `--fix` builds them in a clone. |
 | Clone | `git clone` → [tools/setup.mjs](../tools/setup.mjs) | The full repo, plus a project-level `.mcp.json` that registers the built server directly. |
 
 `.mcp.json` on the clone route holds an exhaustive `env` block, because a stdio MCP server inherits nothing from its parent. `verify-setup.mjs --enable-agent` writes the `MMO_SELECT` selection into both `.claude/settings.local.json` (read by Claude Code) and `.mcp.json` (read by the server); a settings-only write would be dropped at the server boundary.

@@ -30,9 +30,9 @@ The pipeline reaches four surfaces. You need at least one Anthropic surface for 
 | Variable | Type | Default | Required when | Description |
 |---|---|---|---|---|
 | `ANTHROPIC_API_KEY` | string | — | `--auth=vendor` | API key from [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys). Not needed under `--auth=estimated`, which uses the Claude Code subscription. |
-| `CLAUDE_CODE_SUBAGENT_MODEL` | string | — | nothing (since v0.8.4) | **No longer needed.** The five driver subagents run on the model their agent files name (`model: claude-opus-5` in `plugin/agents/*.md`), and Claude Code (2.1.251 and later) gives that line priority over this setting and over the chat's own model, so nothing is set before launch. Before v0.8.4 this setting was required under `--auth=estimated`; a value left over from then does nothing for these agents but is still the default model of every other helper agent on the machine, so remove it if nothing else needs it. The one exception is Claude Code's `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`: when it is on, Claude Code ignores the agent files and this setting decides again, and the run-start check then compares the setting. |
+| `CLAUDE_CODE_SUBAGENT_MODEL` | string | — | `--auth=estimated` | The model the five driver subagents actually **execute** on. Must be set **before `claude` launches** (an export inside the session runs in a child shell and never reaches the CLI process) and must equal the policy's driver `model_name`. In a terminal, `export` it in the shell you launch `claude` from, or put it in the `env` block of `<project>/.claude/settings.local.json` (this folder only: the terminal CLI, headless and interactive, applies that file when it launches there — verified on Claude Code 2.1.270). From the desktop app, put it in the `env` block of `~/.claude/settings.json`: the app inherits no login shell, so it never sees a shell export, and it ignores the `env` block of a project's `.claude/settings.json` and `.claude/settings.local.json`. That user file is machine-wide — it pins the driver model for every session on this machine, including runs unrelated to this one, so remove the entry when you are done — print that with `node plugin/scripts/driver-model-check.mjs --project-root "$(pwd)" --print-only` plus the run's policy arguments. Without it the driver tier runs on whatever the session's model is while the report prices the policy's, which misattributes every driver dollar. Irrelevant under `--auth=vendor`, where every call dispatches through the server. |
 
-**Verify:** `verify-setup.mjs`. Under `vendor` an unset key is a blocking pre-flight halt; under `estimated` it is inert. Under `estimated` the orchestrator additionally runs `plugin/scripts/driver-model-check.mjs` at run start and halts when the policy's driver model is not the model the driver agent files name (`claude-opus-5`): the policies whose judgment tier is Opus 5 run (the default `opus-plus-flash-v38` among them), and the older Opus 4.7 policies (`opus-plus-flash`, `opus-only`) stop with that reason. The pin is an exact model id and it is checked, so it cannot do what the unchecked `model: opus` did until 2 Sep 2026 (PR #34): run one model while the pricing block priced another.
+**Verify:** `verify-setup.mjs`. Under `vendor` an unset key is a blocking pre-flight halt; under `estimated` it is inert. Under `estimated` the orchestrator additionally runs `plugin/scripts/driver-model-check.mjs` at run start and halts — printing where to set it for a terminal and for the desktop app, and naming any project `.claude/settings.local.json` or `.claude/settings.json` that already declares a value this session does not see — when `CLAUDE_CODE_SUBAGENT_MODEL` is unset or does not match the policy's driver model. The driver agent files deliberately carry no `model:` frontmatter pin: a pin would silently override the policy, executing one model while the pricing block priced another.
 
 ### Anthropic via Claude subscription — the `claude-cli` adapter
 
@@ -89,7 +89,7 @@ On the plugin route, [SETUP.md](../SETUP.md) puts the question to you as step 5 
 You can run the flag yourself at any time, on either route:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)" --enable-agent
+node "$(node -p 'require(require("os").homedir()+"/.claude/plugins/installed_plugins.json").plugins["mmo@tilicho-ai-labs"][0].installPath')/scripts/verify-setup.mjs" --enable-agent
 ```
 
 Or, from a clone:
@@ -118,7 +118,7 @@ node plugin/scripts/probe-agent-worker.mjs
 Or on the plugin route:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/probe-agent-worker.mjs | tail -1)"
+node "$(node -p 'require(require("os").homedir()+"/.claude/plugins/installed_plugins.json").plugins["mmo@tilicho-ai-labs"][0].installPath')/scripts/probe-agent-worker.mjs"
 ```
 
 Cost: about two cents (~12k input, ~150 output — almost entirely the SDK preamble). `verify-setup.mjs` prints this command at the end of its own output when the install selects the agent path and every offline check passes.
@@ -130,7 +130,7 @@ The setup check reads five things — `GEMINI_API_KEY`, `GOOGLE_APPLICATION_CRED
 To walk a row, set what its second column names and run:
 
 ```bash
-node "$(ls -d ~/.claude/plugins/cache/tilicho-ai-labs/mmo/*/scripts/verify-setup.mjs | tail -1)"
+node "$(node -p 'require(require("os").homedir()+"/.claude/plugins/installed_plugins.json").plugins["mmo@tilicho-ai-labs"][0].installPath')/scripts/verify-setup.mjs"
 ```
 
 | # | What is set | Finding | Runs? |

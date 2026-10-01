@@ -1,10 +1,10 @@
 /**
- * A second job while a workflow runs (zero-touch 0.8.4, step 3): zero-touch chats only, mmo untouched.
+ * A second job while a workflow runs: zero-touch chats only, mmo untouched.
  *
- * Why: on 29 Sep a chat typed /mmo:bugfix, then /mmo:docs while the bug fix was running; docs started and the bug
- * fix was dropped without a word. In a zero-touch chat a new job that arrives while a workflow runs (plain words,
- * a typed /mmo: workflow command, or the model starting one) is held, and the model asks the person one question,
- * "Queue it" or "Replace it", as a multiple-choice question whose answer the hook reads exactly:
+ * Why: a chat that types /mmo:bugfix, then /mmo:docs while the bug fix is running, would start docs and drop the bug
+ * fix without a word. In a zero-touch chat a new job that arrives while a workflow runs is kept: plain words, or the
+ * model starting one, are queued at once; a typed /mmo: workflow command is held, and the model asks the person one
+ * question, "Queue it" or "Replace it", as a multiple-choice question whose answer the hook reads exactly:
  *   - Queue it: first-in-first-out; the job starts by itself at the end of the turn in which the running
  *     workflow's own log shows it ended; a duplicate is not added; the queue ends with the chat (or /clear).
  *   - Replace it: the running workflow is stopped the way mmo's own abort stops it (its run log records the abort,
@@ -12,9 +12,9 @@
  * A message typed while a workflow's question is open (a gate, or its first questions) is that question's answer,
  * never a new job. A project lock stops two chats running workflows in one project.
  *
- * Platform facts these rest on, probed on Claude Code 2.1.283 on 29 Sep through the desktop app's own transport
- * (stream-json): a /command sent while Claude works waits and runs as its own turn after the running one; plain
- * words sent while Claude works join the running turn; a UserPromptSubmit "block" keeps a typed command from the
+ * Platform facts these rest on, as Claude Code behaves through the desktop app's own transport (stream-json): a
+ * /command sent while Claude works waits and runs as its own turn after the running one; plain words sent while
+ * Claude works join the running turn; a UserPromptSubmit "block" keeps a typed command from the
  * model and shows the person the reason; UserPromptExpansion and UserPromptSubmit of one typed command carry the
  * same prompt_id; a multiple-choice answer reaches PostToolUse as tool_response.answers[question] = label.
  *
@@ -29,7 +29,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
-const { startingChats } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
+const { startingChats, gitProject } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
 const { serverBuilt } = await import(join(ROOT, "tools", "test", "lib", "server-built.mjs"));
 const { formatLine } = await import(join(ROOT, "plugin", "scripts", "lib", "log.mjs"));
 // Starting a workflow asks the workflows' own model check, which needs the built server.
@@ -43,6 +43,7 @@ function sandbox() {
   mkdirSync(home);
   mkdirSync(repo);
   writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
+  gitProject(repo); // a project being changed is a git project (a change workflow needs git)
   return { dir, home, repo, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -73,7 +74,14 @@ async function typed(s, sid, line) {
   const sub = await run("prompt", { session_id: sid, cwd: s.repo, prompt: line, prompt_id }, s);
   return { exp, sub, prompt_id };
 }
-const skill = (s, sid, name, args) => run("pre-skill", { session_id: sid, cwd: s.repo, tool_name: "Skill", tool_input: { skill: name, ...(args ? { args } : {}) } }, s);
+/** A Skill call as Claude Code makes it: PreToolUse, then, when the call was not refused, PostToolUse (the moment a
+ * routed workflow's start is recorded). Returns the PreToolUse answer. */
+const skill = async (s, sid, name, args, ...rest) => {
+  const input = { session_id: sid, cwd: s.repo, tool_name: "Skill", tool_input: { skill: name, ...(args ? { args } : {}) } };
+  const pre = await run("pre-skill", input, s, ...rest);
+  if (pre.json?.hookSpecificOutput?.permissionDecision !== "deny") await run("post-skill", { ...input, tool_use_id: `tu-${sid}-${name}` }, s, ...rest);
+  return pre;
+};
 const tool = (s, sid, tool_name, tool_input = {}) => run("pre-any", { session_id: sid, cwd: s.repo, tool_name, tool_input }, s);
 const agent = (s, sid, type) => run("pre-agent", { session_id: sid, cwd: s.repo, tool_name: "Agent", tool_input: { subagent_type: type, prompt: "x" } }, s);
 const turnEnd = (s, sid, extra = {}) => run("turn-end", { session_id: sid, cwd: s.repo, stop_hook_active: false, ...extra }, s);
@@ -82,6 +90,8 @@ function answer(s, sid, label) {
   return run("post-question", { session_id: sid, cwd: s.repo, tool_name: "AskUserQuestion", tool_input: { questions: [{ question: q }] }, tool_response: { questions: [{ question: q }], answers: { [q]: label } } }, s);
 }
 const context = (r) => r.json?.hookSpecificOutput?.additionalContext ?? "";
+/** The queued start a turn's end hands the model: the Stop hook's context, never a "block" reason (shown to the person as "Stop hook feedback"). */
+const queuedStart = (r) => (r.json?.hookSpecificOutput?.hookEventName === "Stop" ? r.json.hookSpecificOutput.additionalContext ?? "" : "");
 const denied = (r) => r.json?.hookSpecificOutput?.permissionDecision === "deny";
 const reason = (r) => r.json?.hookSpecificOutput?.permissionDecisionReason ?? "";
 const read = (s, sid, name) => { try { return JSON.parse(readFileSync(join(s.home, "sessions", sid, name), "utf8")); } catch { return null; } };
@@ -114,26 +124,21 @@ async function runningBugfix(s, sid, { gateOpen = false } = {}) {
 }
 const endBugfix = (s, sid) => workflowLog(s, `bf-${sid}`, ["run.end", { outcome: "completed" }], ["gate.open", { gate: "gate-4" }], ["gate.resolved", { gate: "gate-4", response: "approved" }]);
 
-test("plain words for a new job while a workflow runs: the model must ask Queue it / Replace it before anything else", { skip: SKIP ?? false }, async () => {
+test("plain words for a new job while a workflow runs: queued at once and said at once; no box, nothing held", { skip: SKIP ?? false }, async () => {
+  // The Queue-or-Replace box cannot show for plain words: a running workflow is either working, when the message joins
+  // Claude's turn, or waiting at a step, when the message is its answer. The box is for a command the person types
+  // (below); plain words are queued directly.
   const s = sandbox();
   try {
     await runningBugfix(s, "q1");
-    const c = context(await say(s, "q1", DOCS));
-    assert.match(c, /AskUserQuestion/);
-    assert.match(c, /"Queue it"/);
-    assert.match(c, /"Replace it"/);
-    assert.match(c, /bug-fix workflow/, "names the running workflow in plain words");
-    assert.match(c, /documentation workflow/, "names the new one in plain words");
-    assert.doesNotMatch(c, /mmo:/, "no command name for the person to repeat");
-    const ch = choice(s, "q1");
-    assert.equal(ch.job, "docs");
-    assert.equal(ch.args, DOCS);
-    assert.ok(c.includes(ch.question), "the question the model is told to ask is the one the hook will read");
-    // Until the person answers, nothing that changes anything runs; asking and reading still do.
-    for (const t of ["Write", "Bash", "Edit", "Agent"]) assert.ok(denied(await tool(s, "q1", t)), `${t} waits for the answer`);
-    for (const t of ["AskUserQuestion", "Read", "Grep"]) assert.equal((await tool(s, "q1", t)).stdout, "", `${t} runs`);
-    assert.ok(denied(await agent(s, "q1", "mmo:orchestrator")), "the running workflow's helpers wait too");
-    assert.ok(denied(await skill(s, "q1", "mmo:docs", DOCS)), "the new workflow cannot start before the answer");
+    const r = await say(s, "q1", DOCS);
+    assert.equal(r.json?.systemMessage, "Zero-touch: noted. The documentation workflow will start by itself when the bug-fix workflow finishes, and it will wait for your approval at its first main step.");
+    assert.match(context(r), /Zero-touch has queued it/);
+    assert.doesNotMatch(context(r), /mmo:/, "no command name for the person to repeat");
+    assert.equal(choice(s, "q1"), null, "no box");
+    assert.deepEqual(queue(s, "q1").map((q) => [q.job, q.args]), [["docs", DOCS]]);
+    for (const t of ["Write", "Bash", "Edit"]) assert.equal((await tool(s, "q1", t)).stdout, "", `${t} runs: nothing is held`);
+    assert.equal((await agent(s, "q1", "mmo:orchestrator")).stdout, "", "the running workflow's helpers run");
   } finally { s.cleanup(); }
 });
 
@@ -152,18 +157,17 @@ test("Queue it: the job waits; it starts by itself at the end of the turn in whi
   const s = sandbox();
   try {
     await runningBugfix(s, "q3");
-    await say(s, "q3", DOCS);
-    const a = await answer(s, "q3", "Queue it");
+    const a = await say(s, "q3", DOCS); // queued at once: no box to answer
     assert.match(context(a), /queued/i);
-    assert.equal(choice(s, "q3"), null, "the question is settled");
+    assert.equal(choice(s, "q3"), null, "no question");
     assert.deepEqual(queue(s, "q3").map((q) => q.job), ["docs"]);
     assert.equal((await tool(s, "q3", "Bash")).stdout, "", "the running workflow carries on");
     assert.equal((await turnEnd(s, "q3")).stdout, "", "the bug fix is still running: nothing starts");
     endBugfix(s, "q3");
     const e = await turnEnd(s, "q3");
-    assert.equal(e.json?.decision, "block", "the turn continues with the queued job");
-    assert.match(e.json?.reason ?? "", /Skill tool/);
-    assert.match(e.json?.reason ?? "", /"mmo:docs"/);
+    assert.equal(e.json?.decision, undefined, "no block reason for the person to read");
+    assert.match(queuedStart(e), /Skill tool/, "the turn continues with the queued job");
+    assert.match(queuedStart(e), /"mmo:docs"/);
     assert.ok(denied(await tool(s, "q3", "Write")), "Guard A: nothing else first");
     assert.equal((await skill(s, "q3", "mmo:docs", DOCS)).stdout, "", "the queued workflow starts");
     assert.equal(pipelineJob(s, "q3"), "docs");
@@ -175,34 +179,94 @@ test("the queue is first-in-first-out and a duplicate is not added", { skip: SKI
   const s = sandbox();
   try {
     await runningBugfix(s, "q4");
-    await say(s, "q4", DOCS);
-    await answer(s, "q4", "Queue it");
+    await say(s, "q4", DOCS); // queued at once
     await say(s, "q4", TESTS);
-    await answer(s, "q4", "Queue it");
-    await say(s, "q4", DOCS);
-    const dup = await answer(s, "q4", "Queue it");
-    assert.match(context(dup), /already queued/i);
+    const dup = await say(s, "q4", DOCS);
+    assert.match(dup.json?.systemMessage ?? "", /already queued/i);
     assert.deepEqual(queue(s, "q4").map((q) => q.job), ["docs", "test"]);
     endBugfix(s, "q4");
-    assert.match((await turnEnd(s, "q4")).json?.reason ?? "", /"mmo:docs"/, "first in, first out");
+    assert.match(queuedStart(await turnEnd(s, "q4")), /"mmo:docs"/, "first in, first out");
     await skill(s, "q4", "mmo:docs", DOCS);
     workflowLog(s, "docs-1", ["run.start", {}], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "approved" }], ["run.end", { outcome: "completed" }]);
-    assert.match((await turnEnd(s, "q4")).json?.reason ?? "", /"mmo:test"/, "then the next one");
+    assert.match(queuedStart(await turnEnd(s, "q4")), /"mmo:test"/, "then the next one");
   } finally { s.cleanup(); }
 });
 
-test("a queued start the model does not make is not pushed again in a loop; the job stays queued", { skip: SKIP ?? false }, async () => {
+test("a queued start the model does not make is not pushed again in a loop; the person is told, and \"yes\" starts it", { skip: SKIP ?? false }, async () => {
   const s = sandbox();
   try {
     await runningBugfix(s, "q5");
     await say(s, "q5", DOCS);
-    await answer(s, "q5", "Queue it");
     endBugfix(s, "q5");
-    assert.equal((await turnEnd(s, "q5")).json?.decision, "block");
+    assert.match(queuedStart(await turnEnd(s, "q5")), /"mmo:docs"/);
     const again = await turnEnd(s, "q5", { stop_hook_active: true });
-    assert.equal(again.stdout, "", "the turn is allowed to end");
-    assert.deepEqual(queue(s, "q5").map((q) => q.job), ["docs"], "still queued for the next turn");
+    assert.equal(queuedStart(again), "", "not pushed again: the turn is allowed to end");
+    assert.match(again.json?.systemMessage ?? "", /the documentation workflow didn't start\. Say "yes" to start it now/, "never dropped silently (the outcome contract)");
+    assert.deepEqual(queue(s, "q5"), [], "it left the queue");
     assert.equal((await tool(s, "q5", "Write")).stdout, "", "nothing stays blocked");
+    assert.match(context(await say(s, "q5", "yes")), /"mmo:docs"/, "the person's yes starts it");
+  } finally { s.cleanup(); }
+});
+
+// "abort" at an approval step (mmo's own stop), a failed run, or a run that stopped before it began never starts the
+// queued job, and no line says the workflow "has finished".
+const DROPPED = (what) => `Zero-touch: the bug-fix workflow ${what}. From here, asking for another job starts a new workflow; anything else gets a normal answer. The documentation workflow you queued was not started; ask for it again when you want it.`;
+
+test("a queued job starts only after the running workflow finished: aborted at an approval step or failed, the queue is dropped and said", { skip: SKIP ?? false }, async () => {
+  for (const [sid, end, what] of [
+    ["qa", [["gate.open", { gate: "gate-1" }], ["gate.resolved", { gate: "gate-1", response: "abort" }]], "was stopped"],
+    ["qf", [["run.end", { outcome: "failed" }]], "stopped because of a problem; Claude's last reply says what happened"],
+  ]) {
+    const s = sandbox();
+    try {
+      await runningBugfix(s, sid);
+      await say(s, sid, DOCS);
+      assert.deepEqual(queue(s, sid).map((q) => q.job), ["docs"]);
+      if (sid === "qa") {
+        workflowLog(s, `bf-${sid}`, end[0]);
+        assert.equal((await say(s, sid, "abort")).stdout, "", "at an approval step \"abort\" is the workflow's own answer");
+        workflowLog(s, `bf-${sid}`, end[1]);
+      } else workflowLog(s, `bf-${sid}`, ...end);
+      const r = await turnEnd(s, sid);
+      assert.equal(r.json?.systemMessage, DROPPED(what), sid);
+      assert.equal(queuedStart(r), "", "nothing is started after a workflow that did not finish");
+      assert.deepEqual(queue(s, sid), []);
+      assert.equal(read(s, sid, "route.json"), null);
+      assert.equal((await turnEnd(s, sid)).stdout, "", "said once");
+    } finally { s.cleanup(); }
+  }
+});
+
+test("a queue dropped while the turn was cut off (no Stop hook) is said at the person's next message, once", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "qc");
+    await say(s, "qc", DOCS);
+    workflowLog(s, "bf-qc", ["gate.open", { gate: "gate-1" }], ["gate.resolved", { gate: "gate-1", response: "abort" }]);
+    // No turn-end: the person pressed Esc. Their next message ends the run and says what was dropped.
+    const r = await say(s, "qc", "what does the cart total function return?");
+    assert.equal(r.json?.systemMessage, DROPPED("was stopped"));
+    assert.deepEqual(queue(s, "qc"), []);
+    assert.equal((await turnEnd(s, "qc")).stdout, "", "nothing starts at the turn's end");
+    assert.equal((await say(s, "qc", "and the tax function?")).stdout, "", "said once");
+  } finally { s.cleanup(); }
+});
+
+test("a typed command queued with Queue it is pushed again exactly as typed: no zero-touch tag, no \"do not ask\"", { skip: SKIP ?? false }, async () => {
+  const s = sandbox();
+  try {
+    await runningBugfix(s, "qt", { gateOpen: true });
+    await typed(s, "qt", `/mmo:docs ${DOCS}`);
+    await answer(s, "qt", "Queue it");
+    await turnEnd(s, "qt");
+    workflowLog(s, "bf-qt", ["gate.resolved", { gate: "gate-0", response: "approved" }]);
+    endBugfix(s, "qt");
+    const first = queuedStart(await turnEnd(s, "qt"));
+    assert.ok(first.includes(`skill "mmo:docs", args ${JSON.stringify(DOCS)}`), first);
+    // Claude did not make the call, and Claude Code did not mark the next stop as a hook's: the one retry.
+    const again = queuedStart(await turnEnd(s, "qt"));
+    assert.ok(again.includes(`skill "mmo:docs", args ${JSON.stringify(DOCS)}, exactly as they typed it`), again);
+    assert.doesNotMatch(again, /\[zero-touch|do not ask|chose a full workflow/i);
   } finally { s.cleanup(); }
 });
 
@@ -212,12 +276,12 @@ test("Replace it: the running workflow is stopped as mmo's own abort stops it, t
     await runningBugfix(s, "q6");
     mkdirSync(join(s.repo, ".sdlc", "local"), { recursive: true });
     writeFileSync(join(s.repo, ".sdlc", "local", "write-contract.json"), JSON.stringify({ schema_version: 1, active: true, mode: "brownfield", run_id: "bf-q6", strict: true, allowlist: ["src/**"], off_limits: [] }));
-    await say(s, "q6", DOCS);
+    // The box is raised by a command the person types (plain words are queued directly).
+    await typed(s, "q6", `/mmo:docs ${DOCS}`);
     const a = await answer(s, "q6", "Replace it");
     assert.match(logText(s, "bf-q6"), /run\.end run_id=bf-q6 outcome=aborted/, "the run's own log records the abort");
     assert.equal(JSON.parse(readFileSync(join(s.repo, ".sdlc", "local", "write-contract.json"), "utf8")).active, false, "its write lock is switched off, as mmo's abort does");
-    assert.match(context(a), /"mmo:docs"/, "the model is told to start the new one now");
-    assert.equal((await skill(s, "q6", "mmo:docs", DOCS)).stdout, "");
+    assert.match(context(a), /Carry on with the command the person typed/, "the typed command carries on as the new workflow");
     assert.equal(pipelineJob(s, "q6"), "docs");
     assert.ok(events(s, "q6").some((e) => e.type === "route.replaced"));
   } finally { s.cleanup(); }
@@ -229,7 +293,7 @@ test("a write lock of another run is left alone by a replace", { skip: SKIP ?? f
     await runningBugfix(s, "q7");
     mkdirSync(join(s.repo, ".sdlc", "local"), { recursive: true });
     writeFileSync(join(s.repo, ".sdlc", "local", "write-contract.json"), JSON.stringify({ schema_version: 1, active: true, run_id: "someone-else", allowlist: [], off_limits: [] }));
-    await say(s, "q7", DOCS);
+    await typed(s, "q7", `/mmo:docs ${DOCS}`);
     await answer(s, "q7", "Replace it");
     assert.equal(JSON.parse(readFileSync(join(s.repo, ".sdlc", "local", "write-contract.json"), "utf8")).active, true);
   } finally { s.cleanup(); }
@@ -278,14 +342,15 @@ test("typed, then Replace it: the old run is aborted and the typed command carri
   } finally { s.cleanup(); }
 });
 
-test("the model starting a second workflow by itself mid-run is refused with the question to ask", { skip: SKIP ?? false }, async () => {
+test("the model starting a second workflow by itself mid-run is refused, and the job is queued (no box)", { skip: SKIP ?? false }, async () => {
   const s = sandbox();
   try {
     await runningBugfix(s, "q11");
     const r = await skill(s, "q11", "mmo:docs", DOCS);
     assert.ok(denied(r));
-    assert.match(reason(r), /"Queue it"/);
-    assert.equal(choice(s, "q11").via, "skill");
+    assert.match(context(r), /Zero-touch has queued it/);
+    assert.equal(reason(r), "Zero-touch: noted. The documentation workflow will start by itself when the bug-fix workflow finishes, and it will wait for your approval at its first main step.", "the person reads the plain line");
+    assert.deepEqual(queue(s, "q11").map((q) => q.job), ["docs"]);
     assert.equal((await skill(s, "q11", "mmo:brownfield-guide")).stdout, "", "the workflow's own manual still loads");
   } finally { s.cleanup(); }
 });
@@ -294,12 +359,13 @@ test("an answer that is neither drops the question and starts nothing; so does a
   const s = sandbox();
   try {
     await runningBugfix(s, "q12");
-    await say(s, "q12", DOCS);
+    await typed(s, "q12", `/mmo:docs ${DOCS}`);
     const a = await answer(s, "q12", "hmm, not now");
     assert.match(context(a), /neither/i);
     assert.equal(choice(s, "q12"), null);
     assert.deepEqual(queue(s, "q12"), []);
-    await say(s, "q12", DOCS);
+    await typed(s, "q12", `/mmo:docs ${DOCS}`);
+    await turnEnd(s, "q12");
     await say(s, "q12", "what does the checkout do?");
     assert.equal(choice(s, "q12"), null, "a question belongs to one message");
     assert.equal((await tool(s, "q12", "Bash")).stdout, "");
@@ -310,7 +376,8 @@ test("a person who types the answer instead of clicking it is understood only wh
   const s = sandbox();
   try {
     await runningBugfix(s, "q13");
-    await say(s, "q13", DOCS);
+    await typed(s, "q13", `/mmo:docs ${DOCS}`);
+    await turnEnd(s, "q13");
     const r = await say(s, "q13", "Queue it.");
     assert.match(context(r), /queued/i);
     assert.deepEqual(queue(s, "q13").map((q) => q.job), ["docs"]);
@@ -382,24 +449,24 @@ test("every command the plugin ships is either a workflow or a one-off tool", as
 });
 
 test("Replace it stops only the run this chat claimed: another chat's run, started later in the same folder, is left alone", { skip: SKIP ?? false }, async () => {
-  // 1 Oct 2026, found in review: the run was picked by time (the latest since the chat's start), so a run another chat
-  // started later in the folder (a chat without zero-touch takes no project lock) was the one stopped.
+  // Picking the run by time (the latest since the chat's start) would stop a run another chat started later in the
+  // folder (a chat without zero-touch takes no project lock).
   const s = sandbox();
   try {
     await runningBugfix(s, "q11");
     await new Promise((r) => setTimeout(r, 20));
     workflowLog(s, "other-chat-run", ["run.start", { mode: "brownfield" }], ["gate.open", { gate: "gate-0" }]);
-    await say(s, "q11", DOCS);
+    await typed(s, "q11", `/mmo:docs ${DOCS}`);
     await answer(s, "q11", "Replace it");
     assert.match(logText(s, "bf-q11"), /outcome=aborted/, "this chat's own run is stopped");
     assert.doesNotMatch(logText(s, "other-chat-run"), /run\.end/, "the other chat's run is untouched");
   } finally { s.cleanup(); }
 });
 
-test("Replace it with no claim (a run id left as a shell variable): the run found by time is stopped, as before, unless another chat claimed it", { skip: SKIP ?? false }, async () => {
-  // 1 Oct 2026, found in the review's second pass: stopping only a claimed run left such a run's log open and its
-  // write lock on, while the person read that it was stopped. Before that day, "Replace it" always took the run found
-  // by time; it still does when this chat has no claim, but never a run another chat has claimed as its own.
+test("Replace it with no claim (a run id left as a shell variable): the run found by time is stopped unless another chat claimed it", { skip: SKIP ?? false }, async () => {
+  // Stopping only a claimed run would leave such a run's log open and its write lock on, while the person reads that
+  // it was stopped. So with no claim of its own, "Replace it" takes the run found by time, but never a run another
+  // chat has claimed as its own.
   const s = sandbox();
   try {
     await say(s, "q12", BUGFIX);
@@ -409,11 +476,11 @@ test("Replace it with no claim (a run id left as a shell variable): the run foun
     mkdirSync(join(s.repo, ".sdlc", "local"), { recursive: true });
     const contract = join(s.repo, ".sdlc", "local", "write-contract.json");
     writeFileSync(contract, JSON.stringify({ schema_version: 1, active: true, run_id: "unclaimed", allowlist: ["src/**"], off_limits: [] }));
-    await say(s, "q12", DOCS);
+    await typed(s, "q12", `/mmo:docs ${DOCS}`);
     const a = await answer(s, "q12", "Replace it");
     assert.match(logText(s, "unclaimed"), /run\.end run_id=unclaimed outcome=aborted/, "stopped, as before");
     assert.equal(JSON.parse(readFileSync(contract, "utf8")).active, false, "its write lock is off");
-    assert.match(context(a), /"mmo:docs"/, "the new workflow starts");
+    assert.match(context(a), /Carry on with the command the person typed/, "the new workflow carries on");
   } finally { s.cleanup(); }
   const t = sandbox();
   try {
@@ -426,7 +493,7 @@ test("Replace it with no claim (a run id left as a shell variable): the run foun
     workflowLog(t, "theirs", ["run.start", { mode: "brownfield" }], ["gate.open", { gate: "gate-0" }], ["gate.resolved", { gate: "gate-0", response: "approved" }]);
     mkdirSync(join(t.home, "sessions", "other"), { recursive: true });
     writeFileSync(join(t.home, "sessions", "other", "pipeline"), JSON.stringify({ since: new Date().toISOString(), job: "docs", args: "", run_id: "theirs" }));
-    await say(t, "q13b", DOCS);
+    await typed(t, "q13b", `/mmo:docs ${DOCS}`);
     await answer(t, "q13b", "Replace it");
     assert.doesNotMatch(logText(t, "theirs"), /run\.end/, "the other chat's claimed run is untouched");
   } finally { t.cleanup(); }

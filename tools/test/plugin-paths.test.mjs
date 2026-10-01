@@ -2,12 +2,10 @@
  * Every file the plugin's own instructions (its commands, skills and agents) tell the model to open is named by
  * the installed plugin's path, `${CLAUDE_PLUGIN_ROOT}/...`, never by this repository's layout.
  *
- * Why (0.8.4): the eight brownfield commands said "follow the operating manual in
- * [plugin/skills/brownfield-guide/SKILL.md](/plugin/skills/brownfield-guide/SKILL.md)". That path exists only in a
- * clone of this repository. On an installed plugin a model that follows it literally finds nothing: on 26 Sep a
- * bug-fix chat on Sonnet 4.6 could not open its manual and worked without it (Opus 5.5 guessed the skill's name).
- * Claude Code fills `${CLAUDE_PLUGIN_ROOT}` in with the plugin's real folder inside commands, skills and agents
- * (probed on 2.1.283, 29 Sep), so the path the model reads is the installed copy's.
+ * Why: a path such as [plugin/skills/brownfield-guide/SKILL.md](/plugin/skills/brownfield-guide/SKILL.md) exists
+ * only in a clone of this repository. On an installed plugin a model that follows it literally finds nothing, and
+ * works without its manual. Claude Code fills `${CLAUDE_PLUGIN_ROOT}` in with the plugin's real folder inside
+ * commands, skills and agents, so the path the model reads is the installed copy's.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";

@@ -5,13 +5,6 @@ tools: Read, Glob, Grep, Bash
 # Effort is pinned, the same in every run: a helper otherwise inherits the launching session's
 # effort, so a launch flag or setting could change its thinking in one run only.
 effort: high
-# The model is pinned as well, and for the same reason, plus one more: the policy prices this
-# work as that model. Claude Code (2.1.251 and later) gives this line priority over the
-# CLAUDE_CODE_SUBAGENT_MODEL setting and over the chat's own model, so nobody has to set anything
-# and a chat switched to another model cannot move it (checked live in the desktop app).
-# The run-start check (scripts/driver-model-check.mjs) stops a policy whose judgment model is not
-# this one, so the report can never price a model that did not run (the PR #34 defect).
-model: claude-opus-5
 ---
 
 You are the brownfield discovery agent. Your one job is to read the current repository, understand it well enough for downstream phases to work safely, and write two files: a human-readable `discovery.md` and a machine-readable `baseline.json`. **You never write into user source code.** Everything you produce lands under `.sdlc/`.

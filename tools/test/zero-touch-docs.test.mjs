@@ -1,14 +1,8 @@
 /**
  * The documents that describe zero-touch agree with the code, and with each other.
  *
- * Why this test exists: zero-touch was built in several steps (workflow routing first, hand-off mode after it), and
- * each step left sentences behind in a document the step did not reopen. Found on 30 Sep 2026 while writing hand-off
- * mode's documents: the repo guide still counted eight zero-touch hooks where the plugin registers twelve; the
- * zero-touch manual said hand-off mode "adds two" and that the server lists "the pipeline's and the executor's" tools
- * only; both plugin descriptions, the README and the setup guide knew of one mode; and the version notes described
- * four earlier builds that were never released, in tables about parts that no longer exist.
- *
- * So the numbers a document states are counted from the code here, and the names it uses are the code's:
+ * Why: a change to the code can leave a sentence behind in a document the change does not reopen. So the numbers a
+ * document states are counted from the code here, and the names it uses are the code's:
  *   - the hook count, from plugin/hooks/hooks.json;
  *   - the hand-off tools, from the server's own list (its source file, so this test needs no build);
  *   - the settings, from the shipped settings file;
@@ -31,11 +25,12 @@ const GUIDE = read("docs", "repo-guide.md");
 
 /** The moments zero-touch hooks: every hooks.json command that goes through its shim. */
 function zeroTouchHooks() {
-  const hooks = JSON.parse(read("plugin", "hooks", "hooks.json")).hooks;
+  // Registered by the zero-touch plugin, run through its shim into mmo's hook script.
+  const hooks = JSON.parse(read("zero-touch", "hooks", "hooks.json")).hooks;
   const names = [];
   for (const entries of Object.values(hooks)) {
     for (const e of entries) for (const h of e.hooks) {
-      const m = /ambient\.sh" (\S+)$/.exec(h.command);
+      const m = /mmo-hook\.sh" (\S+)$/.exec(h.command);
       if (m) names.push(m[1]);
     }
   }
@@ -92,7 +87,7 @@ test("the hand-off tools the server lists are the ones the documents name, all o
   const architecture = read("docs", "architecture.md");
   for (const tool of tools) assert.ok(architecture.includes("`" + tool + "`"), `docs/architecture.md names ${tool}`);
   assert.doesNotMatch(architecture, /exposes eight tools/, "the architecture page's tool count includes the hand-off tools");
-  // No document may still say the server lists the pipeline's and the executor's tools only.
+  // No document may say the server lists the pipeline's and the executor's tools only.
   for (const [name, text] of [["docs/ambient-mode.md", MANUAL], ["docs/methodology.md", note]]) {
     assert.doesNotMatch(text, /tool list is the pipeline's and the executor's again|The pipeline's and the executor's only/, name);
   }
@@ -104,7 +99,7 @@ test("the documents' settings table is the shipped settings file, and the settin
   const rows = [...section.matchAll(/^\| `([a-z_]+)` \|/gm)].map((m) => m[1]);
   assert.deepEqual(rows.slice().sort(), Object.keys(shipped).filter((k) => k !== "schema_version").sort());
   assert.ok(section.includes("`" + shipped.routing_defaults.auth + "`"), "the cost recording's default is the shipped one");
-  // 1 Oct 2026: the person's zero-touch choices are not here: they are the settings box's (zero-touch/scripts/settings.mjs).
+  // The person's zero-touch choices are not here: they are the settings box's (zero-touch/scripts/settings.mjs).
   assert.equal(shipped.handoff, undefined);
   assert.equal(shipped.routing_defaults.policy, undefined);
   const { DEFAULTS, WORKFLOW_MODELS } = await import(join(ROOT, "zero-touch", "scripts", "settings.mjs"));
@@ -115,8 +110,7 @@ test("the documents' settings table is the shipped settings file, and the settin
 
 test("the version notes hold one zero-touch note, under the plugin's version, and it covers both modes", () => {
   const note = zeroTouchNote();
-  // The builds before this one were never released. Their notes described parts that no longer exist (a savings
-  // ledger, worker jobs, a board) in tables longer than everything else in the file; git keeps them.
+  // Builds that were never released have no section of their own.
   for (const old of ["v0.8.0", "v0.8.1", "v0.8.2", "v0.8.3"]) {
     assert.doesNotMatch(NOTES, new RegExp(`^### ${old.replace(/\./g, "\\.")}\\b`, "m"), `no separate ${old} section`);
   }
@@ -136,12 +130,14 @@ test("no document points a reader at a build that was never released", () => {
   };
   for (const [name, text] of Object.entries(docs)) {
     // The archive's tag carries a version in its own name; it is a git name, not a pointer to a section.
-    const hits = text.replace(/generic-orchestrator-0\.8\.3/g, "").match(/\bv?0\.8\.[0-3]\b/g) ?? [];
+    // No document names a zero-touch build other than the released one.
+    const hits = text.replace(/generic-orchestrator-0\.8\.3/g, "").match(/\bv?0\.8\.[0-4]\b/g) ?? [];
     assert.deepEqual(hits, [], `${name} names a version before the plugin's first zero-touch release`);
   }
 });
 
-test("every document that introduces zero-touch says it has two modes", () => {
+// Off, the third mode, changes nothing, so a document need not name it; the two that act must be named.
+test("every document that introduces zero-touch names workflow mode and hand-off mode", () => {
   for (const name of ["README.md", "SETUP.md", "docs/README.md", "docs/repo-guide.md", "docs/architecture.md", "zero-touch/README.md"]) {
     const text = read(...name.split("/"));
     assert.match(text, /workflow mode/i, `${name} names workflow mode`);
@@ -152,7 +148,35 @@ test("every document that introduces zero-touch says it has two modes", () => {
   for (const path of ["`zero-touch/`", "`plugin/mcp/model-dispatch/src/handoff/`", "`config/ambient.default.json`"]) {
     assert.ok(GUIDE.includes(path), `docs/repo-guide.md has a row for ${path}`);
   }
-  // In the manual, "the hand-off" means hand-off mode's own act. The step that starts a recognised job's workflow
-  // once had that name too; two meanings of one word in one page.
+  // In the manual, "the hand-off" means hand-off mode's own act, never the step that starts a recognised job's
+  // workflow: one meaning for one word in one page.
   assert.doesNotMatch(MANUAL, /^### The hand-off \(/m, "workflow mode's start step is not called the hand-off");
+});
+
+// The MCP server ships pre-built: no document may say an update removes its build or that setup rebuilds it.
+test("no document says the MCP server must be rebuilt after an install or update", () => {
+  for (const name of ["README.md", "SETUP.md", "docs/troubleshooting.md", "docs/architecture.md"]) {
+    const text = read(...name.split("/"));
+    assert.doesNotMatch(text, /[Rr]ebuilds the MCP server|removes the build|removes the `dist\/` and `node_modules\/`|`--fix` builds them\. \|/, `${name} says the server must be rebuilt`);
+  }
+});
+
+// Every command that runs a script of the installed plugin finds it through Claude Code's own record of the install:
+// `ls -d …/mmo/*/… | tail -1` takes the last folder in text order, which is not always the newest version (0.8.10
+// sorts before 0.8.9), and an older copy left in the cache would then run.
+test("no document finds the installed plugin by sorting cache folders", () => {
+  for (const name of ["README.md", "SETUP.md", "docs/setup.md", "docs/troubleshooting.md", "docs/tutorial-first-run.md", "docs/two-gemini-paths.md"]) {
+    assert.doesNotMatch(read(...name.split("/")), /ls -d ~\/\.claude\/plugins\/cache\/[^\n]*tail -1/, `${name} sorts cache folders to find the plugin`);
+  }
+});
+
+// A zero-touch install ends with "start a new chat": the setup guide Claude follows for an install tells the person
+// nothing about an unset API key or a marketplace refresh command.
+test("the setup guide ends a zero-touch install at 'start a new chat', with no commands or setup checks for the person", () => {
+  const setup = read("SETUP.md");
+  assert.match(setup, /When the person asked to install zero-touch, the install ends here\./);
+  assert.match(setup, /Do not run steps 3 to 6/);
+  // The exact three lines, and nothing else.
+  assert.match(setup, /reply with exactly\s+these three lines and nothing else/);
+  assert.match(setup, /> Zero-touch is installed\.\n> Start a new chat: plugins load when a chat starts\.\n> That chat will ask you how zero-touch should work\./);
 });

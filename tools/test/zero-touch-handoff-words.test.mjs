@@ -21,6 +21,10 @@ const { handoffMessage, HANDOFF_KINDS } = await import(join(ROOT, "plugin", "scr
 
 // [message, the hand-off kinds it asks for, whether it also asks for other work]
 const RECOGNISED = [
+  // A new document whose words name a destination that is not an existing document.
+  ["add a README to the repo", ["docs"], false],
+  ["add a contributing guide to the docs folder", ["docs"], false],
+  ["write a setup guide in docs/setup.md", ["docs"], false],
   // a new document of the project
   ["write a README for this project", ["docs"], false],
   ["Write a README.md for the api package", ["docs"], false],
@@ -33,6 +37,11 @@ const RECOGNISED = [
   ["put together a troubleshooting guide for the worker queue", ["docs"], false],
   ["write a getting-started tutorial", ["docs"], false],
   ["write up installation instructions for Windows", ["docs"], false],
+  // A modifier that starts with a preposition and a hyphen is one word: "on-call", "in-depth" and "no-code" are not
+  // read as "on", "in" and "no".
+  ["write an on-call runbook", ["docs"], false],
+  ["write an in-depth readme for the worker", ["docs"], false],
+  ["write a no-code setup guide for the admin panel", ["docs"], false],
   // a new spec
   ["write the requirements for the export feature", ["spec"], false],
   ["draft a design doc for the cache layer", ["spec"], false],
@@ -103,6 +112,13 @@ const RECOGNISED = [
 
 // [message, why it is no hand-off]
 const NOT_RECOGNISED = [
+  // Put into a document that exists: an edit of it, never a new document.
+  ["add installation instructions to the README", "an edit of the README"],
+  ["add a FAQ to the README", "an edit of the README"],
+  ["add a troubleshooting guide to docs/setup.md", "an edit of an existing document"],
+  ["add an overview of the API to the README", "an edit of the README"],
+  ["add a usage section in the README", "an edit of the README"],
+  ["add a changelog entry to CHANGELOG.md", "an edit of the changelog"],
   // the chat's own work
   ["fix the /login endpoint returning 500 on missing password", "a bug fix is the chat's own work"],
   ["build me a todo app with a React frontend", "new code is the chat's own work"],

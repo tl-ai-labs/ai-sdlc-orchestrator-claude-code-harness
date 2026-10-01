@@ -3,12 +3,10 @@
  * chosen in the settings box and has its own tests: zero-touch-handoff-*.test.mjs. Everything below is about a chat
  * in workflow mode, the default.)
  *
- * Why: until 0.8.3 a zero-touch chat whose message was not one of the eight /mmo: jobs got the generic orchestrator
- * (ask 1): a start-of-chat note, big Reads turned into outlines, by-hand typing refused and handed to a Flash or
- * Sonnet worker through ten extra server tools, and a savings board. That part is removed in 0.8.4 (its code is kept
- * on the branch archive/generic-orchestrator and the tag generic-orchestrator-0.8.3). A zero-touch chat whose message
- * is not a recognised job is now plain Claude Code: nothing is added to what the model reads, no tool is refused or
- * rewritten, and the plugin keeps no settings for it.
+ * A zero-touch chat whose message is not a recognised job is plain Claude Code: nothing is added to what the model
+ * reads, no tool is refused or rewritten, and the plugin keeps no settings for it. The generic orchestrator (a
+ * start-of-chat note, big Reads turned into outlines, by-hand typing handed to a worker, a savings board) is not part
+ * of zero-touch.
  *
  * These tests drive the real shell shim with the hook input Claude Code sends, in a chat the zero-touch plugin marked
  * at its start (tools/test/lib/chat-start.mjs). Each test has its own MMO_HOME and project folder; no network.
@@ -25,7 +23,7 @@ const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const PLUGIN = join(ROOT, "plugin");
 const AMBIENT = join(PLUGIN, "scripts", "ambient");
 const SHIM = join(PLUGIN, "hooks", "ambient.sh");
-const { startingChats } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
+const { startingChats, gitProject } = await import(join(ROOT, "tools", "test", "lib", "chat-start.mjs"));
 
 function sandbox() {
   const dir = mkdtempSync(join(tmpdir(), "mmo-zt-a-"));
@@ -34,6 +32,7 @@ function sandbox() {
   mkdirSync(home);
   mkdirSync(repo);
   writeFileSync(join(repo, "package.json"), '{"name":"shop"}\n');
+  gitProject(repo); // a project being changed is a git project (a change workflow needs git)
   return { dir, home, repo, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -52,13 +51,14 @@ const run = startingChats(runOnce, (s) => s.home);
 /** The matcher of the two hooks around hand-off mode's own tools. */
 const HANDOFF_TOOLS = "mcp__(plugin_mmo_)?model-dispatch__(write_document|write_tests_from_cases|repeat_edit_across_files|undo_hand_off)";
 
-test("mmo hooks only the moments zero-touch needs: ten for workflow routing, four for hand-off mode (its model pin, and around its own tools); no Read, Bash, Write or Edit hook is left", () => {
-  const hooks = JSON.parse(readFileSync(join(PLUGIN, "hooks", "hooks.json"), "utf8")).hooks;
+test("zero-touch hooks only the moments it needs: eleven for workflow routing, five for hand-off mode (its model pin, and around its own tools); no Read, Bash, Write or Edit hook", () => {
+  // Registered by the zero-touch plugin, run through its shim into mmo's hook script.
+  const hooks = JSON.parse(readFileSync(join(ROOT, "zero-touch", "hooks", "hooks.json"), "utf8")).hooks;
   const moments = [];
   for (const [event, entries] of Object.entries(hooks)) {
     for (const e of entries) {
       for (const h of e.hooks) {
-        const m = /ambient\.sh" (\S+)$/.exec(h.command);
+        const m = /mmo-hook\.sh" (\S+)$/.exec(h.command);
         if (m) moments.push(`${event}:${e.matcher ?? ""}:${m[1]}`);
       }
     }
@@ -67,22 +67,26 @@ test("mmo hooks only the moments zero-touch needs: ten for workflow routing, fou
     "PostToolUse:Skill:post-skill",
     "PostToolUse:AskUserQuestion:post-question",
     "Stop::turn-end",
+    // A turn that ends in an error (StopFailure) gets turn-end's clean-up (zero-touch-workflow-life tests).
+    "StopFailure::turn-failed",
     "PreToolUse:*:pre-any",
     "PreToolUse:Agent|Task:pre-agent",
     "PreToolUse:Skill:pre-skill",
     "SessionStart::session-start",
     "UserPromptSubmit::prompt",
-    // 1 Oct 2026: a run zero-touch started has the person's policy stamped on every model-server call that takes one,
+    // A run zero-touch started has the person's policy stamped on every model-server call that takes one,
     // and /clear releases a workflow it abandons (zero-touch-routing tests).
     "PreToolUse:mcp__(plugin_mmo_)?model-dispatch__(load_policy|preflight_dispatch|execute_with_model|simulate_policy):pre-dispatch",
     "SessionEnd:clear:session-end",
-    // Hand-off mode keeps a chat on its pinned model (zero-touch-handoff-chat.test.mjs); both answer nothing in a
-    // workflow-mode chat.
+    // Hand-off mode keeps a chat on its pinned model (zero-touch-handoff-chat.test.mjs), and a workflow zero-touch
+    // started keeps the chat on the model its helpers follow (ambient-routing-hooks.test.mjs).
     "PreModelSwitch::pre-model-switch",
     "PostModelSwitch::post-model-switch",
     // Around a hand-off tool call (zero-touch-handoff-tools.test.mjs): matched on those tools only.
     `PreToolUse:${HANDOFF_TOOLS}:pre-handoff`,
     `PostToolUse:${HANDOFF_TOOLS}:post-handoff`,
+    // A hand-off call that failed or was interrupted: its file handed back, an interrupt marked.
+    `PostToolUseFailure:${HANDOFF_TOOLS}:handoff-failed`,
   ].sort());
 });
 
@@ -91,8 +95,8 @@ test("an ordinary message in a zero-touch chat gets nothing added for the model:
   try {
     for (const text of ["what does the checkout function return when the cart is empty?", "thanks, that makes sense", "rename the variable x to total in cart.js"]) {
       const r = await run("prompt", { session_id: "plain1", cwd: s.repo, prompt: text, prompt_id: `p-${text.length}` }, s);
-      // The person sees one line saying so (tools/test/zero-touch-lines.test.mjs); the model reads nothing extra.
-      assert.deepEqual(Object.keys(JSON.parse(r.stdout)), ["systemMessage"], `nothing is added for the model: ${text}`);
+      // Quiet by default: ordinary chat gets nothing, for the person or for the model.
+      assert.equal(r.stdout, "", `nothing is shown and nothing is added: ${text}`);
     }
   } finally {
     s.cleanup();
@@ -115,7 +119,7 @@ test("in an ordinary zero-touch chat every tool runs untouched: nothing is refus
       const r = await run(event, { session_id: "plain2", cwd: s.repo, ...payload }, s);
       assert.equal(r.stdout, "", `${event} ${payload.tool_name} passes untouched`);
     }
-    // The removed moments have no handler: even called directly, the hook program answers nothing.
+    // Read, Write and Bash moments have no handler: even called directly, the hook program answers nothing.
     const hook = join(AMBIENT, "hook.mjs");
     for (const [event, payload] of [
       ["post-read", { tool_name: "Read", tool_input: { file_path: big }, tool_response: { type: "text", file: { filePath: big, content: readFileSync(big, "utf8"), numLines: 3000, startLine: 1, totalLines: 3000 } } }],
@@ -138,7 +142,7 @@ test("in an ordinary zero-touch chat every tool runs untouched: nothing is refus
   }
 });
 
-test("the shipped settings hold only routing's keys (the person's choices live in the zero-touch plugin), and an older settings file's other keys are ignored", async () => {
+test("the shipped settings hold only routing's keys (the person's choices live in the zero-touch plugin), and a settings file's other keys are ignored", async () => {
   const shipped = JSON.parse(readFileSync(join(PLUGIN, "config", "ambient.default.json"), "utf8"));
   assert.deepEqual(Object.keys(shipped).sort(), ["retention_days", "routing", "routing_defaults", "schema_version"]);
   assert.deepEqual(Object.keys(shipped.routing_defaults), ["auth"]);
@@ -156,18 +160,17 @@ test("the shipped settings hold only routing's keys (the person's choices live i
   }
 });
 
-test("the generic orchestrator's files are gone, and every file left in the hook's folder is used by the hook", () => {
+test("the generic orchestrator's files are absent, and every file in the hook's folder is used by the hook", async () => {
   for (const gone of [
     "plugin/scripts/ambient/jobs.mjs", "plugin/scripts/ambient/apply.mjs", "plugin/scripts/ambient/lookup.mjs",
     "plugin/scripts/ambient/write-files.mjs", "plugin/scripts/ambient/census.mjs", "plugin/scripts/ambient/setup.mjs",
     "plugin/scripts/ambient/board", "plugin/config/ambient-labels.json", "plugin/mcp/model-dispatch/src/ambient",
     "tools/ambient-preflight.mjs",
-    // Found on 30 Sep 2026 while writing the docs: two leftovers nothing read any more. The seed evidence fed the
-    // worker-picking rule, and the no-tools worker launch was for the chat jobs; both went with the generic
-    // orchestrator, and hand-off mode types through the executor's own typists.
+    // Also the generic orchestrator's: the seed evidence for its worker-picking rule, and the no-tools worker launch
+    // for its chat jobs (hand-off mode types through the executor's own typists).
     "plugin/config/ambient-seeds.json", "plugin/mcp/model-dispatch/test/claudeWorkerLaunch.test.mjs",
   ]) {
-    assert.ok(!existsSync(join(ROOT, gone)), `${gone} is removed (kept on archive/generic-orchestrator)`);
+    assert.ok(!existsSync(join(ROOT, gone)), `${gone} is removed`);
   }
   // Zero-touch ships one settings file. Any other ambient* file in the plugin's config folder is read by nothing.
   assert.deepEqual(readdirSync(join(PLUGIN, "config")).filter((n) => /^ambient/.test(n)), ["ambient.default.json"]);
@@ -186,6 +189,13 @@ test("the generic orchestrator's files are gone, and every file left in the hook
     }
   };
   visit(join(AMBIENT, "hook.mjs"));
+  // Zero-touch's own step scripts, which Claude runs when the hook's notes tell it to: used by path.
+  const { ZERO_TOUCH_SCRIPTS } = await import(join(AMBIENT, "lib", "own-steps.mjs"));
+  const RF = await import(join(AMBIENT, "lib", "route-flow.mjs"));
+  assert.deepEqual([RF.WORKFLOW_STOPPED, RF.GIT_BASELINE].map((p) => relative(AMBIENT, p)).sort(), [...ZERO_TOUCH_SCRIPTS].sort());
+  for (const p of [RF.WORKFLOW_STOPPED, RF.GIT_BASELINE]) visit(p);
+  // The version of these hooks, which the zero-touch plugin reads to tell an mmo too old for it.
+  reached.add(join(AMBIENT, "api.json"));
   const present = [];
   const walk = (d) => {
     for (const name of readdirSync(d)) {
@@ -209,7 +219,7 @@ test("the plugins describe both of zero-touch's modes, and promise no saving: no
     // some typing is handed off. A person choosing the plugin in the list must learn of both, and where to choose.
     assert.match(text, /workflow mode/i, text);
     assert.match(text, /hand-off mode/i, text);
-    // Where to choose (1 Oct 2026): in the chat, never a file or a command.
+    // Where to choose: in the chat, never a file or a command.
     assert.match(text, /change zero-touch settings/, text);
     assert.doesNotMatch(text, /~\/\.mmo-ambient|ambient\.json|\/mmo:/, text);
     assert.match(text, /new chats/i, text);

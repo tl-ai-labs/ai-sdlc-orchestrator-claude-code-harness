@@ -30,7 +30,7 @@ const ROUTES = { docs: FLASH, tests: FLASH, repeat: FLASH };
 /** A project, and a chat the zero-touch plugin marked for hand-off (its record, stamp and resolved models). */
 /**
  * A project, and a chat the zero-touch plugin marked for hand-off: its record, its stamp (the chat model and who types
- * each kind, 1 Oct 2026) and its resolved models (each kind with the shipped policy that routes it).
+ * each kind) and its resolved models (each kind with the shipped policy that routes it).
  */
 function sandbox({ mode = "b", chatModel = "claude-opus-5", routes = ROUTES } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "mmo-handoff-doc-"));
@@ -367,4 +367,15 @@ test("the tool works only in a chat marked for hand-off, with the models that ch
     assert.equal(r.receipt.attempts, 2);
     assert.equal(r.opus.calls.length, 0);
   } finally { flashOnly.cleanup(); }
+});
+
+test("a document that appeared while its hand-off ran is never written over, nor handed back", async () => {
+  const s = sandbox();
+  try {
+    const t = typists({ flash: () => { mkdirSync(join(s.repo, "docs"), { recursive: true }); writeFileSync(join(s.repo, "docs", "setup.md"), "someone else's\n"); return { content: GOOD_DOC }; } });
+    const r = await call(s, stamped(s), t);
+    assert.deepEqual([r.receipt.status, r.receipt.cause], ["failed", "appeared"], JSON.stringify(r.receipt));
+    assert.equal(readFileSync(join(s.repo, "docs", "setup.md"), "utf8"), "someone else's\n");
+    assert.ok(!existsSync(join(s.session, "handoff_released.json")));
+  } finally { s.cleanup(); }
 });

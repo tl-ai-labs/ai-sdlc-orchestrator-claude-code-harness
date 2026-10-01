@@ -2,9 +2,10 @@
  * repeat_edit_across_files: the form, the brief and the checks (zero-touch hand-off mode).
  *
  * The chat's model makes a change ONCE, by hand, in one file (the example). Repeating it in other files is typing:
- * the hand-off policy's model gets the example's own change (its diff since the last commit), the change in words,
- * and one target file at a time, and answers with exact edits for that file. Code checks each answer before any
- * file is touched:
+ * the hand-off policy's model gets the example's own change (the chat's own edit, measured against the file's text
+ * before the chat first edited it, which the plugin's hook keeps, so changes the person had not committed are never
+ * repeated; without that kept text, the diff since the last commit), the change in words, and one target file at a
+ * time, and answers with exact edits for that file. Code checks each answer before any file is touched:
  *
  *  - every edit's search text is in the file exactly once (the executor's own rule, applyEdits), so an edit lands
  *    where it was meant or not at all;
@@ -18,8 +19,9 @@
  * undoes. A target whose edits never pass is named back to the chat's model, which changes that file itself.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { gitInstalled, gitRoot } from "../git.js";
 import type { FileSlice, TaskPacket } from "../types.js";
 import { EDIT_ANSWER_SCHEMA } from "../executor/brief.js";
 import { applyEdits } from "../executor/run.js";
@@ -38,14 +40,51 @@ export interface RepeatForm {
   diff: string;
 }
 
-/** The example's change since the last commit, or "" when it has none (or the project is not a git repository). */
-function exampleDiff(projectDir: string, example: string): string {
-  try {
-    return execFileSync("git", ["diff", "HEAD", "--no-color", "--no-ext-diff", "-U3", "--", example], { cwd: projectDir, stdio: ["ignore", "pipe", "ignore"], timeout: 20_000, maxBuffer: 64 << 20 }).toString("utf8");
-  } catch { return ""; }
+/**
+ * The example's change, or "" when it has none (or the project is not a git repository): the chat's own edit when
+ * the file's text from before it is kept (`beforeFile`), else the change since the last commit.
+ */
+/** How many lines a diff adds or removes (its headers aside). */
+function changedLines(diff: string): number {
+  return diff.split("\n").filter((l) => /^[+-](?![+-]{2} )/.test(l)).length;
 }
 
-export function checkRepeatForm(raw: unknown, projectDir: string): { form: RepeatForm } | { problems: string[] } {
+/**
+ * The example's change to repeat. Two differences can tell it: since the text the hook kept before the chat's first
+ * edit of the file (the person's own uncommitted work in it stays out), and since the last commit. The smaller one is
+ * the change: a copy kept turns ago, before the person committed that early edit, makes the kept-copy difference carry
+ * the old edit too, which would let matching deletions through the check.
+ */
+function exampleDiff(projectDir: string, example: string, beforeFile?: string): string {
+  // Never start git where it cannot help (src/git.ts): on a Mac without the developer tools it opens a dialog.
+  if (!gitInstalled() || !gitRoot(projectDir)) return "";
+  let sinceHead = "";
+  try {
+    sinceHead = execFileSync("git", ["diff", "HEAD", "--no-color", "--no-ext-diff", "-U3", "--", example], { cwd: projectDir, stdio: ["ignore", "pipe", "ignore"], timeout: 20_000, maxBuffer: 64 << 20 }).toString("utf8");
+  } catch { /* none */ }
+  if (!beforeFile || !existsSync(beforeFile)) return sinceHead;
+  let sinceKept = "";
+  try {
+    execFileSync("git", ["diff", "--no-index", "--no-color", "--no-ext-diff", "-U3", "--", beforeFile, join(projectDir, example)], { cwd: projectDir, stdio: ["ignore", "pipe", "ignore"], timeout: 20_000, maxBuffer: 64 << 20 });
+    return ""; // the same text as before the chat's first edit: no change of the chat's own
+  } catch (e: any) {
+    // git diff --no-index exits 1 when the files differ; its headers name the two files, which are relabelled as the example.
+    if (e?.status !== 1 || !e.stdout) return sinceHead;
+    let inHunk = false;
+    sinceKept = e.stdout.toString("utf8").split("\n").map((line: string) => {
+      if (line.startsWith("@@")) inHunk = true;
+      if (inHunk) return line;
+      if (line.startsWith("diff --git ")) return `diff --git a/${example} b/${example}`;
+      if (line.startsWith("--- ")) return `--- a/${example}`;
+      if (line.startsWith("+++ ")) return `+++ b/${example}`;
+      return line;
+    }).join("\n");
+  }
+  if (!sinceHead.trim()) return sinceKept;
+  return changedLines(sinceHead) < changedLines(sinceKept) ? sinceHead : sinceKept;
+}
+
+export function checkRepeatForm(raw: unknown, projectDir: string, { before }: { before?: (path: string) => string } = {}): { form: RepeatForm } | { problems: string[] } {
   const a = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const f = formProblems();
 
@@ -53,8 +92,8 @@ export function checkRepeatForm(raw: unknown, projectDir: string): { form: Repea
   let diff = "";
   if (!isProjectFile(projectDir, a.example)) f.add(`example ${String(a.example ?? "")} is not a file of the project`);
   else {
-    diff = exampleDiff(projectDir, a.example);
-    if (!diff.trim()) f.add(`example ${a.example} has no change since the last commit: make the change in it first, by hand; it is the pattern the other files follow`);
+    diff = exampleDiff(projectDir, a.example, before?.(a.example));
+    if (!diff.trim()) f.add(`example ${a.example} has no change to repeat: make the change in it first, by hand; it is the pattern the other files follow`);
     else example = a.example;
   }
 

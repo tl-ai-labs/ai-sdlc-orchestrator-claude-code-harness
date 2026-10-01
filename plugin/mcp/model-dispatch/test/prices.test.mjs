@@ -30,7 +30,7 @@ const POLICY_DIR = join(HERE, "..", "..", "..", "config", "policies");
 const ANTHROPIC_URL = "https://platform.claude.com/docs/en/about-claude/pricing";
 const GEMINI_URL = "https://ai.google.dev/gemini-api/docs/pricing";
 const DAY = "2026-09-14";
-// Opus 5.5 was added on 26 Sep 2026 from the same page, with its own verified date: the rest of the list was not re-checked then.
+// Opus 5.5's row, from the same page, has its own verified date; the rest of the list keeps DAY.
 const OPUS_5_5_DAY = "2026-09-26";
 const STD = { speed: "standard", service_tier: "standard", inference_geo: "not_available" };
 
@@ -113,7 +113,7 @@ const CLAUDE_PAGE = {
   // model id:          base in, 5m write, 1h write, cache read, output  (per MTok, 2026-09-14)
   "claude-fable-5-1":   card(10, 12.5, 20, 0.25, 50),
   "claude-fable-5":     card(10, 12.5, 20, 1, 50),
-  "claude-opus-5-5":    card(4, 5, 8, 0.2, 20),  // 2026-09-26; cache read is 0.05x input on this model
+  "claude-opus-5-5":    card(4, 5, 8, 0.2, 20),  // verified on OPUS_5_5_DAY; cache read is 0.05x input on this model
   "claude-opus-5":      card(5, 6.25, 10, 0.5, 25),
   "claude-opus-4-8":    card(5, 6.25, 10, 0.5, 25),
   "claude-opus-4-7":    card(5, 6.25, 10, 0.5, 25),

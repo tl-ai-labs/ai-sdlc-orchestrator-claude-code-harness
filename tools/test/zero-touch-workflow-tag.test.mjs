@@ -1,28 +1,29 @@
 /**
- * How a workflow zero-touch starts learns the person's models (1 Oct 2026).
+ * How a workflow zero-touch starts learns the person's models, with mmo's own texts unchanged.
  *
  * Zero-touch starts a workflow the way a person typing its command would, with one tag at the front of the command's
- * arguments: `[zero-touch policy=<name> auth=<vendor|estimated>]`, then the person's own words for the job. The
- * commands read the tag as this run's choice, which wins over the project's saved choice and over a repo-local
- * routing-policy.yaml (the explicit-file rule /mmo:pass already follows). A tag and not flags on purpose: a person
- * typing a command gets exactly the surface they had (tools/test/command.test.mjs keeps flags out of the wizard).
+ * arguments: `[zero-touch policy=<name> auth=<vendor|estimated>]`, then the person's own words for the job. Zero-touch
+ * is a strict add-on: mmo's command, skill and agent texts are mmo's own, so they say nothing about the tag. What
+ * differs in a run zero-touch started is said beside the command instead, the moment it loads, and only in a zero-touch
+ * chat (route-flow.mjs runNote, given by hook.mjs "post-skill"): the tag's policy wins over the project's saved choice
+ * and over a repo-local routing-policy.yaml, as an explicit file (the rule /mmo:pass already follows), and the cost
+ * recording is not asked. The model-server calls and the run-start check are stamped with the same file whatever
+ * Claude passes (tools/test/zero-touch-routing-stamp.test.mjs).
  *
- * This test holds the two sides to one format: what zero-touch sends (route-flow.mjs startArgs) and what the command
- * texts say they read. It also checks that the typed path says what it said before.
+ * This test holds the two sides to one format, what zero-touch sends and what Claude is told it means, and holds mmo's
+ * texts free of zero-touch.
  *
  * Offline: files of this repository only.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const PLUGIN = join(ROOT, "plugin");
-const read = (...p) => readFileSync(join(PLUGIN, ...p), "utf8");
 const R = await import(join(PLUGIN, "scripts", "ambient", "lib", "route-flow.mjs"));
-const TEMPLATE = "[zero-touch policy=<name> auth=<vendor|estimated>]";
 const ALIASES = ["bugfix", "deps", "docs", "feature-extend", "feature-new", "refactor", "test"];
 
 test("what zero-touch sends is exactly the documented tag, then the person's words", () => {
@@ -37,40 +38,41 @@ test("what zero-touch sends is exactly the documented tag, then the person's wor
   assert.match(line, /do not ask about either/);
 });
 
-test("the new-app command reads the tag: this run's policy wins over the saved choice and routing-policy.yaml, as an explicit file", () => {
-  const g = read("commands", "greenfield.md");
-  assert.ok(g.includes(TEMPLATE), "the tag, word for word");
-  assert.match(g, /wins\s+over the project's saved choice and over a repo-local `routing-policy\.yaml`/);
-  assert.match(g, /policy_path: \$\{CLAUDE_PLUGIN_ROOT\}\/config\/policies\/<name>\.yaml/);
-  assert.match(g, /its `auth=` is the mode: say which, and do\s+not ask/);
-  // The typed path says what it said before.
-  assert.match(g, /This command takes no arguments\. Everything it needs it asks for\./);
-  assert.match(g, /Otherwise, read the policy name written by\s+setup:/);
-});
-
-test("the existing-project guide and all seven job commands read the tag the same way", () => {
-  const guide = read("skills", "brownfield-guide", "SKILL.md");
-  assert.match(guide, /`policy: <name>` and `auth_mode: <vendor\|estimated>` present — a run zero-touch started/);
-  assert.match(guide, /when the handover carries `policy: <name>` \(a run zero-touch started\), that is this\s+run's policy/);
-  assert.match(guide, /when the handover carries `auth_mode`, show it and do not ask/);
-  assert.match(guide, /`policy_path: \$\{CLAUDE_PLUGIN_ROOT\}\/config\/policies\/<name>\.yaml` — only when the handover carried/);
-  for (const job of ALIASES) {
-    const text = read("commands", `${job}.md`);
-    assert.ok(text.includes(`\`${TEMPLATE}\``), `${job}.md names the tag`);
-    assert.match(text, /`seed_description:` — the text of \$ARGUMENTS, verbatim, if non-empty, after a leading zero-touch tag\./, job);
-    // The typed path's own rule stays under its own bullet (1 Oct 2026, found in review: it had slid under the tag's
-    // bullet, where "empty" could be read as "no tag", so a typed description would be ignored).
-    assert.match(text, /after a leading zero-touch tag\.\n  Empty means run the normal step-4b interview\.\n- `policy:` and `auth_mode:`/, `${job}: the interview rule belongs to seed_description`);
+test("mmo's own command, skill and agent texts say nothing about zero-touch", () => {
+  const files = [];
+  const walk = (dir) => { for (const n of readdirSync(dir)) { const p = join(dir, n); if (statSync(p).isDirectory()) walk(p); else if (n.endsWith(".md")) files.push(p); } };
+  for (const d of ["commands", "skills", "agents"]) walk(join(PLUGIN, d));
+  assert.ok(files.length > 20);
+  for (const f of files) {
+    const text = readFileSync(f, "utf8");
+    assert.doesNotMatch(text, /zero[\s-]?touch|workflow-stopped|git-baseline|\/ambient\//i, f);
   }
-  // The generic command is never started by zero-touch (typed only), so it has no tag.
-  assert.ok(!read("commands", "brownfield.md").includes("[zero-touch"), "brownfield.md is typed only");
 });
 
-test("every job zero-touch starts is one of the commands that read the tag", async () => {
+test("the note given when a workflow zero-touch started loads: the tag's two choices, and how to hand the chat back", () => {
+  const path = join(PLUGIN, "config", "policies", "opus-plus-sonnet.yaml");
+  for (const job of Object.keys(R.PLAIN)) {
+    const note = R.runNote({ job, policy: "opus-plus-sonnet", auth: "estimated" });
+    assert.ok(note.includes("[zero-touch policy=opus-plus-sonnet auth=estimated]"), job);
+    assert.ok(note.includes(`policy_path "${path}"`), `${job}: the explicit file`);
+    assert.match(note, /do not stop because none is saved/);
+    assert.match(note, /show "opus-plus-sonnet \(chosen for this run\)"/);
+    assert.match(note, /Cost recording: estimated\. Show it where the command shows it, and do not ask\./);
+    assert.match(note, /Do not ask the person to set CLAUDE_CODE_SUBAGENT_MODEL/, "the helpers follow the chat's model, which zero-touch checked");
+    assert.ok(note.includes(R.STOP_NOTE), `${job}: how to hand the chat back`);
+    assert.match(note, job === "greenfield" ? /is the brief to build from/ : /The job's description is the text after the tag\./, job);
+    assert.match(note, /Keep the plugin, command names and model names out of what you say to the person\./);
+  }
+  assert.doesNotMatch(R.runNote({ job: "bugfix", policy: "opus-plus-sonnet", auth: "vendor" }), /CLAUDE_CODE_SUBAGENT_MODEL/, "under vendor no helper model is checked");
+  // The early-stop script is zero-touch's own, and exists.
+  assert.ok(R.STOP_NOTE.includes(`node "${R.WORKFLOW_STOPPED}"`));
+  assert.ok(existsSync(R.WORKFLOW_STOPPED) && R.WORKFLOW_STOPPED.includes(join("scripts", "ambient")));
+});
+
+test("every job zero-touch starts is a workflow command", async () => {
   const { WORKFLOW_COMMANDS } = await import(join(PLUGIN, "scripts", "ambient", "lib", "commands.mjs"));
-  const routed = Object.keys(R.PLAIN);
-  for (const job of routed) {
+  for (const job of Object.keys(R.PLAIN)) {
     assert.ok(WORKFLOW_COMMANDS.has(job), `${job} is a workflow command`);
-    assert.ok(job === "greenfield" || ALIASES.includes(job), `${job} reads the tag`);
+    assert.ok(job === "greenfield" || ALIASES.includes(job), job);
   }
 });

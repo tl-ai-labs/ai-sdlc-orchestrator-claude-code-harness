@@ -8,7 +8,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -49,7 +49,7 @@ function runOnce(event, payload, { home, repo, env = {}, pathOverride } = {}) {
   });
 }
 
-// Every chat these tests drive starts the way a real one does (tools/test/lib/chat-start.mjs, 29 Sep 2026).
+// Every chat these tests drive starts the way a real one does (tools/test/lib/chat-start.mjs).
 const run = startingChats(runOnce, (o) => o?.home, { envOf: (o) => ({ MMO_AMBIENT: "on", ...(o?.env ?? {}) }) });
 
 function events(home, sid) {
@@ -62,7 +62,7 @@ test("without the zero-touch plugin (no chat record, no MMO_AMBIENT) the shim ex
   const s = sandbox();
   try {
     // runOnce, not run: this chat starts WITHOUT the zero-touch plugin's start hook (tools/test/lib/chat-start.mjs).
-    writeFileSync(join(s.home, "ambient.json"), JSON.stringify({ mode: "on" })); // the old switch: no longer one
+    writeFileSync(join(s.home, "ambient.json"), JSON.stringify({ mode: "on" })); // a mode in this file switches nothing
     const r = await runOnce("session-start", { session_id: "s1", cwd: s.repo }, { ...s, env: { MMO_AMBIENT: undefined } });
     assert.equal(r.code, 0);
     assert.equal(r.stdout, "");
@@ -93,7 +93,7 @@ test("a chat's start is logged, and its records are private to the account", asy
     assert.equal(start.source, "startup");
     assert.equal(start.model, "claude-opus-5", "the model is recorded without the context-size suffix");
     assert.equal(start.routing, "on");
-    // 0.8.4: no control arm is drawn any more (it measured the removed generic orchestrator).
+    // No control arm is drawn.
     assert.ok(!existsSync(join(s.home, "sessions", "s1", "arm.json")));
     assert.equal(statSync(join(s.home, "sessions", "s1")).mode & 0o777, 0o700);
     assert.equal(statSync(join(s.home, "sessions", "s1", "events.jsonl")).mode & 0o777, 0o600);
@@ -140,39 +140,93 @@ test("three failures in a chat open the breaker and later hooks do nothing", asy
   } finally { s.cleanup(); }
 });
 
-test("every zero-touch hook is registered through the shim with a short timeout; the pipeline's own hooks keep 0.7.6's settings", () => {
-  const hooks = JSON.parse(readFileSync(join(ROOT, "plugin", "hooks", "hooks.json"), "utf8")).hooks;
+test("every zero-touch hook is registered by the zero-touch plugin, through its shim, with a short timeout; mmo's own hook list is the pipeline's alone", () => {
+  // Zero-touch is a strict add-on: the workflow and hand-off hooks are in zero-touch's hook list, not mmo's, so a
+  // person without zero-touch has none of them.
+  const hooks = JSON.parse(readFileSync(join(ROOT, "zero-touch", "hooks", "hooks.json"), "utf8")).hooks;
   const seen = new Set();
-  const pipelineHooks = [];
   for (const [event, entries] of Object.entries(hooks)) {
     for (const entry of entries) {
       for (const h of entry.hooks) {
-        const m = /hooks\/ambient\.sh" (\S+)$/.exec(h.command);
-        if (m) {
-          // The pre-any hook runs on every tool call of a marked chat: it must fail fast (the platform default is 600 s).
-          assert.ok(typeof h.timeout === "number" && h.timeout <= 5, `${event} ${m[1]}: a zero-touch hook sets a timeout of 5 s or less`);
-          assert.match(h.command, /^sh "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/ambient\.sh" /, "zero-touch hooks go through the POSIX shim, its path quoted");
-          seen.add(m[1]);
-        } else {
-          pipelineHooks.push({ event, command: h.command, timeout: h.timeout });
-        }
+        const m = /hooks\/mmo-hook\.sh" (\S+)$/.exec(h.command);
+        if (!m) continue;
+        // The pre-any hook runs on every tool call of a marked chat: it must fail fast (the platform default is 600 s).
+        // The turn's end may save a finished new app with git, so it has 30 s.
+        const limit = m[1] === "turn-end" ? 30 : 5;
+        assert.ok(typeof h.timeout === "number" && h.timeout <= limit, `${event} ${m[1]}: a zero-touch hook sets a timeout of ${limit} s or less`);
+        assert.match(h.command, /^sh "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/mmo-hook\.sh" /, "zero-touch hooks go through the POSIX shim, its path quoted");
+        seen.add(m[1]);
       }
     }
   }
-  // The typed pipeline's hooks are 0.7.6's and keep its settings (0.8.3). Claude Code lets a tool call through when
-  // its PreToolUse hook times out, so a short timeout on the write contract would let a slow start skip the guard.
+  const pipelineHooks = [];
+  for (const [event, entries] of Object.entries(JSON.parse(readFileSync(join(ROOT, "plugin", "hooks", "hooks.json"), "utf8")).hooks)) {
+    for (const entry of entries) for (const h of entry.hooks) pipelineHooks.push({ event, command: h.command, timeout: h.timeout });
+  }
+  assert.deepEqual(pipelineHooks.filter((h) => /ambient|mmo-hook/.test(h.command)), [], "mmo's own hook list has no zero-touch hook");
+  // The typed pipeline's hooks keep mmo's own settings. Claude Code lets a tool call through when its PreToolUse hook
+  // times out, so a short timeout on the write contract would let a slow start skip the guard.
   for (const name of ["write-contract-check.mjs", "foreground-helpers.mjs", "telemetry.sh"]) {
     const found = pipelineHooks.filter((h) => h.command.includes(name));
     assert.equal(found.length, 1, `${name} is registered once`);
-    assert.equal(found[0].timeout, undefined, `${name} keeps 0.7.6's setting: no timeout of its own`);
+    assert.equal(found[0].timeout, undefined, `${name} keeps mmo's own setting: no timeout of its own`);
   }
   // Every handler the dispatcher has is registered (tools/test/zero-touch-a-only.test.mjs pins the exact list).
   const handlers = [...readFileSync(join(ROOT, "plugin", "scripts", "ambient", "hook.mjs"), "utf8").matchAll(/^  (?:async )?"?([a-z-]+)"?\(ctx\) \{/gm)].map((m) => m[1]);
   assert.ok(handlers.length >= 7, "the handler list was read");
   for (const e of handlers) assert.ok(seen.has(e), `${e} is handled by the dispatcher but not registered`);
-  const shim = readFileSync(SHIM, "utf8").split("\n");
-  assert.equal(shim[0], "#!/bin/sh");
-  assert.equal(shim.find((l) => l.trim() && !l.startsWith("#")), 'trap "exit 0" EXIT', "the trap must be the first command");
+  for (const file of [SHIM, join(ROOT, "zero-touch", "hooks", "mmo-hook.sh")]) {
+    const shim = readFileSync(file, "utf8").split("\n");
+    assert.equal(shim[0], "#!/bin/sh");
+    assert.equal(shim.find((l) => l.trim() && !l.startsWith("#")), 'trap "exit 0" EXIT', `${file}: the trap must be the first command`);
+  }
+});
+
+test("zero-touch's shim finds mmo's folder in every layout, and passes the hook's input and name through unchanged", () => {
+  const dir = mkdtempSync(join(tmpdir(), "zt-shim-"));
+  try {
+    // A stand-in mmo whose hook script prints what it was given. It says it carries zero-touch's hooks
+    // (scripts/ambient/api.json), which the shim requires (tools/test/zero-touch-mmo-update.test.mjs).
+    const fakeMmo = (at) => {
+      mkdirSync(join(at, "hooks"), { recursive: true });
+      mkdirSync(join(at, "scripts", "ambient"), { recursive: true });
+      writeFileSync(join(at, "hooks", "ambient.sh"), '#!/bin/sh\nprintf "%s|%s|%s" "$CLAUDE_PLUGIN_ROOT" "$1" "$(cat)"\n');
+      writeFileSync(join(at, "scripts", "ambient", "api.json"), '{"zero_touch_api": 1}\n');
+      return at;
+    };
+    const ztIn = (at) => {
+      mkdirSync(join(at, "hooks"), { recursive: true });
+      writeFileSync(join(at, "hooks", "mmo-hook.sh"), readFileSync(join(ROOT, "zero-touch", "hooks", "mmo-hook.sh")));
+      return join(at, "hooks", "mmo-hook.sh");
+    };
+    const shim = (script, env = {}) => spawnSync("sh", [script, "pre-any"], { input: '{"session_id":"a"}', encoding: "utf8", env: { PATH: process.env.PATH, ...env } });
+    // Installed: <cache>/<marketplace>/zero-touch/<version> beside <cache>/<marketplace>/mmo/<version>.
+    const cache = join(dir, "cache", "mkt");
+    const mmo = fakeMmo(join(cache, "mmo", "0.8.5"));
+    const installed = ztIn(join(cache, "zero-touch", "0.8.5"));
+    let r = shim(installed);
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, `${mmo}|pre-any|{"session_id":"a"}`);
+    // Another mmo version installed: the one Claude Code's record names (kept by the start hook) wins.
+    const other = fakeMmo(join(cache, "mmo", "0.8.6"));
+    const data = join(dir, "data");
+    mkdirSync(data);
+    writeFileSync(join(data, "mmo-root"), `${other}\n`);
+    assert.equal(shim(installed, { CLAUDE_PLUGIN_DATA: data }).stdout.split("|")[0], other);
+    // A kept folder that is gone: the one beside is used.
+    writeFileSync(join(data, "mmo-root"), `${join(dir, "gone")}\n`);
+    assert.equal(shim(installed, { CLAUDE_PLUGIN_DATA: data }).stdout.split("|")[0], mmo);
+    // This repository's layout: zero-touch/ beside plugin/.
+    const repo = join(dir, "repo");
+    fakeMmo(join(repo, "plugin"));
+    assert.equal(shim(ztIn(join(repo, "zero-touch"))).stdout.split("|")[0], join(repo, "plugin"));
+    // No mmo anywhere: nothing runs, nothing is said.
+    r = shim(ztIn(join(dir, "alone", "zero-touch")));
+    assert.deepEqual([r.status, r.stdout], [0, ""]);
+    // The real shim in this repository reaches mmo's real hook script.
+    const real = spawnSync("sh", [join(ROOT, "zero-touch", "hooks", "mmo-hook.sh"), "pre-any"], { input: '{"session_id":"no-such-chat"}', encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, MMO_HOME: join(dir, "h") } });
+    assert.deepEqual([real.status, real.stdout], [0, ""], "a chat without zero-touch: nothing");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a crafted session id cannot leave the sessions directory", async () => {
@@ -205,5 +259,27 @@ test("a prompt is a machine notice only when it starts with one of the app's own
     await run("prompt", { session_id: "s1", cwd: s.repo, prompt: "<system-reminder>x</system-reminder>" }, s);
     const typed = events(s.home, "s1").filter((e) => e.type === "prompt").map((e) => e.typed !== false);
     assert.deepEqual(typed, [true, false, false]);
+  } finally { s.cleanup(); }
+});
+
+test("the daily sweep removes a chat's records by the newest file in them, so a chat used every day is kept", async () => {
+  const s = sandbox();
+  try {
+    const { utimesSync } = await import("node:fs");
+    const sessions = join(s.home, "sessions");
+    const old = (Date.now() - 40 * 24 * 3600 * 1000) / 1000;
+    // A chat whose folder was made 40 days ago but whose log was written today, and one untouched for 40 days.
+    for (const [name, fresh] of [["daily", true], ["stale", false]]) {
+      const dir = join(sessions, name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "events.jsonl"), "{}\n");
+      writeFileSync(join(dir, "chat_mode"), "b");
+      if (!fresh) utimesSync(join(dir, "events.jsonl"), old, old);
+      utimesSync(join(dir, "chat_mode"), old, old);
+      utimesSync(dir, old, old);
+    }
+    await run("session-start", { session_id: "sweeper", cwd: s.repo, source: "startup" }, s);
+    assert.ok(existsSync(join(sessions, "daily")), "a chat with a file written today is kept");
+    assert.ok(!existsSync(join(sessions, "stale")), "a chat untouched for longer than the retention is removed");
   } finally { s.cleanup(); }
 });

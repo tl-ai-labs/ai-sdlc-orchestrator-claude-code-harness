@@ -1,7 +1,7 @@
 /**
  * Is this computer connected to Google (for Flash 3.8)? The mmo plugin's own rule, copied.
  *
- * mmo already answers this in plugin/scripts/verify-setup.mjs, and answers it well (read 1 Oct 2026): a value that
+ * mmo already answers this in plugin/scripts/verify-setup.mjs, and answers it well: a value that
  * is only an unexpanded placeholder does not count; a credential file is opened and read, and must hold the fields a
  * real login has; a Google Cloud project name on its own is not a login ("a project ID says where to bill, not who
  * is asking"); an explicit GOOGLE_APPLICATION_CREDENTIALS that cannot be used is "broken", because the Google library
@@ -103,23 +103,97 @@ export function googleState(env = process.env) {
   const adcFile = inspectCredentialFile(adcPath(env));
   const vertex = vertexCredentialState({ env: real, serviceAccountFile, adcFile });
   if (real.GEMINI_API_KEY) return { connected: true, state: "key", source: "GEMINI_API_KEY", detail: null };
-  return { connected: hasGeminiCredentials({ env: real, vertex }), state: vertex.state, source: vertex.source, detail: vertex.detail };
+  const connected = hasGeminiCredentials({ env: real, vertex });
+  // A Google Cloud sign-in with no project chosen for it: Flash cannot run on it, so it is not "connected". The
+  // project is where the model server and Google's own library look (googleProject).
+  if (connected && !googleProject(env)) return { connected: false, state: "no-project", source: vertex.source, detail: "no Google Cloud project is set for this sign-in" };
+  return { connected, state: vertex.state, source: vertex.source, detail: vertex.detail };
 }
 
 /**
- * The one real check, when settings that use Flash are saved: "works", "refused" (with gcloud's first line) or
- * "unknown" (nothing to test with: no gcloud, or a login this test does not cover). Never throws.
+ * The Google Cloud project a sign-in uses, or null: GOOGLE_CLOUD_PROJECT; else the sign-in file's
+ * own (quota_project_id for a gcloud login, project_id for a service account), as the model server reads it
+ * (plugin/mcp/model-dispatch/src/adapters/geminiTransports.ts resolveGcpProject); else gcloud's own configuration
+ * (`gcloud config set project`), where Google's auth library looks next. Read from files only; nothing is run. A copy
+ * of the mmo plugin's rule (plugin/scripts/ambient/lib/route-flow.mjs googleProject); tools/test/zero-touch-google.test.mjs
+ * keeps them agreeing.
+ */
+export function googleProject(env = process.env) {
+  const real = usableEnv(env);
+  if (real.GOOGLE_CLOUD_PROJECT) return real.GOOGLE_CLOUD_PROJECT;
+  try {
+    const file = JSON.parse(readFileSync(real.GOOGLE_APPLICATION_CREDENTIALS || adcPath(env), "utf8"));
+    const p = file?.quota_project_id ?? file?.project_id;
+    if (typeof p === "string" && p.trim()) return p.trim();
+  } catch { /* no file, or not one this can read */ }
+  try {
+    const home = env.HOME && env.HOME.trim() ? env.HOME : homedir();
+    const dir = env.CLOUDSDK_CONFIG && env.CLOUDSDK_CONFIG.trim() ? env.CLOUDSDK_CONFIG : join(home, ".config", "gcloud");
+    let name = "default";
+    try { name = readFileSync(join(dir, "active_config"), "utf8").trim() || "default"; } catch { /* the default configuration */ }
+    const ini = readFileSync(join(dir, "configurations", `config_${name}`), "utf8");
+    let core = false;
+    for (const line of ini.split("\n")) {
+      const t = line.trim();
+      if (t.startsWith("[")) core = t === "[core]";
+      else if (core) { const m = /^project\s*=\s*(\S+)/.exec(t); if (m) return m[1]; }
+    }
+  } catch { /* no gcloud configuration */ }
+  return null;
+}
+
+/**
+ * What gcloud says when Google itself turned the sign-in down (an expired, revoked or reset login), as opposed to
+ * not being reached at all (no network, a proxy, a timeout), which says nothing about the sign-in.
+ */
+const SIGN_IN_REFUSED = /invalid_grant|invalid_rapt|reauth|re-?authenticat|expired|revoked|has been disabled|please run|gcloud auth (application-default )?login/i;
+
+/**
+ * The one real check, when settings that use Flash are saved: "works", "refused" (Google turned the sign-in down) or
+ * "unknown" (nothing to test with: no gcloud, a login this test does not cover, or Google could not be reached).
+ * Never throws. `detail` (gcloud's first line) is for Claude's notes only: the person never reads raw output.
  */
 export function onlineCheck(env = process.env, { run = spawnSync } = {}) {
   const s = googleState(env);
-  if (!s.connected) return { result: "refused", detail: s.detail };
+  // A sign-in with no project is not a refused sign-in: nothing here to test it with.
+  if (!s.connected) return s.state === "no-project" ? { result: "unknown", detail: null } : { result: "refused", detail: s.detail };
   if (s.state !== "credential" || s.source !== "gcloud ADC file") return { result: "unknown", detail: null };
   try {
     const r = run("gcloud", ["auth", "application-default", "print-access-token"], { encoding: "utf8", timeout: 3000, env, stdio: ["ignore", "pipe", "pipe"] });
     if (r.error) return { result: "unknown", detail: null };
     if (r.status === 0 && String(r.stdout ?? "").trim()) return { result: "works", detail: null };
-    return { result: "refused", detail: String(r.stderr ?? "").trim().split("\n").find(Boolean)?.slice(0, 200) ?? null };
+    const detail = String(r.stderr ?? "").trim().split("\n").find(Boolean)?.slice(0, 200) ?? null;
+    return { result: SIGN_IN_REFUSED.test(String(r.stderr ?? "")) ? "refused" : "unknown", detail };
   } catch {
     return { result: "unknown", detail: null };
   }
+}
+
+/** The Google settings the model server reads (plugin/mcp/model-dispatch/src/adapters/geminiEndpoint.ts). */
+export const GOOGLE_VARS = ["GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS", "GEMINI_BACKEND"];
+/** The shell's own start-up files, where a terminal user usually sets them. */
+const SHELL_FILES = [".zshenv", ".zprofile", ".zshrc", ".bash_profile", ".bashrc", ".profile"];
+
+/**
+ * The Google settings set in the shell's start-up files but not in this process: they reach a chat started from a
+ * terminal, never one in the Claude app, which reads Claude's own settings file only. Only the names are read, never
+ * a value.
+ */
+export function shellOnlyGoogle(env = process.env, { read = readFileSync } = {}) {
+  const home = env.HOME && env.HOME.trim() ? env.HOME : homedir();
+  const found = new Set();
+  for (const f of SHELL_FILES) {
+    let text;
+    try { text = read(join(home, f), "utf8"); } catch { continue; }
+    for (const name of GOOGLE_VARS) {
+      if (!usableEnv(env)[name] && new RegExp(`^\\s*(?:export\\s+)?${name}=`, "m").test(text)) found.add(name);
+    }
+  }
+  return [...found];
+}
+
+/** Everything the setup check says about Google: the offline answer, plus the settings only the terminal sees. */
+export function googleReadiness(env = process.env) {
+  const g = googleState(env);
+  return g.connected ? g : { ...g, shellOnly: shellOnlyGoogle(env) };
 }
