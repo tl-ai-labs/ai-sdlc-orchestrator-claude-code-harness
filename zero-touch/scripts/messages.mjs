@@ -217,7 +217,7 @@ export function settingsNote(box) {
 export function firstRunNote(box) {
   return [
     "Zero-touch was just installed and has no settings yet. Before you answer the person's first message or use any other tool, open the zero-touch settings box with " + exactly(box) + ".",
-    "Tools that change anything are blocked until the box has been shown. Do not describe the choices yourself: the box does. After the person answers, follow the note that comes back.",
+    "Do not describe the choices yourself: the box does. After the person answers, follow the note that comes back. If the question tool is not available to you here, carry on with the person's request instead: zero-touch will ask in a later chat.",
   ].join(" ");
 }
 
@@ -278,7 +278,7 @@ export function wrongBoxReason(box) {
 export const HELPER_BOX_REASON = "The zero-touch settings belong to the main chat, so a helper does not open them. Carry on with your task.";
 
 export function holdReason(box) {
-  return `Zero-touch has no settings yet: open the zero-touch settings box first, with ${exactly(box)}. Other tools that change anything are blocked until it has been shown.`;
+  return `Zero-touch has no settings yet: open the zero-touch settings box first, with ${exactly(box)}. If the question tool is not available to you here, carry on with the person's request instead: this is the only time a tool is held for it.`;
 }
 
 /**

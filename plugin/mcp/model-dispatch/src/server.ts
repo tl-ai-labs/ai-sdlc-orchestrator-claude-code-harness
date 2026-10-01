@@ -16,7 +16,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, unwatchFile, watchFile } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,6 +44,7 @@ import { log, setLevel, configureSinks, type Level } from "./log.js";
 // Typed-spec executor tools (greenfield runs): listed below, handled in executor/tools.ts.
 import { EXECUTOR_TOOLS, EXECUTOR_TOOL_NAMES, executorClaudeLeaves, executorPolicyNotes, handleExecutorTool, type RunState } from "./executor/tools.js";
 import { HANDOFF_TOOLS, HANDOFF_TOOL_NAMES, handleHandoffTool } from "./handoff/tools.js";
+import { handoffListing } from "./handoff/listing.js";
 import { leanOpusCliProblem } from "./executor/typists.js";
 import { runCard } from "./runCard.js";
 
@@ -313,8 +314,31 @@ function preflightDispatch(policy: Policy, authMode: AuthMode, projectRoot?: str
 
 const server = new Server(
   { name: SERVER_NAME, version: SERVER_VERSION },
-  { capabilities: { tools: {} } }
+  // listChanged: the hand-off tools can be added while the server runs (handoff/listing.ts).
+  { capabilities: { tools: { listChanged: true } } }
 );
+
+// Zero-touch's four hand-off tools are listed only where a Hand-off chat can use them (handoff/listing.ts says
+// exactly when; when in doubt they are listed). When they are not listed only because zero-touch's saved mode is not
+// Hand-off, that settings file is watched: once it says Hand-off the tools are added and Claude Code is told, so a
+// first chat or a cleared one that becomes a Hand-off chat has them. They are never taken away while the server runs.
+let handoffListed = handoffListing(process.env);
+log("info", "handoff.listing", { listed: handoffListed.list, reason: handoffListed.reason });
+if (!handoffListed.list && handoffListed.watch.length) {
+  const watched = handoffListed.watch;
+  const recheck = () => {
+    if (handoffListed.list) return;
+    const now = handoffListing(process.env);
+    if (!now.list) return;
+    handoffListed = now;
+    for (const file of watched) unwatchFile(file);
+    log("info", "handoff.listing", { listed: true, reason: now.reason, changed: true });
+    server.sendToolListChanged().catch(() => { /* the client is gone */ });
+  };
+  // Polled, not event-based: the file is replaced by a rename when saved, which some watchers miss. Never keeps the
+  // server alive by itself.
+  for (const file of watched) watchFile(file, { interval: 2000, persistent: false }, recheck);
+}
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -455,9 +479,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     ...EXECUTOR_TOOLS,
     // Zero-touch's four hand-off tools (handoff/tools.ts), the only tools zero-touch adds: its workflow routing
-    // needs none. Listed in every chat, because the server cannot know a chat's mode when its tools are listed; a
-    // call is refused unless the plugin's hook stamped it in a hand-off chat (test/toolList.test.mjs).
-    ...HANDOFF_TOOLS,
+    // needs none. Listed only where a Hand-off chat can use them (above); a call is refused unless the plugin's hook
+    // stamped it in a hand-off chat (test/toolList.test.mjs).
+    ...(handoffListed.list ? HANDOFF_TOOLS : []),
   ],
 }));
 

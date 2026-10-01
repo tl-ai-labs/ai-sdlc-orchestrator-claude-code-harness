@@ -194,6 +194,12 @@ function preAny(input, env) {
   if (CHANGES_NOTHING.has(tool)) return;
   // Settings saved in another chat end this chat's hold at once (1 Oct 2026, found in review).
   if (anySaved(env)) return;
+  // One refusal at most (1 Oct 2026, found in a live probe): a run that cannot show the question box (a `claude -p`
+  // run started from inside a chat inherits the chat's label, so it looks like a chat with a screen) was blocked for
+  // its whole turn. The one refusal says to open the box, or, where it cannot be shown, to carry on; then nothing is
+  // held any more in this chat.
+  if (st.setup.held) return;
+  writeJson(sid, FILES.setup, { ...st.setup, held: true }, env);
   deny(M.holdReason(modeBox(null, { first: true })));
 }
 

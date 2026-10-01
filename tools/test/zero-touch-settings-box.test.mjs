@@ -425,3 +425,20 @@ test("the first chat's wait counts a new turn only on evidence: a message the tr
     assert.equal((await show(u, "w3", B.handoffBox(S.clean(saved(u))))).stdout, "", "the choice goes on");
   } finally { u.cleanup(); }
 });
+
+test("the first chat's wait refuses one tool at most, and says what to do where the box cannot be shown", async () => {
+  // 1 Oct 2026, found in a live probe: a `claude -p` run started from inside a chat inherits the chat's label, so it
+  // looks like a chat with a screen; it cannot show the question box, and every tool that changes anything was refused
+  // for its whole (only) turn. Now one refusal, with the way out in it, and nothing is held after that.
+  const s = sandbox();
+  try {
+    await start(s, "o1");
+    await prompt(s, "o1", "run the build");
+    const first = await tool(s, "o1", "Bash", { command: "npm run build" });
+    assert.equal(first.deny, M.holdReason(B.modeBox(null, { first: true })));
+    assert.match(first.deny, /If the question tool is not available to you here, carry on with the person's request instead/);
+    assert.equal((await tool(s, "o1", "Bash", { command: "npm run build" })).stdout, "", "the next try runs: nothing is held twice");
+    assert.equal((await tool(s, "o1", "Write", { file_path: "a.js" })).stdout, "");
+    assert.match(M.firstRunNote(B.modeBox(null, { first: true })), /If the question tool is not available to you here, carry on with the person's request instead/);
+  } finally { s.cleanup(); }
+});
