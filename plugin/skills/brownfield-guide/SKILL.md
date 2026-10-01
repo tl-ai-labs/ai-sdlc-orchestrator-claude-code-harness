@@ -161,6 +161,12 @@ instead of inferring it from context. A policy can then route `doc_update` diffe
 Fill in "Files in scope" and "Files off-limits" with your best guess based on discovery + intent
 + the user's description. These are proposals; Gate 0 lets the user adjust before commit.
 
+Include the **companion files** a change of this kind needs to be complete, not only the files that
+carry the feature. When the job adds or changes a public API endpoint, look in discovery for, and
+list when they exist: the generated API spec (e.g. `openapi.json` and the script that exports it),
+and every catalogue that lists the surface being extended (e.g. an MCP tool list in the docs or a
+package README). Left out, they become review findings the run cannot act on.
+
 # 5. Gate 0 — Discovery Confirmation
 
 The one confirmation moment before real work begins. Fires unconditionally — even when the
