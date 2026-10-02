@@ -95,9 +95,17 @@ npm install
 npm test
 ```
 
-`npm test` expands to `node --test tools/test/*.test.mjs && node tools/test-mcp.mjs`. The 17 files
-under `tools/test/` cover setup, command wiring, the write-contract hook, logging, reporting and
+`npm test` expands to `node --test --import ./tools/test/lib/stand-in-claude.mjs tools/test/*.test.mjs && node tools/test-mcp.mjs`.
+The 17 files under `tools/test/` cover setup, command wiring, the write-contract hook, logging, reporting and
 the writing style. The suite is offline — no API key, no network call, no cost.
+
+Two things the root tests need from the computer:
+- **Claude Code's `claude` program.** Zero-touch checks for it before a new-app workflow or a Claude hand-off. On a
+  computer without it (GitHub's test runner), `tools/test/lib/stand-in-claude.mjs` puts a stand-in first on PATH: it
+  answers `--version` and `--help` and refuses anything else, so no test runs a model. A real `claude` is never replaced.
+- **The server's compiled code** (`plugin/mcp/model-dispatch/dist/`, not committed), which some root tests import.
+  Build it once with `npx tsc` in `plugin/mcp/model-dispatch` (or `npm run build` there, which also rebuilds the
+  committed bundle). The GitHub workflow runs `npx tsc` before the tests.
 
 `tools/test-mcp.mjs` chains the MCP server's own suite onto the end. That suite compiles TypeScript
 first, so it needs the server's dependencies installed:
