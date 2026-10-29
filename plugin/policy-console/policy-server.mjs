@@ -89,6 +89,7 @@ const ANTHROPIC_EFFORT_TIERS = ["off", "low", "medium", "high", "xhigh", "max"];
 const SHIPPED_PRESETS = [
   "fable51-plus-flash-v38",
   "flash-agsdk-only",
+  "flash-agsdk-only-v38",
   "opus-only",
   "opus-only-v5",
   "opus-plus-flash",
