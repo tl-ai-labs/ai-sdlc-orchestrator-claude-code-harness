@@ -115,9 +115,9 @@ const lineMs = (o) => {
 
 /**
  * One history file's intervals. R3: a request is one assistant message (its lines share `message.id`), from the line
- * it answers (`parentUuid` of its first line) to its last line; `<synthetic>` lines are the CLI's error placeholders,
- * not requests. R4: tool calls from `tool_use` to `tool_result`. `activity` holds the times of the lines that mark the
- * run working (assistant lines, tool results, system lines), so a person's wait starts after the last of them.
+ * it answers (`parentUuid` of its first line, passing over attachment lines) to its last line; `<synthetic>` lines are
+ * the CLI's error placeholders, not requests. R4: tool calls from `tool_use` to `tool_result`. `lineTimes` holds the
+ * time of every timestamped line, so a person's wait starts at the last line written before their message (R5).
  */
 export function historyFileIntervals(lines) {
   const byUuid = new Map();
@@ -127,13 +127,16 @@ export function historyFileIntervals(lines) {
   const tools = [];
   const dispatch = [];
   const asks = [];
-  const activity = [];
+  const lineTimes = [];
+  const typed = [];
+  let hasMarkers = false;
   for (const o of lines) {
     const t = lineMs(o);
+    if (t != null) lineTimes.push(t);
+    if (o?.type === "user" && (o.origin !== undefined || o.promptSource !== undefined || o.turnOrigin !== undefined)) hasMarkers = true;
     if (o?.type === "assistant" && o.message) {
       const m = o.message;
       if (m.model === "<synthetic>") continue;
-      if (t != null) activity.push(t);
       const id = m.id ?? o.requestId ?? o.uuid;
       let g = messages.get(id);
       if (!g) messages.set(id, (g = { model: m.model ?? "unknown", first: o, end: t }));
@@ -143,9 +146,11 @@ export function historyFileIntervals(lines) {
       }
     } else if (o?.type === "user" && o.message) {
       const blocks = Array.isArray(o.message.content) ? o.message.content : [];
+      const isResult = Boolean(o.toolUseResult) || blocks.some((b) => b?.type === "tool_result");
+      if (!isResult && !o.isMeta && t != null &&
+          (o.origin?.kind === "human" || o.turnOrigin === "human" || o.promptSource === "typed")) typed.push(t);
       for (const b of blocks) {
         if (b?.type !== "tool_result") continue;
-        if (t != null) activity.push(t);
         const u = toolUse.get(b.tool_use_id);
         if (!u || t == null || t < u.ms) continue;
         if (u.name === "Agent" || u.name === "Task") continue;
@@ -153,32 +158,47 @@ export function historyFileIntervals(lines) {
         else if (u.name.includes("model-dispatch")) dispatch.push([u.ms, t]);
         else tools.push([u.ms, t]);
       }
-    } else if (o?.type === "system" && t != null) {
-      activity.push(t);
     }
   }
+  // The line a request answers: its first line's parent, passing over `attachment` lines. Claude Code writes those
+  // (deferred tools, queued commands, the environment, a prompt snapshot) between the answered line and the reply,
+  // usually at the reply's own first moment, so taking one as the start cut 278 of 615 real requests short, some to
+  // zero or below (QA of the three real runs, 9 Nov 2026).
+  const answered = (first) => {
+    const seen = new Set();
+    let p = first.parentUuid ? byUuid.get(first.parentUuid) : null;
+    while (p && p.type === "attachment" && !seen.has(p.uuid)) {
+      seen.add(p.uuid);
+      p = p.parentUuid ? byUuid.get(p.parentUuid) : null;
+    }
+    return p ?? null;
+  };
   const models = new Map();
   for (const g of messages.values()) {
-    const parent = g.first.parentUuid ? byUuid.get(g.first.parentUuid) : null;
+    const parent = answered(g.first);
     const start = (parent ? lineMs(parent) : null) ?? lineMs(g.first);
     if (start == null || g.end == null || g.end < start) continue;
     if (!models.has(g.model)) models.set(g.model, []);
     models.get(g.model).push([start, g.end]);
   }
-  activity.sort((a, b) => a - b);
-  return { models, tools, dispatch, asks, activity };
+  lineTimes.sort((a, b) => a - b);
+  return { models, tools, dispatch, asks, lineTimes, typed, hasMarkers };
 }
 
-/** R5: each person's message, waited for from the run's last activity before it. */
-function personWaits(activity, personTurnMs) {
+/**
+ * R5: each person's message, waited for from the last line written before it. A message typed while a model or a
+ * tool was running across that moment is not a wait at all: the run was working, not waiting for them.
+ */
+function personWaits(lineTimes, personTurnMs, busy) {
   const out = [];
   for (const ms of personTurnMs) {
+    if (busy.some(([s, e]) => s < ms && ms < e)) continue;
     let lo = 0;
-    let hi = activity.length - 1;
+    let hi = lineTimes.length - 1;
     let last = null;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
-      if (activity[mid] < ms) { last = activity[mid]; lo = mid + 1; } else hi = mid - 1;
+      if (lineTimes[mid] < ms) { last = lineTimes[mid]; lo = mid + 1; } else hi = mid - 1;
     }
     if (last != null) out.push([last, ms]);
   }
@@ -231,6 +251,9 @@ export function timeSplit({ logText, telemetryEvents = [], files = [], personTur
   };
   const tool = [];
   const person = [];
+  const mainLineTimes = [];
+  const markedTurns = [];
+  let unmarkedMain = false;
   for (const f of files) {
     let lines;
     try { lines = readJsonl(f.path); } catch (e) { return unknownTimeSplit(`history file unreadable: ${f.path}: ${e?.message ?? e}`); }
@@ -238,7 +261,15 @@ export function timeSplit({ logText, telemetryEvents = [], files = [], personTur
     for (const [model, intervals] of iv.models) add(f.role === "main" ? "main" : "helper", model, intervals);
     tool.push(...iv.tools, ...iv.dispatch);
     person.push(...iv.asks);
-    if (f.role === "main") person.push(...personWaits(iv.activity, personTurnMs));
+    if (f.role === "main") {
+      mainLineTimes.push(...iv.lineTimes);
+      // R5's person's message: a user line marked as typed by a person. A file whose Claude Code writes those markers
+      // (origin, promptSource, turnOrigin) also writes unmarked user lines of its own, such as the line right after an
+      // AskUserQuestion answer, so there an unmarked line is not a person. Only a file that never writes the markers
+      // (an older Claude Code) falls back to the cost tool's own humanTurns.
+      if (iv.hasMarkers) markedTurns.push(...iv.typed);
+      else unmarkedMain = true;
+    }
   }
   const calls = [];
   for (const e of telemetryEvents) {
@@ -250,6 +281,9 @@ export function timeSplit({ logText, telemetryEvents = [], files = [], personTur
     add("handed_out", String(e.model ?? "unknown"), [[end - len, end]]);
   }
   const allModel = [...bySource.values()].flatMap((s) => s.intervals);
+  mainLineTimes.sort((a, b) => a - b);
+  const turns = unmarkedMain ? personTurnMs : markedTurns;
+  person.push(...personWaits(mainLineTimes, [...new Set(turns)].sort((a, b) => a - b), merge([...allModel, ...tool])));
   const layers = { model: allModel, tool, person };
 
   const { startMs, endMs } = w;
