@@ -322,6 +322,8 @@
  *                       unlogged_billed.unpriced) and the figure is labelled
  *                       INCOMPLETE.
  *   --dry-run           print everything, write nothing.
+ *   --time-only         the run's time split alone (lib/time-split.mjs): no policy loaded, nothing priced,
+ *                       nothing written; stdout ends with one JSON line { run_id, project_root, time_split }.
  *
  * Exit codes: 0 = event written (or --dry-run). 1 = bad arguments, missing
  * manifest, no billable assistant messages found in the run window (the
@@ -342,6 +344,7 @@ import { readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFil
 import { writeAcceptanceSummary } from "./lib/acceptance-summary.mjs";
 import { applyHelperPhases, helperAgentType, phaseOfAgentType } from "./lib/helper-phases.mjs";
 import { writeRunSummary } from "./lib/run-summary.mjs";
+import { timeSplit, unknownTimeSplit } from "./lib/time-split.mjs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1388,12 +1391,16 @@ function parseArgs(argv) {
     transcriptsDir: undefined,
     receipt: undefined,
     dryRun: false,
+    timeOnly: false,
     strictPricing: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const eat = (flag) => (a.startsWith(`${flag}=`) ? a.slice(flag.length + 1) : argv[++i]);
     if (a === "--dry-run") args.dryRun = true;
+    // --time-only: the run's time split alone (lib/time-split.mjs), from the same pinned files; prices nothing, writes
+    // nothing, and ends stdout with one JSON line { run_id, project_root, time_split } (export-run-times.mjs reads it).
+    else if (a === "--time-only") args.timeOnly = true;
     else if (a === "--strict-pricing") args.strictPricing = true;
     else if (a === "--project-root" || a.startsWith("--project-root=")) args.projectRoot = eat("--project-root");
     else if (a === "--policy" || a.startsWith("--policy=")) args.policy = eat("--policy");
@@ -2058,7 +2065,7 @@ export async function main(argv = process.argv.slice(2)) {
   // First, and independent of the cost figures below: SUMMARY.md (write-manifest.mjs rendered it) gets the acceptance
   // stage's own table, so a run this tool refuses (exit 1 or 3) still carries it. Once the manifest is patched, the
   // summary is rendered again with the true total and the table copied into it again (header, fact 11).
-  if (!args.dryRun && writeAcceptanceSummary(passDir)) console.log("acceptance: SUMMARY.md carries the table the acceptance stage wrote (acceptance.md)");
+  if (!args.dryRun && !args.timeOnly && writeAcceptanceSummary(passDir)) console.log("acceptance: SUMMARY.md carries the table the acceptance stage wrote (acceptance.md)");
   const modelWritten = JSON.parse(readFileSync(manifestPath, "utf-8"));
   // The call log: machine-written, one line per dispatched call.
   const logEvents = readTelemetry(telemetryPath);
@@ -2196,7 +2203,9 @@ export async function main(argv = process.argv.slice(2)) {
   // fallback is named on stdout and the run says which policy it was priced
   // under, so a reader can see that the name came from nowhere.
   const policyNameGiven = args.policy ?? policyNameRaw;
-  if (!args.policyPath && (policyNameGiven === undefined || policyNameGiven === null || policyNameGiven === "")) {
+  // --time-only prices nothing, so it needs no policy: a run whose policy file this install lacks can still be timed.
+  const needsPolicy = !args.timeOnly;
+  if (needsPolicy && !args.policyPath && (policyNameGiven === undefined || policyNameGiven === null || policyNameGiven === "")) {
     console.log(
       `  NOTE: no policy name in manifest.json (policy/policy_name) or in any dispatched telemetry line, ` +
         `and no --policy given — falling back to this install's default policy. The driver's dollars below are ` +
@@ -2204,10 +2213,12 @@ export async function main(argv = process.argv.slice(2)) {
         `to price it under the run's own.`
     );
   }
-  const policy = args.policyPath
+  const policy = !needsPolicy
+    ? null
+    : args.policyPath
     ? policyMod.loadPolicyFromPath(resolve(args.policyPath))
     : policyMod.loadPolicy({ policyName: policyNameGiven, projectRoot });
-  if (!args.policyPath && (policyNameGiven === undefined || policyNameGiven === null || policyNameGiven === "")) {
+  if (needsPolicy && !args.policyPath && (policyNameGiven === undefined || policyNameGiven === null || policyNameGiven === "")) {
     console.log(`  NOTE: that default resolved to policy '${policy.name}'.`);
   }
   const overrides = routingMod.parseSelectOverrides(process.env.MMO_SELECT);
@@ -2453,6 +2464,44 @@ export async function main(argv = process.argv.slice(2)) {
   const effectiveEndMs = finiteEnd ? Math.min(windowEndMs, collectedAtMs) : windowEndMs;
 
   const roleOf = (f) => roleOfTranscript(tDir, f);
+
+  // ── Where the run's time went (lib/time-split.mjs) ──────────────────────
+  // The same pinned history files and person turns the cost is read from, and the run's own log. Only a pinned
+  // session can be timed: an unpinned scan may hold another session's files, and their activity is not this run's.
+  // A failure here never stops the cost figures; the block says why it has no numbers.
+  let timeSplitBlock;
+  try {
+    if (!pinnedId) {
+      timeSplitBlock = unknownTimeSplit("the run's session could not be pinned (no command turn and no receipt session)");
+    } else {
+      const runLogPath = runStart?.path ?? runLogCandidates.find((p) => existsSync(p));
+      const mainFiles = files.filter((f) => roleOf(f) === "session");
+      timeSplitBlock = timeSplit({
+        logText: runLogPath ? readFileSync(runLogPath, "utf-8") : "",
+        telemetryEvents: logEvents,
+        files: files.map((f) => ({ path: f, role: roleOf(f) === "session" ? "main" : "helper" })),
+        personTurnMs: mainFiles.flatMap((f) => (turnsByFile.get(f) ?? humanTurns(f, { lifecycle })).map((t) => t.ms)),
+        commandTurnMs: commandTurn?.ms ?? null,
+      });
+    }
+  } catch (e) {
+    timeSplitBlock = unknownTimeSplit(`time split failed: ${e?.message ?? e}`);
+  }
+  if (timeSplitBlock.unknown_reason) {
+    console.log(`time split: unknown (${timeSplitBlock.unknown_reason})`);
+  } else {
+    const k = timeSplitBlock.kinds_sec;
+    console.log(
+      `time split: window ${timeSplitBlock.window.sec}s = model ${k.model}s + tool ${k.tool}s + person ${k.person}s + ` +
+        `nothing recorded ${k.nothing}s; time taken ${timeSplitBlock.time_taken_sec}s ` +
+        `(log approval waits ${timeSplitBlock.checks.log_approval_wait_sec}s)`
+    );
+  }
+  if (args.timeOnly) {
+    // The last line of stdout, read by export-run-times.mjs. Nothing has been written and nothing is priced.
+    console.log(JSON.stringify({ run_id: passId, project_root: projectRoot, time_split: timeSplitBlock }));
+    return 0;
+  }
   const { tokens, stats, observedModels, perModel, messages } = sumTranscriptUsage(files, windowStartMs, effectiveEndMs, { roleOf });
 
   console.log(
@@ -3331,6 +3380,7 @@ export async function main(argv = process.argv.slice(2)) {
   // its whole measurement, so write-manifest.mjs can apply it again when it rebuilds the manifest.
   applyHelperPhases(modelWritten, readTelemetry(telemetryPath), helperPhases);
   modelWritten.true_total_cost_usd = trueTotal;
+  modelWritten.time_split = timeSplitBlock;
   const tmpM = `${manifestPath}.tmp-collect`;
   writeFileSync(tmpM, JSON.stringify(modelWritten, null, 2), "utf-8");
   renameSync(tmpM, manifestPath);

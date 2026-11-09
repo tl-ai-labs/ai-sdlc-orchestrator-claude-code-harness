@@ -34,6 +34,7 @@ import { resolveProjectRoot } from "./lib/env.mjs";
 import { applyHelperPhases, measuredHelperPhases } from "./lib/helper-phases.mjs";
 import { writeRunSummary } from "./lib/run-summary.mjs";
 import { loadServerLib } from "./lib/server-lib.mjs";
+import { runLogEvents, windowFromLog } from "./lib/time-split.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** Keys the post-run collector writes into a manifest; kept across a rewrite while the dispatched total is unchanged. */
@@ -269,6 +270,20 @@ export async function writeManifest(a) {
         : `the manifest the collector patched records no dispatched total to check its figures against`;
       notes.push(`${why}: its orchestrator_overhead and true_total_cost_usd are left out until it runs again: node "${join(HERE, "collect-orchestrator-usage.mjs")}" "${outDir}" --project-root "${projectRoot}"`);
     }
+  }
+  // The collector's time split (lib/time-split.mjs) times the window the run's log gives. It is kept only while the
+  // log still gives that same window, so a gate answered after it was measured is never missing from a split that
+  // looks complete; otherwise it is left out until the collector runs again, as its cost figures are.
+  if (existing.time_split !== undefined) {
+    let now = null;
+    try { now = windowFromLog(runLogEvents(readFileSync(join(projectRoot, ".sdlc", "runs", a.pass, "orchestrator.log"), "utf8"))); }
+    catch { now = null; }
+    const then = existing.time_split?.window ?? {};
+    const same = now !== null && (now.unknown
+      ? then.start == null && then.end == null
+      : then.start === new Date(now.startMs).toISOString() && then.end === new Date(now.endMs).toISOString());
+    if (same) manifest.time_split = existing.time_split;
+    else notes.push(`the run log's window changed since the collector timed it: its time_split is left out until it runs again: node "${join(HERE, "collect-orchestrator-usage.mjs")}" "${outDir}" --project-root "${projectRoot}"`);
   }
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
   // SUMMARY.md from the manifest just written, then code's acceptance table into it (both keep the other's part). A
