@@ -21,8 +21,12 @@ import { readFileSync } from "node:fs";
 
 export const TIME_SPLIT_VERSION = 1;
 
-/** The plugin's run-log line: `MMO: <ISO> <LEVEL> <event> key=value ...` (scripts/lib/log.mjs writes it). */
-const LOG_LINE = /^MMO:\s+(\S+)\s+\S+\s+(\S+)(.*)$/;
+/**
+ * The plugin's run-log line, `<prefix> <ISO> <LEVEL> <event> key=value ...` (scripts/lib/log.mjs writes it). The prefix
+ * is configurable (MMO_LOG_PREFIX, possibly empty), so it is optional, exactly as the cost tool's own run.start/run.end
+ * pattern reads it (collect-orchestrator-usage.mjs runMarkerLine); a log the cost tool can read is never "no run.start".
+ */
+const LOG_LINE = /^(?:\S+\s+)?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s+[A-Z]+\s+(\S+)(.*)$/;
 
 /** The run log's lifecycle events, oldest first: { ms, event, gate }. Lines that are not the plugin's are skipped. */
 export function runLogEvents(text) {
@@ -39,17 +43,27 @@ export function runLogEvents(text) {
 }
 
 /**
- * R1: the run's window from its log. { startMs, endMs } or { unknown: reason }. The start is the first `run.start`;
- * the end is the later of the last `run.end` and the last `gate.resolved` (the final approval can come after the first
- * `run.end`, and the plugin writes a second `run.end` after it on some runs and not on others).
+ * R1: the run's window from its log. { startMs, endMs } or { unknown: reason }. The start is the run.start the cost tool
+ * anchors on: `startMs` when the caller knows it (the collector's own run.start), else the last run.start at or before
+ * `notAfterMs`, else the last run.start (a reused run id appends to the same log, and the latest attempt is this run).
+ * The end is the later of the last `run.end` and the last `gate.resolved` after that start and before any later
+ * run.start, so two attempts in one log are never spanned.
  */
-export function windowFromLog(events) {
+export function windowFromLog(events, { startMs = null, notAfterMs = null } = {}) {
   const starts = events.filter((e) => e.event === "run.start");
   if (!starts.length) return { unknown: "no run.start in the run's orchestrator.log" };
-  const startMs = starts[0].ms;
-  const closers = events.filter((e) => (e.event === "run.end" || e.event === "gate.resolved") && e.ms >= startMs);
+  let start;
+  if (startMs != null) {
+    start = starts.find((e) => e.ms === startMs);
+    if (!start) return { unknown: "the run.start the split was measured from is not in the run's orchestrator.log" };
+  } else {
+    const upTo = Number.isFinite(notAfterMs) ? starts.filter((e) => e.ms <= notAfterMs) : [];
+    start = (upTo.length ? upTo : starts)[(upTo.length ? upTo : starts).length - 1];
+  }
+  const next = starts.find((e) => e.ms > start.ms);
+  const closers = events.filter((e) => (e.event === "run.end" || e.event === "gate.resolved") && e.ms >= start.ms && (!next || e.ms < next.ms));
   if (!closers.some((e) => e.event === "run.end")) return { unknown: "no run.end after run.start in the run's orchestrator.log" };
-  return { startMs, endMs: Math.max(...closers.map((e) => e.ms)) };
+  return { startMs: start.ms, endMs: Math.max(...closers.map((e) => e.ms)) };
 }
 
 /** R10's check: each `gate.open` paired with the next `gate.resolved` of the same gate. */
@@ -237,9 +251,9 @@ export const unknownTimeSplit = (reason) => ({
  *   personTurnMs     the main session's person turns (the cost tool's humanTurns), ms
  *   commandTurnMs    the run's command turn (where the time before the run begins), or null
  */
-export function timeSplit({ logText, telemetryEvents = [], files = [], personTurnMs = [], commandTurnMs = null }) {
+export function timeSplit({ logText, telemetryEvents = [], files = [], personTurnMs = [], commandTurnMs = null, runStartMs = null }) {
   const events = runLogEvents(logText);
-  const w = windowFromLog(events);
+  const w = windowFromLog(events, { startMs: runStartMs });
   if (w.unknown) return unknownTimeSplit(w.unknown);
   if (!files.some((f) => f.role === "main")) return unknownTimeSplit("no Claude Code history file for the run's session");
 
@@ -271,14 +285,41 @@ export function timeSplit({ logText, telemetryEvents = [], files = [], personTur
       else unmarkedMain = true;
     }
   }
+  // Handed-out calls. The server writes every attempt of a retried call as its own event with the call's final `ts`
+  // and the attempt's own `latency_ms` (one task_id), and runs the attempts one after another; so a task's events that
+  // share one `ts` are laid back to back ending there, in attempt order. Events of different tasks (the pre-flight
+  // probes, which run at once) are never chained.
   const calls = [];
+  const groups = new Map();
   for (const e of telemetryEvents) {
     if (e?.tier === "orchestrator") continue;
     const end = Date.parse(e?.ts);
     const len = Number(e?.latency_ms);
     if (!Number.isFinite(end) || !Number.isFinite(len) || len <= 0) continue;
-    calls.push([end - len, end]);
-    add("handed_out", String(e.model ?? "unknown"), [[end - len, end]]);
+    const key = e.task_id != null ? `${e.task_id}\u0000${e.ts}` : `\u0001${groups.size}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ e, end, len });
+  }
+  for (const g of groups.values()) {
+    // Only numbered attempts are a retry's sequence. The pre-flight probes share a task id and a `ts` too (one probe
+    // per region, run at once) but carry no attempt number, so each keeps its own [ts - latency_ms, ts].
+    const numbers = g.map((x) => Number(x.e.attempt_number));
+    const isRetry = g.length > 1 && numbers.every((n) => Number.isInteger(n) && n >= 1) && new Set(numbers).size === g.length;
+    if (!isRetry) {
+      for (const { e, end, len } of g) {
+        calls.push([end - len, end]);
+        add("handed_out", String(e.model ?? "unknown"), [[end - len, end]]);
+      }
+      continue;
+    }
+    g.sort((a, b) => Number(a.e.attempt_number) - Number(b.e.attempt_number));
+    let cursor = g[g.length - 1].end;
+    for (let i = g.length - 1; i >= 0; i--) {
+      const iv = [cursor - g[i].len, cursor];
+      calls.push(iv);
+      add("handed_out", String(g[i].e.model ?? "unknown"), [iv]);
+      cursor -= g[i].len;
+    }
   }
   const allModel = [...bySource.values()].flatMap((s) => s.intervals);
   mainLineTimes.sort((a, b) => a - b);

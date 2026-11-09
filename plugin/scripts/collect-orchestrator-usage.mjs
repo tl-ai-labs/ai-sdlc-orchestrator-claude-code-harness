@@ -2476,13 +2476,24 @@ export async function main(argv = process.argv.slice(2)) {
     } else {
       const runLogPath = runStart?.path ?? runLogCandidates.find((p) => existsSync(p));
       const mainFiles = files.filter((f) => roleOf(f) === "session");
-      timeSplitBlock = timeSplit({
-        logText: runLogPath ? readFileSync(runLogPath, "utf-8") : "",
-        telemetryEvents: logEvents,
-        files: files.map((f) => ({ path: f, role: roleOf(f) === "session" ? "main" : "helper" })),
-        personTurnMs: mainFiles.flatMap((f) => (turnsByFile.get(f) ?? humanTurns(f, { lifecycle })).map((t) => t.ms)),
-        commandTurnMs: commandTurn?.ms ?? null,
-      });
+      const helperFiles = files.filter((f) => roleOf(f) === "helper");
+      // R9: a helper the run's Agent/Task calls name, whose history file is missing, leaves part of the run unseen, so
+      // the split is unknown rather than complete-looking (a copy from a teammate's Mac can easily miss one).
+      const missing = new Set();
+      for (const mf of mainFiles) {
+        const attr = helperAttribution(mf, helperFiles, { root: tDir, fromMs: commandTurn?.ms ?? runStart?.ms ?? null });
+        for (const id of attr?.missing_helper_ids ?? []) missing.add(id);
+      }
+      timeSplitBlock = missing.size
+        ? unknownTimeSplit(`history file missing for helper ${[...missing].join(", ")}, named by the run's Agent or Task calls`)
+        : timeSplit({
+            logText: runLogPath ? readFileSync(runLogPath, "utf-8") : "",
+            telemetryEvents: logEvents,
+            files: files.map((f) => ({ path: f, role: roleOf(f) === "session" ? "main" : "helper" })),
+            personTurnMs: mainFiles.flatMap((f) => (turnsByFile.get(f) ?? humanTurns(f, { lifecycle })).map((t) => t.ms)),
+            commandTurnMs: commandTurn?.ms ?? null,
+            runStartMs: runStart?.ms ?? null,
+          });
     }
   } catch (e) {
     timeSplitBlock = unknownTimeSplit(`time split failed: ${e?.message ?? e}`);
