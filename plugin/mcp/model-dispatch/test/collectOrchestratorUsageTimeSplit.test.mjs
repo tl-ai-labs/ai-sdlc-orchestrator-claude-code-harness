@@ -4,14 +4,16 @@
  * split; the block's format is version 1).
  *
  * Every case is end to end: the real collector CLI on a copy of a run folder, with --project-root and
- * --transcripts-dir pointing at the copy, and `time_split` read from the manifest it wrote.
+ * --transcripts-dir pointing at the copy (or the history under CLAUDE_CONFIG_DIR, where the tools find it on their
+ * own), and `time_split` read from the manifest it wrote; the manifest writer's cases run write-manifest.mjs too.
  *
  *   - Three real runs (tools/test/fixtures/run-time-split, README there): a Gemini-led bugfix (Argon and Flash handed
  *     out, Opus session and helpers) and two Claude-led brownfield runs (Opus helpers, Flash and an Opus typist handed
  *     out). Expected values were worked out from the raw files and the rules, independently of the implementation.
  *   - The same three runs keep every existing manifest and telemetry field as the collector wrote it before time_split
  *     existed (R11): before-time-split/ in each fixture.
- *   - Small hand-made runs, one rule each.
+ *   - Small hand-made runs, one rule or one clarification of the rules each, and two variants of the real runs (a log
+ *     without its prefix, a helper's history file left out).
  *
  * Seconds are compared to the millisecond, and the four kinds must add up to the window exactly (R7). A request starts
  * at the line its first line answers, passing over the attachment lines Claude Code writes between that line and the
@@ -21,13 +23,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const COLLECTOR = join(HERE, "..", "..", "..", "scripts", "collect-orchestrator-usage.mjs");
+const WRITE_MANIFEST = join(HERE, "..", "..", "..", "scripts", "write-manifest.mjs");
 const FIXTURES = join(HERE, "..", "..", "..", "..", "tools", "test", "fixtures", "run-time-split");
 const ENV = { ...process.env, MMO_SELECT: "" };
 delete ENV.CLAUDE_CONFIG_DIR;
@@ -93,11 +96,12 @@ function assertSplit(ts, want) {
   assert.equal(msOf(ts.checks.handed_out_call_sec, "checks.handed_out_call_sec"), Math.round(want.checks.handed_out_call_sec * 1000), "R10: telemetry's summed call time");
 }
 
-/** R9: no number is filled in; the reason is said. `version` is the format's, not a time. */
-function assertUnknown(ts) {
+/** R9: no number is filled in; the reason is said (and matches `reason` when given). `version` is the format's, not a time. */
+function assertUnknown(ts, reason = null) {
   assert.ok(ts && typeof ts === "object", "the manifest carries a time_split block");
   assert.equal(typeof ts.unknown_reason, "string", "unknown_reason says why");
   assert.ok(ts.unknown_reason.trim().length > 0, "unknown_reason says why");
+  if (reason) assert.match(ts.unknown_reason, reason, "unknown_reason names what is missing");
   assert.equal(ts.window?.sec, null, "window.sec is null, never 0");
   for (const k of ["model", "tool", "person", "nothing"]) assert.equal(ts.kinds_sec?.[k], null, `kinds_sec.${k} is null, never 0`);
   assert.equal(ts.time_taken_sec, null, "time_taken_sec is null, never 0");
@@ -179,14 +183,22 @@ const REAL = {
   },
 };
 
-/** A copy of a real fixture laid out as on the machine it came from, and the collector run on it. */
-function collectReal(name) {
+/**
+ * A copy of a real fixture laid out as on the machine it came from, and the collector run on it. `logText` rewrites
+ * the run log's text; `withoutHelper` leaves that helper's history file out of the copy.
+ */
+function collectReal(name, { logText = null, withoutHelper = null } = {}) {
   const fx = join(FIXTURES, name);
   const manifest = JSON.parse(readFileSync(join(fx, "run", "manifest.json"), "utf-8"));
   const root = realpathSync(mkdtempSync(join(tmpdir(), "time-split-real-")));
   const passDir = join(root, ".sdlc", "runs", manifest.run_id);
   cpSync(join(fx, "run"), passDir, { recursive: true });
   cpSync(join(fx, "transcripts"), join(root, "transcripts"), { recursive: true });
+  if (logText) writeFileSync(join(passDir, "orchestrator.log"), logText(readFileSync(join(passDir, "orchestrator.log"), "utf-8")));
+  if (withoutHelper) {
+    const session = readdirSync(join(root, "transcripts")).find((f) => f.endsWith(".jsonl")).slice(0, -".jsonl".length);
+    rmSync(join(root, "transcripts", session, "subagents", `agent-${withoutHelper}.jsonl`));
+  }
   const policy = REAL[name].policy ? ["--policy-path", join(FIXTURES, REAL[name].policy)] : [];
   const r = spawnSync(process.execPath, [COLLECTOR, passDir, "--project-root", root, "--transcripts-dir", join(root, "transcripts"), ...policy], { encoding: "utf-8", env: ENV });
   return {
@@ -259,8 +271,11 @@ rules:
 `;
 const USAGE = { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 100, output_tokens: 20 };
 
-/** One history file, written the way Claude Code writes one (only the fields the rules and the collector read). */
-function historyFile({ agentId = null } = {}) {
+/**
+ * One history file, written the way Claude Code writes one (only the fields the rules and the collector read).
+ * `markers: false` writes the person's lines with no origin, turnOrigin or promptSource, as an older Claude Code did.
+ */
+function historyFile({ agentId = null, markers = true } = {}) {
   const lines = [];
   let n = 0;
   let last = null;
@@ -272,11 +287,13 @@ function historyFile({ agentId = null } = {}) {
     get last() { return last; },
     /** A person's typed message. */
     typed(ts, text = "approved", parent = last) {
-      return push({ type: "user", timestamp: T(ts), uuid: uuid(), parentUuid: parent, ...base(), origin: { kind: "human" }, promptSource: "typed", turnOrigin: "human", message: { role: "user", content: text } });
+      const marks = markers ? { origin: { kind: "human" }, promptSource: "typed", turnOrigin: "human" } : {};
+      return push({ type: "user", timestamp: T(ts), uuid: uuid(), parentUuid: parent, ...base(), ...marks, message: { role: "user", content: text } });
     },
     /** The run's command turn. */
     command(ts) {
-      return push({ type: "user", timestamp: T(ts), uuid: uuid(), parentUuid: last, ...base(), origin: { kind: "human" }, turnOrigin: "human", message: { role: "user", content: "<command-message>mmo:bugfix</command-message>\n<command-name>/mmo:bugfix</command-name>" } });
+      const marks = markers ? { origin: { kind: "human" }, turnOrigin: "human" } : {};
+      return push({ type: "user", timestamp: T(ts), uuid: uuid(), parentUuid: last, ...base(), ...marks, message: { role: "user", content: "<command-message>mmo:bugfix</command-message>\n<command-name>/mmo:bugfix</command-name>" } });
     },
     /** A helper's prompt, or a message from the session or another helper: not a person's. */
     note(ts, kind, parent = last) {
@@ -305,21 +322,29 @@ const text = { type: "text", text: "" };
 const thinking = { type: "thinking", thinking: "" };
 const toolUse = (id, name) => ({ type: "tool_use", id, name, input: {} });
 
-/** A handed-out call in telemetry: it ended at `endTs` after `latencyMs`. */
-const call = (endTs, latencyMs, model, phase = "codegen") => ({
+/** A handed-out call in telemetry: it ended at `endTs` after `latencyMs`. `extra` sets task_id, attempt_number, … */
+const call = (endTs, latencyMs, model, phase = "codegen", extra = {}) => ({
   ts: T(endTs), pass: RUN_ID, phase, task_type: "", task_id: `tp_${phase}_${endTs}`, module: "spec", model, routed_by: "orchestrator", provenance: "vendor",
-  input_tokens: 1000, input_tokens_cached: 0, output_tokens: 100, cost_usd: 0.001, latency_ms: latencyMs, success: true, retry_count: 0,
+  input_tokens: 1000, input_tokens_cached: 0, output_tokens: 100, cost_usd: 0.001, latency_ms: latencyMs, success: true, retry_count: 0, ...extra,
 });
 
+/** Claude Code's history folder name for a project: its absolute path with every character not a letter or digit as `-`. */
+const projectHash = (root) => root.replace(/[^A-Za-z0-9]/g, "-");
+
 /**
- * Writes a hand-made run under a fresh project root and runs the collector on it. `log` is [hms, event, fields]
- * (null: no orchestrator.log); `helpers` maps a helper id to its history file; `receipt` is written as
- * claude-session.json; `history: false` writes no history files at all.
+ * Lays out a hand-made run under a fresh project root. `log` is [hms, event, fields] (null: no orchestrator.log), each
+ * line written with `prefix`; `helpers` maps a helper id to its history file; `receipt` is written as
+ * claude-session.json; `history: false` writes no history files. `runFolder: "passes"` puts the run's files in
+ * <root>/passes/<id> instead of <root>/.sdlc/runs/<id>, and `logIn: "project"` then writes the log to
+ * <root>/.sdlc/runs/<id>/ alone. `historyIn: "config"` writes the history files where Claude Code keeps them under
+ * CLAUDE_CONFIG_DIR, so the tools find them on their own, with no --transcripts-dir. `manifest: false` leaves the
+ * manifest to the manifest writer.
  */
-function collectMade({ main, helpers = {}, calls = [], log, receipt = null, history = true }) {
+function writeRun({ main, helpers = {}, calls = [], log, receipt = null, history = true, prefix = "MMO: ", runFolder = "runs", logIn = "folder", historyIn = "dir", manifest = true }) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "time-split-made-")));
-  const passDir = join(root, ".sdlc", "runs", RUN_ID);
-  const tDir = join(root, "transcripts");
+  const passDir = runFolder === "passes" ? join(root, "passes", RUN_ID) : join(root, ".sdlc", "runs", RUN_ID);
+  const config = join(root, "claude-config");
+  const tDir = historyIn === "config" ? join(config, "projects", projectHash(root)) : join(root, "transcripts");
   mkdirSync(passDir, { recursive: true });
   writeFileSync(join(root, "policy.yaml"), POLICY);
   if (history) {
@@ -327,21 +352,42 @@ function collectMade({ main, helpers = {}, calls = [], log, receipt = null, hist
     writeFileSync(join(tDir, `${SESSION}.jsonl`), main.text());
     for (const [id, h] of Object.entries(helpers)) writeFileSync(join(tDir, SESSION, "subagents", `agent-${id}.jsonl`), h.text());
   }
-  if (log) writeFileSync(join(passDir, "orchestrator.log"), log.map(([hms, event, fields = ""]) => `MMO: ${T(hms)} INFO   ${event} run_id=${RUN_ID}${fields ? ` ${fields}` : ""}`).join("\n") + "\n");
+  if (log) {
+    const logDir = logIn === "project" ? join(root, ".sdlc", "runs", RUN_ID) : passDir;
+    mkdirSync(logDir, { recursive: true });
+    writeFileSync(join(logDir, "orchestrator.log"), log.map(([hms, event, fields = ""]) => `${prefix}${T(hms)} INFO   ${event} run_id=${RUN_ID}${fields ? ` ${fields}` : ""}`).join("\n") + "\n");
+  }
   writeFileSync(join(passDir, "telemetry.jsonl"), calls.map((c) => JSON.stringify(c)).join("\n") + (calls.length ? "\n" : ""));
-  const stamps = calls.map((c) => c.ts).sort();
-  const lifecycle = (log ?? []).map(([hms]) => T(hms)).sort();
-  const at = stamps.length ? stamps : [lifecycle[lifecycle.length - 1] ?? T("10:00:30")];
-  writeFileSync(join(passDir, "manifest.json"), JSON.stringify({
-    run_id: RUN_ID, policy_name: "check-time-split", started_at: at[0], ended_at: at[at.length - 1],
-    total_cost_usd: Math.round(calls.length * 0.001 * 1e6) / 1e6,
-    totals: { dispatched_cost_usd: Math.round(calls.length * 0.001 * 1e6) / 1e6, events: calls.length, models_used: [...new Set(calls.map((c) => c.model))] },
-  }, null, 2));
+  if (manifest) {
+    const stamps = calls.map((c) => c.ts).sort();
+    const lifecycle = (log ?? []).map(([hms]) => T(hms)).sort();
+    const at = stamps.length ? stamps : [lifecycle[lifecycle.length - 1] ?? T("10:00:30")];
+    writeFileSync(join(passDir, "manifest.json"), JSON.stringify({
+      run_id: RUN_ID, policy_name: "check-time-split", started_at: at[0], ended_at: at[at.length - 1],
+      total_cost_usd: Math.round(calls.length * 0.001 * 1e6) / 1e6,
+      totals: { dispatched_cost_usd: Math.round(calls.length * 0.001 * 1e6) / 1e6, events: calls.length, models_used: [...new Set(calls.map((c) => c.model))] },
+    }, null, 2));
+  }
   if (receipt) writeFileSync(join(passDir, "claude-session.json"), JSON.stringify(receipt));
-  const r = spawnSync(process.execPath, [COLLECTOR, passDir, "--project-root", root, "--transcripts-dir", tDir, "--policy-path", join(root, "policy.yaml")], { encoding: "utf-8", env: ENV });
-  const manifest = existsSync(join(passDir, "manifest.json")) ? JSON.parse(readFileSync(join(passDir, "manifest.json"), "utf-8")) : null;
-  rmSync(root, { recursive: true, force: true });
-  return { r, manifest, ts: manifest?.time_split };
+  const env = historyIn === "config" ? { ...ENV, CLAUDE_CONFIG_DIR: config } : ENV;
+  const t = historyIn === "config" ? [] : ["--transcripts-dir", tDir];
+  return {
+    root, passDir,
+    collect: () => spawnSync(process.execPath, [COLLECTOR, passDir, "--project-root", root, ...t, "--policy-path", join(root, "policy.yaml")], { encoding: "utf-8", env }),
+    writeManifest: (...extra) => spawnSync(process.execPath, [WRITE_MANIFEST, passDir, "--pass", RUN_ID, "--policy", "check-time-split", "--project-root", root, ...extra], { encoding: "utf-8", env }),
+    manifest: () => (existsSync(join(passDir, "manifest.json")) ? JSON.parse(readFileSync(join(passDir, "manifest.json"), "utf-8")) : null),
+    rm: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/** A hand-made run, the collector run on it once, and what it wrote. */
+function collectMade(opts) {
+  const run = writeRun(opts);
+  try {
+    const r = run.collect();
+    const manifest = run.manifest();
+    return { r, manifest, ts: manifest?.time_split };
+  } finally { run.rm(); }
 }
 
 test("R3/R4: overlapping handed-out calls of one model are counted once; inside the plugin's dispatch call they are model time and the rest of the call is tool time", () => {
@@ -654,4 +700,314 @@ test("R9: no run.start in the run log, or no run log: every time field is null w
     assert.equal(r.status, 0, `${label}: ${r.stderr}`);
     assertUnknown(ts);
   }
+});
+
+// ── clarifications from the independent review (rules file, 9 Nov) ─────────────────────────────────────────────────
+
+/**
+ * One run id used twice: attempt 1 (run.start 10:00:06, gate-1 10:00:10-10:00:20, run.end 10:00:30, failed) and,
+ * after a second command turn at 10:00:50, attempt 2 (run.start 10:01:00, gate-1 10:01:05-10:01:35, run.end 10:02:00).
+ */
+function twoAttempts(calls) {
+  const main = historyFile();
+  main.command("10:00:00");
+  main.reply("msg_m1", [["10:00:05", text]]);
+  main.typed("10:00:15", "approved");
+  main.reply("msg_m2", [["10:00:18", text]]);
+  main.command("10:00:50");
+  main.reply("msg_m3", [["10:00:55", text]]);
+  main.typed("10:01:30", "approved");
+  main.reply("msg_m4", [["10:01:33", text]]);
+  return collectMade({
+    main,
+    calls,
+    log: [
+      ["10:00:06", "run.start", "mode=brownfield intent=bugfix"], ["10:00:10", "gate.open", "gate=gate-1 title=requirements-approval"],
+      ["10:00:20", "gate.resolved", "gate=gate-1 response=approved"], ["10:00:30", "run.end", "outcome=failed"],
+      ["10:01:00", "run.start", "mode=brownfield intent=bugfix"], ["10:01:05", "gate.open", "gate=gate-1 title=requirements-approval"],
+      ["10:01:35", "gate.resolved", "gate=gate-1 response=approved"], ["10:02:00", "run.end", "outcome=completed"],
+    ],
+  });
+}
+
+test("R1 (review 1): two run.start lines under one run id: the run's first handed-out call is in the second attempt, so the window is the second attempt alone", () => {
+  const { r, ts } = twoAttempts([call("10:01:20", 10_000, "gemini-3.8-flash")]);
+  assert.equal(r.status, 0, r.stderr);
+  assertSplit(ts, {
+    window: { start: T("10:01:00"), end: T("10:02:00"), sec: 60 },
+    // person: the wait for the 10:01:30 answer from the last line before it (10:00:55), less the call's 10 s.
+    kinds_sec: { model: 13, tool: 0, person: 20, nothing: 27 },
+    time_taken_sec: 40,
+    model_by_source: [
+      { source: "main", model: "claude-opus-5-5", sec: 3, requests: 1 },
+      { source: "handed_out", model: "gemini-3.8-flash", sec: 10, requests: 1 },
+    ],
+    before_run: { sec: 10, kinds_sec: { model: 5, tool: 0, person: 5, nothing: 0 } },
+    longest_nothing: [{ start: T("10:01:33"), sec: 27 }],
+    checks: { log_approval_wait_sec: 30, handed_out_call_sec: 10 },
+  });
+});
+
+test("R1 (review 1): two run.start lines under one run id: the run's first handed-out call is in the first attempt, so the window is the first attempt alone and stops before the second starts", () => {
+  const { r, ts } = twoAttempts([call("10:00:25", 4_000, "gemini-3.8-flash"), call("10:01:20", 10_000, "gemini-3.8-flash")]);
+  assert.equal(r.status, 0, r.stderr);
+  assertSplit(ts, {
+    window: { start: T("10:00:06"), end: T("10:00:30"), sec: 24 },
+    // person: the 10:00:15 answer waits from 10:00:05 (9 s in the window); the command typed at 10:00:50 waits from the
+    // last line before it, 10:00:18, so 10:00:18-10:00:30 less the call's 4 s is the person's too (8 s).
+    kinds_sec: { model: 7, tool: 0, person: 17, nothing: 0 },
+    time_taken_sec: 7,
+    model_by_source: [
+      { source: "main", model: "claude-opus-5-5", sec: 3, requests: 1 },
+      { source: "handed_out", model: "gemini-3.8-flash", sec: 4, requests: 1 },
+    ],
+    before_run: { sec: 6, kinds_sec: { model: 5, tool: 0, person: 1, nothing: 0 } },
+    longest_nothing: [],
+    checks: { log_approval_wait_sec: 10, handed_out_call_sec: 4 },
+  });
+});
+
+/** The run of the "second run.end" test above, with its log written under `prefix`. */
+function secondRunEnd(prefix) {
+  const main = historyFile();
+  main.command("10:00:00");
+  main.reply("msg_m1", [["10:00:05", text]]);
+  main.typed("10:00:55", "accept");
+  main.reply("msg_m2", [["10:01:01", text]]);
+  return collectMade({
+    main,
+    prefix,
+    log: [
+      ["10:00:06", "run.start", "mode=brownfield intent=bugfix"], ["10:00:20", "gate.open", "gate=gate-4 title=final-acceptance"],
+      ["10:00:30", "run.end", "outcome=completed"], ["10:01:00", "gate.resolved", "gate=gate-4 response=approved"], ["10:01:02", "run.end", "outcome=completed"],
+    ],
+  });
+}
+
+test("R1/R9 (review 2): the run log is read with no prefix or another one, as the collector reads it; such a log is never 'no run.start'", () => {
+  for (const prefix of ["", "[sdlc] ", "PLUGIN: "]) {
+    const { r, ts } = secondRunEnd(prefix);
+    assert.equal(r.status, 0, `prefix ${JSON.stringify(prefix)}: ${r.stderr}`);
+    assertSplit(ts, {
+      window: { start: T("10:00:06"), end: T("10:01:02"), sec: 56 },
+      kinds_sec: { model: 6, tool: 0, person: 49, nothing: 1 },
+      time_taken_sec: 7,
+      model_by_source: [{ source: "main", model: "claude-opus-5-5", sec: 6, requests: 1 }],
+      before_run: { sec: 6, kinds_sec: { model: 5, tool: 0, person: 1, nothing: 0 } },
+      longest_nothing: [{ start: T("10:01:01"), sec: 1 }],
+      checks: { log_approval_wait_sec: 40, handed_out_call_sec: 0 },
+    });
+  }
+});
+
+test("R1/R9 (review 2): real run gemini-led-bugfix with its run log written without the MMO: prefix gives the same time_split", () => {
+  const c = collectReal("gemini-led-bugfix", { logText: (t) => t.replace(/^MMO: /gm, "") });
+  try {
+    assert.equal(c.r.status, 0, c.r.stderr);
+    assertSplit(JSON.parse(c.manifestText()).time_split, REAL["gemini-led-bugfix"].want);
+  } finally { c.rm(); }
+});
+
+test("R3 (review 3): a retried call's numbered attempts sharing one ts are laid back to back; a same-task same-ts group without attempt numbers, and a call of another task, keep their own intervals", () => {
+  // Before the run: three pre-flight probes of one task at one ts (no attempt numbers, run at once): 4 s, not 9 s.
+  // In the run: tp_codegen_U01's attempts 1-3 (5, 7, 8 s, written in the order 3, 1, 2) all end at 10:01:10, so they ran
+  // 10:00:50-10:01:10; tp_codegen_U02 also ends at 10:01:10 (6 s) and is not chained with them.
+  const main = historyFile();
+  main.command("10:00:00");
+  main.reply("msg_m1", [["10:00:02", text]]);
+  const probe = (ms) => call("10:00:20", ms, "gemini-4-argon", "preflight", { task_id: "typist_probe_argon", task_type: "typist_probe" });
+  const { r, ts } = collectMade({
+    main,
+    calls: [
+      probe(3_000), probe(4_000), probe(2_000),
+      call("10:01:10", 8_000, "gemini-3.8-flash", "codegen", { task_id: "tp_codegen_U01", attempt_number: 3, retry_count: 2 }),
+      call("10:01:10", 5_000, "gemini-3.8-flash", "codegen", { task_id: "tp_codegen_U01", attempt_number: 1, retry_count: 0, success: false }),
+      call("10:01:10", 7_000, "gemini-3.8-flash", "codegen", { task_id: "tp_codegen_U01", attempt_number: 2, retry_count: 1, success: false }),
+      call("10:01:10", 6_000, "gemini-3.8-flash", "codegen", { task_id: "tp_codegen_U02", attempt_number: 1 }),
+    ],
+    log: [["10:00:30", "run.start", "mode=brownfield intent=bugfix"], ["10:01:30", "run.end", "outcome=completed"]],
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assertSplit(ts, {
+    window: { start: T("10:00:30"), end: T("10:01:30"), sec: 60 },
+    kinds_sec: { model: 20, tool: 0, person: 0, nothing: 40 },
+    time_taken_sec: 60,
+    model_by_source: [{ source: "handed_out", model: "gemini-3.8-flash", sec: 20, requests: 4 }],
+    before_run: { sec: 30, kinds_sec: { model: 6, tool: 0, person: 0, nothing: 24 } },
+    longest_nothing: [{ start: T("10:00:30"), sec: 20 }, { start: T("10:01:10"), sec: 20 }],
+    checks: { log_approval_wait_sec: 0, handed_out_call_sec: 26 },
+  });
+});
+
+/** A run whose session starts a background helper `h1` before run.start; `h1` (when written) starts `h2`. */
+function withHelpers({ writeH1 = true, writeH2 = true } = {}) {
+  const main = historyFile();
+  main.command("10:00:00");
+  main.reply("msg_m1", [["10:00:02", text], ["10:00:04", toolUse("toolu_A", "Agent")]], { stop: "tool_use" });
+  main.result("10:00:05", "toolu_A", { agent: "h1" });
+  main.reply("msg_m2", [["10:00:06", text]]);
+  main.typed("10:00:30", "approved");
+  main.reply("msg_m3", [["10:00:33", text]]);
+  const h1 = historyFile({ agentId: "h1" });
+  h1.note("10:00:08", null, null);
+  h1.reply("msg_h1a", [["10:00:12", thinking], ["10:00:15", toolUse("toolu_N", "Agent")]], { stop: "tool_use" });
+  h1.result("10:00:16", "toolu_N", { agent: "h2" });
+  h1.reply("msg_h1b", [["10:00:25", text]]);
+  const h2 = historyFile({ agentId: "h2" });
+  h2.note("10:00:17", null, null);
+  h2.reply("msg_h2", [["10:00:24", text]]);
+  const helpers = {};
+  if (writeH1) helpers.h1 = h1;
+  if (writeH2) helpers.h2 = h2;
+  return { main, helpers, log: [["10:00:07", "run.start", "mode=brownfield intent=bugfix"], ["10:00:40", "run.end", "outcome=completed"]] };
+}
+
+test("R9 (review 4): a helper the run's Agent call names, whose history file is missing, makes the whole split unknown with that reason", () => {
+  const { r, ts } = collectMade(withHelpers({ writeH1: false, writeH2: false }));
+  assert.equal(r.status, 0, r.stderr);
+  assertUnknown(ts, /helper|agent|\bh1\b/i);
+});
+
+test("R9 (review 4): a helper named by another helper's Agent call, whose history file is missing, makes the split unknown too", () => {
+  const { r, ts } = collectMade(withHelpers({ writeH2: false }));
+  assert.equal(r.status, 0, r.stderr);
+  assertUnknown(ts, /helper|agent|\bh2\b/i);
+});
+
+test("R9 (review 4): with every helper's history file there, the same run is timed in full", () => {
+  const { r, ts } = collectMade(withHelpers());
+  assert.equal(r.status, 0, r.stderr);
+  assertSplit(ts, {
+    window: { start: T("10:00:07"), end: T("10:00:40"), sec: 33 },
+    // model: h1 10:00:08-10:00:15 and 10:00:16-10:00:25, h2 10:00:17-10:00:24, the session 10:00:30-10:00:33. The wait
+    // for the 10:00:30 message runs from the session's last line (10:00:06): its seconds outside the helpers' requests
+    // are the person's (10:00:07-08, 10:00:15-16, 10:00:25-30).
+    kinds_sec: { model: 19, tool: 0, person: 7, nothing: 7 },
+    time_taken_sec: 26,
+    model_by_source: [
+      { source: "main", model: "claude-opus-5-5", sec: 3, requests: 1 },
+      { source: "helper", model: "claude-opus-5-5", sec: 16, requests: 3 },
+    ],
+    before_run: { sec: 7, kinds_sec: { model: 5, tool: 0, person: 1, nothing: 1 } },
+    longest_nothing: [{ start: T("10:00:33"), sec: 7 }],
+    checks: { log_approval_wait_sec: 0, handed_out_call_sec: 0 },
+  });
+});
+
+test("R9 (review 4): a helper named before the run's command turn is not the run's; its missing file leaves the split known", () => {
+  // An earlier request in the same session (09:59) started helper `old1`, whose file is gone; the run starts at its own
+  // command turn (10:00:00) and names no helper.
+  const main = historyFile();
+  main.typed("09:59:00", "tidy the notes first");
+  main.reply("msg_mA", [["09:59:02", toolUse("toolu_X", "Agent")]], { stop: "tool_use" });
+  main.result("09:59:03", "toolu_X", { agent: "old1" });
+  main.reply("msg_mB", [["09:59:05", text]]);
+  main.command("10:00:00");
+  main.reply("msg_m1", [["10:00:05", text]]);
+  main.typed("10:00:30", "approved");
+  main.reply("msg_m2", [["10:00:33", text]]);
+  const { r, ts } = collectMade({
+    main,
+    log: [
+      ["10:00:06", "run.start", "mode=brownfield intent=bugfix"], ["10:00:10", "gate.open", "gate=gate-1 title=requirements-approval"],
+      ["10:00:32", "gate.resolved", "gate=gate-1 response=approved"], ["10:00:40", "run.end", "outcome=completed"],
+    ],
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assertSplit(ts, {
+    window: { start: T("10:00:06"), end: T("10:00:40"), sec: 34 },
+    kinds_sec: { model: 3, tool: 0, person: 24, nothing: 7 },
+    time_taken_sec: 10,
+    model_by_source: [{ source: "main", model: "claude-opus-5-5", sec: 3, requests: 1 }],
+    before_run: { sec: 6, kinds_sec: { model: 5, tool: 0, person: 1, nothing: 0 } },
+    longest_nothing: [{ start: T("10:00:33"), sec: 7 }],
+    checks: { log_approval_wait_sec: 22, handed_out_call_sec: 0 },
+  });
+});
+
+test("R9 (review 4): real run claude-led-feature-new without its orchestrator helper's history file: the split is unknown", () => {
+  const c = collectReal("claude-led-feature-new", { withoutHelper: "a532ceec45509cc9a" });
+  try {
+    assert.equal(c.r.status, 0, c.r.stderr);
+    assertUnknown(JSON.parse(c.manifestText()).time_split, /helper|agent|a532ceec45509cc9a/i);
+  } finally { c.rm(); }
+});
+
+/** A run for the manifest writer: the writer writes the manifest, the collector patches it, the writer runs again at Gate 4. */
+function writerRun(layout) {
+  const { main, helpers } = withHelpers();
+  return writeRun({
+    main,
+    helpers: layout.helpers ?? helpers,
+    calls: [call("10:00:20", 4_000, "gemini-3.8-flash")],
+    log: [["10:00:07", "run.start", "mode=brownfield intent=bugfix"], ["10:00:40", "run.end", "outcome=completed"]],
+    historyIn: "config",
+    manifest: false,
+    ...layout,
+  });
+}
+
+/** Writer, collector, writer again; returns the block the collector wrote and the block after the rewrite. */
+function collectThenRewrite(run) {
+  let w = run.writeManifest();
+  assert.equal(w.status, 0, w.stderr);
+  const r = run.collect();
+  assert.equal(r.status, 0, r.stderr);
+  const collected = run.manifest().time_split;
+  w = run.writeManifest("--status", "accepted");
+  assert.equal(w.status, 0, w.stderr);
+  const rewritten = run.manifest();
+  assert.equal(rewritten.status, "accepted");
+  return { collected, rewritten: rewritten.time_split };
+}
+
+for (const [label, layout] of [
+  ["only in the project's .sdlc/runs/<id>/ (the run folder is elsewhere)", { runFolder: "passes", logIn: "project" }],
+  ["only in the run folder itself", { runFolder: "passes", logIn: "folder" }],
+]) {
+  test(`manifest writer (review 5): with the run log ${label}, a rewrite keeps the collector's time_split`, () => {
+    const run = writerRun(layout);
+    try {
+      const { collected, rewritten } = collectThenRewrite(run);
+      assert.ok(collected && collected.unknown_reason === null, `the collector times the run: ${JSON.stringify(collected?.unknown_reason)}`);
+      assert.equal(Date.parse(collected.window.start), Date.parse(T("10:00:07")), "the window opens at run.start");
+      assert.deepEqual(rewritten, collected, "the rewritten manifest's time_split is the collector's");
+    } finally { run.rm(); }
+  });
+}
+
+test("manifest writer (review 5): an unknown block whose reason is not the log is kept as it is", () => {
+  const { helpers } = withHelpers();
+  delete helpers.h2;
+  const run = writerRun({ helpers });
+  try {
+    const { collected, rewritten } = collectThenRewrite(run);
+    assertUnknown(collected, /helper|agent|\bh2\b/i);
+    assert.deepEqual(rewritten, collected, "the rewritten manifest keeps the unknown block as it was");
+  } finally { run.rm(); }
+});
+
+test("R5 (clarification): a session file with no person markers (an older Claude Code) falls back to the collector's human turns", () => {
+  const main = historyFile({ markers: false });
+  main.command("10:00:00");
+  main.reply("msg_m1", [["10:00:05", text]]);
+  main.typed("10:00:35", "approved");
+  main.reply("msg_m2", [["10:00:40", text]]);
+  const { r, ts } = collectMade({
+    main,
+    log: [
+      ["10:00:06", "run.start", "mode=brownfield intent=bugfix"], ["10:00:10", "gate.open", "gate=gate-1 title=requirements-approval"],
+      ["10:00:38", "gate.resolved", "gate=gate-1 response=approved"], ["10:00:45", "run.end", "outcome=completed"],
+    ],
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assertSplit(ts, {
+    window: { start: T("10:00:06"), end: T("10:00:45"), sec: 39 },
+    kinds_sec: { model: 5, tool: 0, person: 29, nothing: 5 },
+    time_taken_sec: 10,
+    model_by_source: [{ source: "main", model: "claude-opus-5-5", sec: 5, requests: 1 }],
+    before_run: { sec: 6, kinds_sec: { model: 5, tool: 0, person: 1, nothing: 0 } },
+    longest_nothing: [{ start: T("10:00:40"), sec: 5 }],
+    checks: { log_approval_wait_sec: 28, handed_out_call_sec: 0 },
+  });
 });
