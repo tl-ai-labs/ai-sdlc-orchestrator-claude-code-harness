@@ -1,0 +1,19 @@
+# Written for the two claude-led fixtures: the runs used a policy of this name that the plugin does not ship.
+# Its two models, as the runs' telemetry names them (model_id opus and flash). No pricing blocks: the collector
+# prices every message from the price list.
+version: 1
+name: opus55-plus-flash38-agsdk
+
+models:
+  - id: opus
+    adapter: builtin-anthropic
+    model_name: claude-opus-5-5
+
+  - id: flash
+    adapter: antigravity-worker
+    model_name: gemini-3.8-flash
+
+rules:
+  - when: { phase: codegen }
+    use: flash
+  - default: opus

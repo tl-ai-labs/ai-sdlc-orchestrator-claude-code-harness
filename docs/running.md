@@ -191,6 +191,34 @@ node tools/report.mjs examples/workforce-ops/passes/pass1 --markdown
 
 The report's structure and what each number means is documented in [understanding-output.md](understanding-output.md).
 
+## Sending your runs' time splits
+
+When someone asks for the time your runs took, run this once in a terminal on the computer that ran them. A run's time split is read from Claude Code's history files, which exist only on that computer and are deleted 30 days after their last use:
+
+```bash
+node "$(node -p 'require(require("os").homedir()+"/.claude/plugins/installed_plugins.json").plugins["mmo@tilicho-ai-labs"][0].installPath')/scripts/export-run-times.mjs"
+```
+
+From a clone of this repository, run `node plugin/scripts/export-run-times.mjs` instead.
+
+It finds every run folder (`.sdlc/runs/<run-id>/`) of the projects under `~/Documents/GitHub`, down to four folders below it, without following symbolic links. It times each run, one at a time, with `collect-orchestrator-usage.mjs --time-only`, prints one row per run (its window in your local time, its length and the time taken, or why it was not timed), and writes `run-times-<today>.json` in the folder you run it from. Send that file to the person who asked.
+
+The file holds only each run's id, its project folder and its time split, and each skipped run folder with the reason it was skipped. Nothing in the runs changes, and the file is never written inside a `.sdlc` folder.
+
+| Option | Effect |
+|---|---|
+| `--root <dir>` | Search this folder as well, for projects kept outside `~/Documents/GitHub`. Repeat it for more folders. |
+| `--out <file>` | Write the file here instead of `./run-times-<today>.json`. An existing file is replaced only when this command made it. |
+
+| A run folder is skipped when | Its reason in the file |
+|---|---|
+| It holds no `manifest.json`: a greenfield run writes its manifest to its output folder, and a run that stopped before its manifest has none | `no manifest.json in this run folder` |
+| It, or the project's `.sdlc` or `.sdlc/runs`, is a symbolic link | `a symbolic link, not followed` |
+| It cannot be read | `could not be read: <code>` |
+| The cost tool stops with an error, answers in another form, or runs longer than 600 seconds | the cost tool's message, what was wrong with its answer, or that it was stopped |
+
+A run whose records cannot be timed (no history files, no `run.start`) stays in the file with the cost tool's `unknown_reason`. Exit code 0 means the file is written, whatever was skipped; 1 means nothing was written, and the message says why; 2 means a bad option.
+
 ## Running additional passes
 
 Each pass writes to a separate directory under `examples/<study-id>/passes/`. To compare two configurations, run twice with different `--run-id` values (any string):

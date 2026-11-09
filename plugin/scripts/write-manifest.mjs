@@ -34,6 +34,7 @@ import { resolveProjectRoot } from "./lib/env.mjs";
 import { applyHelperPhases, measuredHelperPhases } from "./lib/helper-phases.mjs";
 import { writeRunSummary } from "./lib/run-summary.mjs";
 import { loadServerLib } from "./lib/server-lib.mjs";
+import { runLogEvents, windowFromLog } from "./lib/time-split.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** Keys the post-run collector writes into a manifest; kept across a rewrite while the dispatched total is unchanged. */
@@ -269,6 +270,32 @@ export async function writeManifest(a) {
         : `the manifest the collector patched records no dispatched total to check its figures against`;
       notes.push(`${why}: its orchestrator_overhead and true_total_cost_usd are left out until it runs again: node "${join(HERE, "collect-orchestrator-usage.mjs")}" "${outDir}" --project-root "${projectRoot}"`);
     }
+  }
+  // The collector's time split (lib/time-split.mjs) times the window the run's log gives. The log is read from the same
+  // two places the collector reads it (the project's run folder, then this output folder). A measured split is kept only
+  // while the log still gives that window from the same run.start, so a gate answered after it was measured is never
+  // missing from a split that looks complete; an unknown split is kept unless its reason was the log and the log now
+  // gives a window. Otherwise it is left out until the collector runs again, as its cost figures are.
+  if (existing.time_split !== undefined) {
+    const block = existing.time_split;
+    let events = null;
+    for (const p of [join(projectRoot, ".sdlc", "runs", a.pass, "orchestrator.log"), join(outDir, "orchestrator.log")]) {
+      try { events = runLogEvents(readFileSync(p, "utf8")); break; } catch { /* not here; the next place */ }
+    }
+    let keep;
+    let why;
+    if (block?.unknown_reason) {
+      const now = events ? windowFromLog(events) : null;
+      keep = !(/orchestrator\.log/.test(block.unknown_reason) && now && !now.unknown);
+      why = "the run log now gives a window the collector did not see";
+    } else {
+      const startMs = Date.parse(block?.window?.start);
+      const now = events && Number.isFinite(startMs) ? windowFromLog(events, { startMs }) : null;
+      keep = Boolean(now && !now.unknown && new Date(now.endMs).toISOString() === block?.window?.end);
+      why = events ? "the run log gained events after the collector timed it" : "the run log could not be read to check it";
+    }
+    if (keep) manifest.time_split = block;
+    else notes.push(`${why}: its time_split is left out until it runs again: node "${join(HERE, "collect-orchestrator-usage.mjs")}" "${outDir}" --project-root "${projectRoot}"`);
   }
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
   // SUMMARY.md from the manifest just written, then code's acceptance table into it (both keep the other's part). A

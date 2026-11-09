@@ -248,6 +248,16 @@ Under `--auth=estimated`, the orchestrator subagent prices its own in-session es
 
 What each plugin version changed about how the numbers are produced. A dispatched event's `cost_usd` is stamped at dispatch and keeps the rules of the version that ran it. The orchestrator figure is rewritten each time the collector runs, so re-running the current collector over an older pass applies the current rules to that figure.
 
+### v0.11.0
+
+Run time, measured the same way for every policy. The collector now also records where each run's time went
+(`time_split` in the manifest; the fields are in understanding-output.md). Until now a run's time was the span of its
+handed-out calls, which leaves out the driver session's own work, so Claude-led runs looked faster than they were and
+per-policy time was not comparable. Every second of the run's window is now in exactly one of model working, tool
+running, waiting for a person and nothing recorded, read from records with no cutoff. Costs, tokens and every existing
+field are unchanged. `--time-only` times a run without pricing it (a run whose policy file the install lacks can still be
+timed), and `export-run-times.mjs` writes the time splits of every run on a Mac to one file, with no chat text.
+
 ### v0.10.1
 
 The thinking steps, finished; on top of v0.10.0: every must-fix and should-fix problem that a six-reviewer check of
